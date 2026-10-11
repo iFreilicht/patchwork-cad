@@ -18,7 +18,7 @@ Enter the development environment (node, pnpm, python) with `nix develop` (see `
 
 Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
 
-All code committed to this repo (except vendored code in `.claude/skills`) MUST be TypeScript, checked against the strict root `tsconfig.json` (`pnpm run typecheck`). Python is only for ephemeral, uncommitted scripts. Patchwork tools are therefore always bundled (vite), never bundleless JS.
+All application code (except vendored code in `.claude/skills`) MUST be TypeScript, checked against the strict root `tsconfig.json` (`pnpm run typecheck`). Patchwork tools are therefore always bundled (vite), never bundleless JS. Tooling scripts (build scripts, experiment orchestration, …) may be committed and written in TypeScript or Python; prefer TypeScript when they interact with the JS ecosystem.
 
 You MUST have the skill `writing-patchwork-tools` available! If not, abort and inform the user!
 
