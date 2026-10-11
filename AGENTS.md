@@ -1,0 +1,24 @@
+# CAD in Patchwork
+
+This repository contains research and code to design and implement a NURBS-based CAD-modeller with a similar UX to Fusion 360 that runs standalone with [automerge](https://automerge.org/llms.txt) or as a tool in [patchwork](https://github.com/inkandswitch/patchwork-pkg-base).
+
+## Writing style
+
+Be brief in your writing. Only write what is necessary, avoid duplicate information if possible. Documentation is code, it can be restructured and refactored if necessary. Use links to external sources or to other documents in this repo to add context to your writing. Quote the relevant part of a linked document to prove statements that assert a fact.
+
+Human-written sections are marked enclosed with `<HUMAN-WRITTEN>`/`</HUMAN-WRITTEN>`. NEVER alter a human-written section! If it contains false or inaccurate statements, write your corrections/clarifications/additions DIRECTLY AFTER the `</HUMAN-WRITTEN>` tag.
+
+NEVER add line-breaks inside of a paragraph. The editor/viewer takes care of wrapping lines, not you.
+
+## Repository infrastructure
+
+This repository uses git for version control, nix (with flakes enabled) for meta-dependency management and pnpm for JS/TS dependencies. DO NOT rely on a system package manager! NEVER assume presence of packages on a bare system. All dependencies MUST be locked and reproducible! Other languages than JS/TS might be covered sufficiently by nix. If not, ask the user for a decision for an additional package manager.
+
+Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
+
+You MUST have the skill `writing-patchwork-tools` available! If not, abort and inform the user!
+
+## Repository structure
+
+Reserach goes into `./research`, source code into `./src`.
+
