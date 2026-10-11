@@ -70,4 +70,4 @@ The openscad-style drag-and-drop can remain as UX that inserts an import line. S
 
 ## Open
 
-- The shape of feature references (edges, faces) depends on the [topological naming research](01-basic-idea-and-literature.md#problems-and-risks).
+- The shape of feature references (edges, faces): [03-topological-naming.md](03-topological-naming.md#recommendation) recommends history-based names rooted in feature variables and sketch segment ids, written as expressions like `edge(f1.end, f1.side.front).piece(notch, 1)`. Not yet decided.

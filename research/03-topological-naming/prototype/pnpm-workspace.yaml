@@ -1,0 +1,3 @@
+# pnpm reads its settings from this file; this is not a workspace.
+allowBuilds:
+  esbuild: true
