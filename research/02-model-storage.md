@@ -2,6 +2,10 @@
 
 How models are stored, addressing [risk 2 in the review](01-basic-idea-and-literature.md#problems-and-risks).
 
+## Design goal: portable models
+
+No walled garden and no DSL: a thin library and a feature-rich editor. A model file is plain JS that runs without our tool, given only the feature library. Editor conveniences, such as injecting feature names before execution, happen in memory and never change the stored file. The library must not depend on them; they may only improve things like error messages. Depending on modules loaded from `automerge:` URLs is the model author's choice; the same modules can be loaded from anywhere else.
+
 ## Decision: the model is code
 
 A model is stored as one collaborative code text in an automerge document. Every view is derived from that text.

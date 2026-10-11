@@ -30,3 +30,7 @@ The skills in `.claude/skills` were installed with `npx @inkandswitch/patchwork-
 
 Research goes into `./research`, source code into `./src`.
 
+## Design goals
+
+Model files MUST stay plain, portable JS that runs without our tool, given only the feature library: no walled garden, no DSL, a thin library and a feature-rich editor. See [research/02-model-storage.md](research/02-model-storage.md#design-goal-portable-models).
+
