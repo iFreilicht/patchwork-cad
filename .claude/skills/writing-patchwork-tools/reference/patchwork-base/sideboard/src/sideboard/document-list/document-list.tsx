@@ -1,0 +1,373 @@
+import {
+  deleteAt,
+  updateText,
+  type AutomergeUrl,
+  type DocHandle,
+  type Repo,
+} from "@automerge/automerge-repo/slim";
+import {
+  docIdFromAutomergeUrl,
+  Access,
+  ContactCard,
+  type AutomergeRepoKeyhive,
+} from "@automerge/automerge-repo-keyhive";
+import type {
+  OpenDocumentEventDetail,
+  PatchworkViewElement,
+} from "@inkandswitch/patchwork-elements";
+import type {
+  DocLink,
+  FolderDoc,
+  HasPatchworkMetadata,
+} from "@inkandswitch/patchwork-filesystem";
+import { getRegistry, isLoadedPlugin, type Datatype } from "@inkandswitch/patchwork-plugins";
+import {
+  createEffect,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  Show,
+  Suspense,
+  Switch,
+} from "solid-js";
+import {
+  filterMatches,
+  setRenaming,
+  pendingNewDoc,
+  setPendingNewDoc,
+} from "../state.ts";
+import Folder from "./folder.tsx";
+import Item from "./item.tsx";
+import { ItemName } from "./name.tsx";
+import { LoadingRow } from "./loading-row.tsx";
+import { NewDocPlaceholder } from "../create-new.tsx";
+import { ShareModal } from "../share-modal.tsx";
+
+// TODO: Re-enable when secure copy feature is ready
+const MAKE_SECURE_COPY_ENABLED = false;
+
+function isKeyhiveProtected(url: AutomergeUrl): boolean {
+  try {
+    docIdFromAutomergeUrl(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface DocumentListProps {
+  handle: DocHandle<FolderDoc>;
+  docs?: DocLink[];
+  depth: number;
+  repo: Repo;
+  open(detail: OpenDocumentEventDetail): void;
+  hive?: AutomergeRepoKeyhive;
+  selectedDocUrls: AutomergeUrl[];
+  visitedFolders?: Set<AutomergeUrl>;
+  element: PatchworkViewElement;
+  rootFolderHandle: DocHandle<FolderDoc>;
+  filter: string;
+  clearFilter(): void;
+}
+
+export function DocumentList(props: DocumentListProps) {
+  const [shareModalUrl, setShareModalUrl] = createSignal<AutomergeUrl | null>(
+    null
+  );
+  const visitedFolders = props.visitedFolders ?? new Set<AutomergeUrl>();
+
+  function removeItem(index: number) {
+    props.handle.change((folder) => deleteAt(folder.docs, index));
+  }
+
+  // True when a "new document" drag/click targeted this folder's list.
+  const pendingHere = () =>
+    !!props.handle && pendingNewDoc()?.containerUrl === props.handle.url;
+
+  // Commit the pending placeholder: insert the freshly created doc at the drop
+  // index, open it, and drop straight into rename mode.
+  const commitPending = (docLink: DocLink) => {
+    const target = pendingNewDoc();
+    if (!target) return;
+    const index = target.index;
+    setPendingNewDoc(null);
+    props.handle.change((folder) => folder.docs.splice(index, 0, docLink));
+    props.open(docLink);
+    setRenaming(props.handle.url + "/" + index);
+  };
+
+  const placeholder = () => (
+    <div class="document-list__item document-list__item--visible">
+      <NewDocPlaceholder
+        repo={props.repo}
+        hive={props.hive}
+        onCreate={commitPending}
+        onDismiss={() => setPendingNewDoc(null)}
+        clearFilter={props.clearFilter}
+      />
+    </div>
+  );
+
+  async function makeSecureCopy(docLink: DocLink) {
+    if (!props.hive) return;
+
+    // Get the old document
+    const oldHandle = await props.repo.find<HasPatchworkMetadata>(docLink.url);
+    const oldDoc = oldHandle.doc();
+
+    // Create new secure doc with create2 (uses keyhive idFactory)
+    const newHandle = await props.repo.create2<HasPatchworkMetadata>(
+      structuredClone(oldDoc)
+    );
+
+    // Add sync server with pull access
+    if (props.hive.syncServer) {
+      try {
+        const serverContactCard = ContactCard.fromJson(
+          props.hive.syncServer.contactCard.toJson()
+        );
+        if (serverContactCard) {
+          const relayAccess = Access.tryFromString("relay");
+          if (relayAccess) {
+            await props.hive.addMemberToDoc(
+              newHandle.url,
+              serverContactCard,
+              relayAccess
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          "[DocumentList] Failed to add sync server to secure copy:",
+          err
+        );
+      }
+    }
+
+    // Add to sidebar
+    props.handle.change((folder) => {
+      folder.docs.unshift({
+        name: docLink.name + " (secure)",
+        type: docLink.type,
+        url: newHandle.url,
+      });
+    });
+
+    // Open the new document
+    props.open({
+      url: newHandle.url,
+      title: docLink.name + " (secure)",
+      type: docLink.type,
+    });
+  }
+  return (
+    <>
+      <For each={props.docs}>
+        {(doc, index) => {
+          const visible = () =>
+            !props.filter.length || filterMatches(props.filter, doc.name);
+          const remove = () => removeItem(index());
+          const relid = () => props.handle.url + "/" + index();
+          const rename = (name: string) => {
+            props.handle.change((doc) => {
+              updateText(doc, ["docs", index(), "name"], name);
+            });
+            const datatypes = getRegistry<Datatype>("patchwork:datatype");
+            props.repo
+              .find<Partial<HasPatchworkMetadata>>(doc.url)
+              .then(async (handle) => {
+                const { "@patchwork": metadata } = handle.doc();
+
+                if (metadata) {
+                  const datatype = datatypes.get(metadata.type) as Datatype;
+
+                  if (datatype) {
+                    await datatypes.load(datatype.id);
+                    handle.change((doc) =>
+                      (datatype as any).module.setTitle?.(doc, name)
+                    );
+                  }
+                }
+              });
+          };
+
+          // Sync title from doc content → folder docref + @patchwork.title
+          createEffect(() => {
+            if (!props.selectedDocUrls.includes(doc.url)) return;
+
+            let cancelled = false;
+            let removeListener: (() => void) | undefined;
+
+            props.repo
+              .find<Partial<HasPatchworkMetadata>>(doc.url)
+              .then(async (docHandle) => {
+                if (cancelled) return;
+
+                const datatypes = getRegistry<Datatype>("patchwork:datatype");
+
+                async function syncTitle() {
+                  const docData = docHandle.doc();
+                  if (!docData) return;
+
+                  const metadata = (docData as any)["@patchwork"];
+                  if (!metadata?.type) return;
+
+                  const datatype = datatypes.get(metadata.type) as Datatype;
+                  if (!datatype) return;
+
+                  await datatypes.load(datatype.id);
+                  if (cancelled) return;
+                  if (!isLoadedPlugin(datatype)) return;
+
+                  const title = datatype.module.getTitle(docData);
+                  if (!title) return;
+
+                  // Update folder docref name if different
+                  const currentFolder = props.handle.doc();
+                  const currentName = currentFolder?.docs?.[index()]?.name;
+                  if (currentName !== title) {
+                    props.handle.change((folder) => {
+                      updateText(folder, ["docs", index(), "name"], title);
+                    });
+                  }
+
+                  // Set @patchwork.title on the doc if different
+                  if (metadata.title !== title) {
+                    docHandle.change((d: any) => {
+                      if (d["@patchwork"]) {
+                        d["@patchwork"].title = title;
+                      }
+                    });
+                  }
+                }
+
+                await syncTitle();
+                if (cancelled) return;
+
+                const onChange = () => syncTitle();
+                docHandle.on("change", onChange);
+                removeListener = () => docHandle.off("change", onChange);
+              });
+
+            onCleanup(() => {
+              cancelled = true;
+              removeListener?.();
+            });
+          });
+
+          return (
+            <>
+              <Show when={pendingHere() && pendingNewDoc()!.index === index()}>
+                {placeholder()}
+              </Show>
+              <div
+                classList={{
+                  "document-list__item": true,
+                  "document-list__item--visible": visible(),
+                  "document-list__item--invisible": !visible(),
+                }}
+              >
+                {/* Per-row boundary: a folder still loading its handle shows a
+                    skeleton here without blocking its siblings. */}
+                <Suspense fallback={<LoadingRow depth={props.depth} />}>
+                <Switch>
+                <Match when={doc.type == "folder"}>
+                  <Show
+                    when={!visitedFolders.has(doc.url)}
+                    fallback={
+                      <div
+                        class="document-list-folder__circular-ref"
+                        style={{ "padding-left": `calc(var(--depth) * 1rem)` }}
+                      >
+                        <span>{doc.name} (i contain myself eventually)</span>
+                      </div>
+                    }
+                  >
+                    <Folder
+                      url={doc.url}
+                      depth={props.depth}
+                      repo={props.repo}
+                      removeFromParent={remove}
+                      parentFolderHandle={props.handle}
+                      itemIndex={index()}
+                      open={props.open}
+                      name={doc.name}
+                      hive={props.hive}
+                      selectedDocUrls={props.selectedDocUrls}
+                      visitedFolders={visitedFolders}
+                      element={props.element}
+                      rootFolderHandle={props.rootFolderHandle}
+                      filter={props.filter}
+                      clearFilter={props.clearFilter}
+                    />
+                  </Show>
+                </Match>
+                <Match when={doc.type != "folder"}>
+                  <Item
+                    aria-label={doc.name}
+                    url={doc.url}
+                    name={doc.name}
+                    id={relid()}
+                    startRenaming={() => setRenaming(relid())}
+                    remove={remove}
+                    pressed={props.selectedDocUrls.includes(doc.url)}
+                    type={doc.type}
+                    element={props.element}
+                    repo={props.repo}
+                    rootFolderHandle={props.rootFolderHandle}
+                    parentFolderHandle={props.handle}
+                    itemIndex={index()}
+                    openWith={(toolId) =>
+                      props.open({
+                        url: doc.url,
+                        toolId,
+                        title: doc.name,
+                        type: doc.type,
+                      })
+                    }
+                    share={
+                      props.hive ? () => setShareModalUrl(doc.url) : undefined
+                    }
+                    shareDisabled={
+                      props.hive ? !isKeyhiveProtected(doc.url) : false
+                    }
+                    makeSecureCopy={
+                      MAKE_SECURE_COPY_ENABLED &&
+                      props.hive &&
+                      !isKeyhiveProtected(doc.url)
+                        ? () => makeSecureCopy(doc)
+                        : undefined
+                    }
+                  >
+                    <ItemName name={doc.name} id={relid()} rename={rename} />
+                    <Show when={props.hive && !isKeyhiveProtected(doc.url)}>
+                      <span class="document-list-item__unprotected">
+                        [insecure]
+                      </span>
+                    </Show>
+                  </Item>
+                </Match>
+                </Switch>
+                </Suspense>
+              </div>
+            </>
+          );
+        }}
+      </For>
+      <Show
+        when={pendingHere() && pendingNewDoc()!.index >= (props.docs?.length ?? 0)}
+      >
+        {placeholder()}
+      </Show>
+      <Show when={shareModalUrl() && props.hive}>
+        <ShareModal
+          isOpen={!!shareModalUrl()}
+          docUrl={shareModalUrl()!}
+          hive={props.hive!}
+          onClose={() => setShareModalUrl(null)}
+        />
+      </Show>
+  </>
+  );
+}

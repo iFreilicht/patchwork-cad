@@ -12,7 +12,7 @@ NEVER add line-breaks inside of a paragraph. The editor/viewer takes care of wra
 
 ## Repository infrastructure
 
-This repository uses git for version control, nix (with flakes enabled) for meta-dependency management and pnpm for JS/TS dependencies. DO NOT rely on a system package manager! NEVER assume presence of packages on a bare system. All dependencies MUST be locked and reproducible! Other languages than JS/TS might be covered sufficiently by nix. If not, ask the user for a decision for an additional package manager.
+This repository uses git for version control, nix (with flakes enabled) for meta-dependency management and pnpm for JS/TS dependencies. DO NOT rely on a system package manager! NEVER assume presence of packages (except for nix itself) on a bare system. All dependencies MUST be locked and reproducible! Other languages than JS/TS might be covered sufficiently by nix. If not, ask the user for a decision for an additional package manager.
 
 Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
 

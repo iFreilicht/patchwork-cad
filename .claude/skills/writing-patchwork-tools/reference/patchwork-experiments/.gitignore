@@ -1,0 +1,13 @@
+.cursor
+.pushwork
+node_modules
+dist/
+static-dist/
+.claude/
+.env
+.automerge-data
+.pnpm-store
+.DS_Store
+
+# Local Netlify folder
+.netlify

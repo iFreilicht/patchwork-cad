@@ -1,0 +1,11002 @@
+// newdefs.js — class-based Livelymerge definitions (full catalog)
+// Conventional ES classes; no w.* prefixes in source.
+
+// Per-user (ephemeral) UI state lives in `$uiState`, an ephemeral `$`-property of the
+// global object: per-replica, never stored in the Automerge document, lost on reload,
+// but persistent across transactions. It is (re)initialized by initUI(), which runs at
+// the start of every session. Raw host objects (DOM events, etc.) must never enter the
+// Livelymerge heap — those live in plain side-tables on `window` instead.
+$uiState = null;
+
+function setPointerLocation(p) {
+  // Last known pointer position for THIS user (per-replica; never shared or persisted).
+  if ($uiState) $uiState.pointerLocation = p;
+}
+function getPointerLocation() {
+  return $uiState ? $uiState.pointerLocation : null;
+}
+
+// +-----------------------+
+// |  Classes and Objects  |
+// +-----------------------+
+
+let menuItemMaxChars = 30;
+let menuSeparator = '—menuSep—';
+let paneSelectionMenuNarrowBy = 0;
+let paneSelectionMenuMinWidth = 48;
+let $shiftKeyPressedFlag = false;
+let $lockKeyPressedFlag = false;
+let $metaKeyPressedFlag = false;
+let pasteBufferItems = ['nothing to paste'];
+let kbdDefaultShiftTable = {
+  1: '!',
+  2: '@',
+  3: '#',
+  4: '$',
+  5: '%',
+  6: '^',
+  7: '&',
+  8: '*',
+  9: '(',
+  0: ')',
+  '`': '~',
+  '-': '_',
+  '=': '+',
+  '[': '{',
+  ']': '}',
+  '\\': '|',
+  ';': ':',
+  "'": '"',
+  ',': '<',
+  '.': '>',
+  '/': '?',
+};
+let kbdShiftTable = { ...kbdDefaultShiftTable };
+let $useOnScreenKbd = false;
+let longClickForHalosLabel = 'Long click for halos';
+let onScreenKeyboardLabel = 'Show on-screen keyboard';
+let TRANSCRIPT_MAX_BEFORE_TRUNC = 1000;
+let TRANSCRIPT_KEEP_LEN = 500;
+let TRANSCRIPT_MARKER_RECURSIVE = '---recursive call ---';
+let TRANSCRIPT_MARKER_STOPPED = '---stopped mirroring---';
+let Lively = null;
+let topLevelMorph = null;
+let recentChanges = null;
+let bugImage = null;
+let $bouncers = null;
+let $onScreenKeyboardMorph = null;
+let $oskSavedChrome = null;
+let _transcriptConsoleTargets = [];
+let _consoleMirrorInstalled = false;
+let _lastEvalSource = null;
+let _evalJustFailed = false;
+let _alldefsSourceLines = null;
+let _lastErrorReport = null;
+let _errorRecoveryInProgress = false;
+let traceMe = false;
+let debugReparent = false;
+let copyPasteBuffer = null;
+
+function clearArray(xs) {
+  xs.splice(0, xs.length);
+}
+function deleteFromArray(xs, x) {
+  const idx = xs.indexOf(x);
+  if (idx >= 0) {
+    xs.splice(idx, 1);
+  }
+  return xs;
+}
+function deleteFromArrayPred(xs, pred) {
+  while (true) {
+    const idx = xs.findIndex(pred);
+    if (idx < 0) {
+      break;
+    }
+    xs.splice(idx, 1);
+  }
+}
+function isClass(fn) {
+  return typeof fn === 'function' && /^\s*class\s+/.test(fn.toString());
+}
+function findSuperclassOf(sub) {
+  // findSuperclassOf(Ellipse) ==> Shape; null for base classes
+  if (!isClass(sub) || !sub.prototype) return null;
+  let superProto = Object.getPrototypeOf(sub.prototype);
+  if (!superProto) return null;
+  for (const cName of allClassNames()) {
+    let cls = $global[cName];
+    if (cls !== sub && cls.prototype === superProto) return cls;
+  }
+  return null;
+}
+function subclassDepth(cls) {
+  // Prototype-chain hops below the base; used for superclass ordering.
+  let depth = 0;
+  let p = cls && cls.prototype ? Object.getPrototypeOf(cls.prototype) : null;
+  while (p) {
+    depth++;
+    p = Object.getPrototypeOf(p);
+  }
+  return depth;
+}
+function allClassNames() {
+  // allClassNames().length ==> 27
+  return Object.getOwnPropertyNames($global)
+    .sort()
+    .filter((name) => isClass($global[name]));
+}
+function allClassNamesInSuperclassOrder() {
+  // allClassNamesInSuperclassOrder()
+  return allClassNames().sort(function (a, b) {
+    return subclassDepth($global[a]) - subclassDepth($global[b]);
+  });
+}
+function classStaticNames(cls) {
+  // Statics only. The class transpiler also mirrors instance methods onto the class
+  // object (the prototype literal reads them back); those are not statics.
+  let proto = cls.prototype;
+  return Object.getOwnPropertyNames(cls)
+    .filter((name) => !(proto && proto[name] === cls[name]))
+    .sort();
+}
+function classInstanceMemberNames(cls) {
+  // Method (and accessor) names on the class's prototype, minus bookkeeping keys.
+  return (Object.getOwnPropertyNames(cls.prototype)
+    .filter((name) => name !== 'className' && name !== 'constructor'))
+    .sort();
+}
+function constructorBodyFromSource(src) {
+  // constructorBodyFromSource(Point.toString()) ==> "constructor(x, y) {\n    ...\n  }"
+  // If the class source has no explicit constructor, returns "constructor() {}".
+  if (!src || typeof src !== 'string') return null;
+  let match = src.match(/(^|\n)[ \t]*constructor[ \t]*\(/);
+  if (!match) return 'constructor() {}';
+  let ctorStart = match.index + match[1].length;
+  while (ctorStart < src.length && /[ \t]/.test(src[ctorStart])) ctorStart++;
+  let i = src.indexOf('(', ctorStart);
+  if (i < 0) return null;
+  let depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '(') depth++;
+    else if (src[i] === ')') {
+      depth--;
+      if (depth === 0) {
+        i++;
+        break;
+      }
+    }
+  }
+  while (i < src.length && /\s/.test(src[i])) i++;
+  if (src[i] !== '{') return null;
+  depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(ctorStart, i + 1);
+    }
+  }
+  return null;
+}
+function constructorBodyOf(cls) {
+  // constructorBodyOf(Point) ==> "constructor(x, y) {\n    this.x = x;\n    this.y = y;\n  }"
+  if (!isClass(cls)) return null;
+  return constructorBodyFromSource(cls.toString());
+}
+function nameOfClass(cls) {
+  if (!cls) return null;
+  let names = allClassNames();
+  for (let i = 0; i < names.length; i++) {
+    if ($global[names[i]] === cls) return names[i];
+  }
+  return null;
+}
+function isLegacyFunctionShow(methodString) {
+  // Pre-fragment Funs stored 'function foo(...) {...}' show sources (with super-sends
+  // already transpiled). Fragments start with the member name / get / set / static.
+  return /^(async\s+)?function[\s(]/.test(methodString);
+}
+function looksLikeLegacyMethodText(str) {
+  // Old-format method-pane text: '<spec> = function ...' assignments (the globals
+  // pane and legacy-doc members). Class fragments never start with '<name> ='.
+  return /^[A-Za-z_$][\w$.]*\s*=/.test(str.trim());
+}
+function replaceMethodCallString(className, fragmentText) {
+  // Self-contained, evaluable-anywhere form of a class-fragment edit; used for
+  // method copies, recent changes, and exports. The browser method pane shows the
+  // bare fragment and wraps it in this form on save.
+  let escaped = fragmentText.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+  return "replaceMethod('" + className + "', `" + escaped + "`)";
+}
+function parseReplaceMethodCallString(str) {
+  // Inverse of replaceMethodCallString: {className, fragmentText} when str is a
+  // self-contained replaceMethod(...) call, else null.
+  let m = ('' + str).match(/^replaceMethod\('([A-Za-z_$][\w$]*)',\s*`([\s\S]*)`\)$/);
+  if (!m) return null;
+  let fragmentText = m[2].replace(/\\\$\{/g, '${').replace(/\\`/g, '`').replace(/\\\\/g, '\\');
+  return { className: m[1], fragmentText };
+}
+function classMemberRows(cls) {
+  // Message-pane rows for a class's prototype: methods as 'name', accessor halves as
+  // 'get name' / 'set name'. Uses descriptors so getters are never invoked.
+  let rows = [];
+  classInstanceMemberNames(cls).forEach((name) => {
+    let desc = Object.getOwnPropertyDescriptor(cls.prototype, name);
+    if (desc && (desc.get || desc.set)) {
+      if (desc.get) rows.push('get ' + name);
+      if (desc.set) rows.push('set ' + name);
+    } else {
+      rows.push(name);
+    }
+  });
+  return rows;
+}
+function memberRowSortKey(row) {
+  // Sort 'get height' / 'set height' next to where 'height' would appear, not under g/s.
+  let m = row.match(/^(get|set) (.*)$/);
+  return m ? m[2] + ' ' + m[1] : row;
+}
+function accessorForRow(cls, row) {
+  // accessorForRow(Morph, 'get transform') ==> the getter Fun (or null)
+  let m = row.match(/^(get|set) (.*)$/);
+  if (!m || !cls || !cls.prototype) return null;
+  let desc = Object.getOwnPropertyDescriptor(cls.prototype, m[2]);
+  if (!desc) return null;
+  return (m[1] == 'get' ? desc.get : desc.set) || null;
+}
+function fragmentChangeSpec(className, fragmentText) {
+  // Recent-changes spec for a fragment edit, matching the browser's row formats:
+  // 'Cls.prototype.foo', 'Cls.prototype.get foo', 'Cls.foo' (static), 'Cls.constructor'.
+  let m = fragmentText.trim().match(/^(static\s+|get\s+|set\s+)?([A-Za-z_$][\w$]*)/);
+  if (!m) return className + '.?';
+  let prefix = (m[1] || '').trim();
+  let name = m[2];
+  if (prefix == 'static') return className + '.' + name;
+  if (prefix == 'get' || prefix == 'set') return className + '.prototype.' + prefix + ' ' + name;
+  if (name == 'constructor') return className + '.constructor';
+  return className + '.prototype.' + name;
+}
+function fragmentForSpec(spec) {
+  // The class-fragment text for a method spec, or null when the member is
+  // legacy-format (or a global function) and must keep the assignment form.
+  let parts = methodSpecKey(spec).split('.');
+  if (parts.length < 2) return null;
+  let cls = $global[parts[0]];
+  if (!isClass(cls)) return null;
+  if (parts.length == 2 && parts[1] === 'constructor') return constructorBodyOf(cls);
+  let method = methodFromSpec(spec);
+  if (typeof method != 'function') return null;
+  let src = method.toString();
+  return isLegacyFunctionShow(src) ? null : src;
+}
+function deleteAccessorHalf(className, kind, name) {
+  // Delete one half of an accessor slot ('get'/'set'); the surviving half is
+  // re-installed from its fragment source.
+  let cls = $global[className];
+  if (!cls || !cls.prototype) return false;
+  let desc = Object.getOwnPropertyDescriptor(cls.prototype, name);
+  if (!desc || (!desc.get && !desc.set)) return false;
+  let keep = kind == 'get' ? desc.set : desc.get;
+  delete cls.prototype[name];
+  if (keep) {
+    let src = keep.toString();
+    if (isLegacyFunctionShow(src)) {
+      console.log('deleteAccessorHalf: dropped legacy-format other half of ' + name);
+    } else {
+      replaceMethod(className, src);
+    }
+  }
+  return true;
+}
+function allClassNamesWithStatics() {
+  // allClassNamesWithStatics()
+  // Returns two formats in one sorted array:
+  //    Classname - for regular classes
+  //    Classname.class - for classes with static methods
+  let classNames = [];
+  for (const name of allClassNames()) {
+    classNames.push(name);
+    if (classStaticNames($global[name]).length > 0) classNames.push(name + '.class');
+  }
+  return classNames;
+}
+function dropNewline(str) {
+  if (str.charCodeAt(str.length - 1) == 10) return str.slice(0, -1); // drop newline
+  if (str.charCodeAt(str.length - 1) == 13) return str.slice(0, -1);
+  return str;
+}
+
+//  Color
+// -------
+// RGBA paint with fillStyle for canvas; named swatches on Color.*.
+class Color {
+  constructor(cr, cg, cb) {
+    this.r = cr;
+    this.g = cg;
+    this.b = cb;
+    this.fillStyle = this.computeFillStyle(this.r, this.g, this.b);
+    //console.log('new color fillStyle = ', this.fillStyle);
+  }
+  computeFillStyle(r, g, b) {
+    let s = '#';
+    s += Math.floor(r * 255.999)
+      .toString(16)
+      .padStart(2, '0');
+    s += Math.floor(g * 255.999)
+      .toString(16)
+      .padStart(2, '0');
+    s += Math.floor(b * 255.999)
+      .toString(16)
+      .padStart(2, '0');
+    return s;
+  }
+  copy() {
+    return new Color(this.r, this.g, this.b);
+  }
+  darker() {
+    return this.mixedWith(Color.black, 0.5);
+  }
+  lighter() {
+    return this.mixedWith(Color.white, 0.5);
+  }
+  mixedWith(other, proportion) {
+    // Mix with another color
+    let p = proportion;
+    let q = 1.0 - p;
+    return new Color(this.r * p + other.r * q, this.g * p + other.g * q, this.b * p + other.b * q);
+  }
+  random() {
+    return new Color(Math.random(), Math.random(), Math.random());
+  }
+  toString() {
+    return 'new Color(' + [this.r, this.g, this.b].toString() + ')';
+  }
+  withAlpha(a) {
+    return {
+      fillStyle:
+        'rgba(' +
+        Math.floor(this.r * 255.999) +
+        ',' +
+        Math.floor(this.g * 255.999) +
+        ',' +
+        Math.floor(this.b * 255.999) +
+        ',' +
+        a +
+        ')',
+    };
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+Color.black = new Color(0, 0, 0);
+Color.blue = new Color(0, 0, 0.8);
+Color.cyan = new Color(0, 0.8, 0.8);
+Color.darkGray = new Color(0.4, 0.4, 0.4);
+Color.gray = new Color(0.8, 0.8, 0.8);
+Color.green = new Color(0, 0.8, 0);
+Color.lightGray = new Color(0.9, 0.9, 0.9);
+Color.orange = new Color(0.8, 0.52, 0);
+Color.paleLavender = new Color(0.93, 0.88, 0.98);
+Color.red = new Color(0.8, 0, 0);
+Color.veryLightGray = new Color(0.95, 0.95, 0.95);
+Color.white = new Color(1, 1, 1);
+Color.yellow = new Color(0.8, 0.8, 0);
+
+// +---------------------+
+// |  Canvas and Events  |
+// +---------------------+
+// Canvas viewport, initUI, pointer/keyboard entry, demo world bootstrap.
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  topLevelMorph.render(ctx);
+}
+function viewportBounds() {
+  /** Layout box for the drawable canvas (Livelymerge host: .canvas-container); else canvas bounding rect. */
+  if (typeof document === 'undefined') return null;
+  let c = canvas;
+  if (!c) return null;
+  let rw;
+  let rh;
+  let cont = document.querySelector('.canvas-container');
+  if (cont) {
+    let r = cont.getBoundingClientRect();
+    rw = r.width;
+    rh = r.height;
+  }
+  if (!rw || !rh) {
+    let r2 = c.getBoundingClientRect();
+    rw = r2.width;
+    rh = r2.height;
+  }
+  if (!rw || !rh) {
+    rw = c.clientWidth || c.width;
+    rh = c.clientHeight || c.height;
+  }
+  if (!rw || !rh) return null;
+  return rect(0, 0, Math.max(1, Math.round(rw)), Math.max(1, Math.round(rh)));
+}
+function getBounds() {
+  let vp = viewportBounds();
+  if (vp) return vp;
+  return rect(0, 0, canvas.width, canvas.height);
+}
+function truncateString(str, num) {
+  return str.length > num ? str.slice(0, num) + '...' : str;
+}
+async function getUserName() {
+  /** Display name from the user's Patchwork account (contact doc), or null. */
+  if (!window.repo || !window.accountDocHandle) return null;
+  let contactUrl = window.accountDocHandle.doc().contactUrl;
+  if (contactUrl == null) return null;
+  let contactHandle = await window.repo.find(contactUrl);
+  let name = contactHandle.doc().name;
+  return name != null ? name : null;
+}
+function init() {
+  // init()
+  console.log('init!');
+  initUI();
+  initLively(); // build a simple world with a single rectangle morph
+  populateLively();
+}
+function initLively() {
+  Lively = new WorldMorph(getBounds()); // make up a morphic world
+  topLevelMorph = Lively; // 'install' the morphic world in patchwork world
+  return Lively;
+}
+function populateLively() {
+  // populateLively()
+  initLively(); // build a simple world with a single rectangle morph
+  Lively.box = Lively.addMorph(new Morph(rect(30, 20, 60, 30)));
+  Lively.oval = Lively.addMorph(new Morph(null, new Ellipse(pt(60, 75), pt(30, 15))));
+  Lively.oval.setStyles(Color.green.lighter(), 2, Color.black);
+  Lively.star = Lively.addMorph(new Morph(null, new Pen().star(10, 30, Color.black)));
+  Lively.star.setColor(Color.yellow);
+  let d = pt(30, 100).subPt(Lively.star.getBounds().topLeft);
+  Lively.star.moveBy(d);
+  let welcomeRect = rect(25, 350, 400, 220);
+  let boxB = Lively.box.getBounds();
+  let lineY = welcomeRect.topLeft.y - 20;
+  let plmVerts = [pt(boxB.topLeft.x, lineY), pt(boxB.topLeft.x + boxB.width(), lineY)];
+  Lively.demoLine = Lively.addMorph(
+    new LineMorph(plmVerts, { borderWidth: 2, borderColor: Color.black, arrowheads: 'end' }),
+  );
+
+  Lively.addMorph(
+    new MethodPanel(
+      welcomeRect,
+      `The shapes you see are objects in Livelymerge.  You can drag them around, copy and reshape them at will.  The tools for such manipulation are described in "halos" described in 'Halo help' in the screen menu.
+
+Everywhere you see text, you can edit it, search, and evaluate JavaScript expressions as in 'Text help' also in the screen menu.
+  355/113 -- select this and press ctrl-P
+  help -- select this and press ctrl-F
+
+`,
+      'Welcome to Livelymerge! (' + new Date().toLocaleString() + ')',
+    ),
+  );
+
+  Lively.showWorldMenuAt(pt(130, 40));
+
+  testTransforms();
+
+  bugImage = new EmojiMorph('LADY BEETLE', 64);
+  // Cute bug drawing a spiral (uses bugImage at scale 0.5 via Pen.withBug)...
+  Lively.spiral = Lively.addMorph(new Morph(rect(50, 210, 1, 1)));
+  Lively.spiral.pen = new Pen(pt(60, 210)).withBug();
+  Lively.spiral.animatedSpiral = function (argsObj) {
+    if (!this.args) {
+      this.args = argsObj;
+      this.pen.setPenColor(Color.red);
+      this.spiralI = 0;
+    }
+    this.spiralI++;
+    if (this.spiralI > this.args.nSteps) {
+      this.stopStepping();
+      this.pen.bug.moveTo(this.pen.location.addPt(pt(0, 20)));
+      this.world().changed();
+      return;
+    }
+    this.pen.go(this.args.goDist * this.spiralI);
+    this.pen.turn(this.args.turnAngle);
+    if (this.trail) this.trail.remove();
+    this.trail = this.owner.addMorph(new Morph(null, this.pen.polyLine()));
+    this.world().changed();
+  };
+
+  setTimeout(() => {
+    // The world may have been re-initialized since this was scheduled (e.g. a
+    // fresh initLively()); there is no spiral to animate then.
+    if (!Lively || !Lively.spiral) return;
+    Lively.spiral.startStepping('animatedSpiral',
+      { goDist: 2, turnAngle: 60, nSteps: 26 }, 50); // was 26
+  }, 2000);
+
+}
+
+// comment this out if you want to run in pyonpyon
+class Map {
+  entries = [];
+
+  set(key, value) {
+    for (const e of this.entries) {
+      if (e[0] === key) {
+        e[1] = value;
+        return;
+      }
+    }
+    this.entries.push([key, value]);
+  }
+
+  get(key) {
+    for (const [k, v] of this.entries) {
+      if (k === key) {
+        return v;
+      }
+    }
+    return undefined;
+  }
+
+  delete(key) {
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i][0] === key) {
+        this.entries.splice(i, 1);
+        return;
+      }
+    }
+  }
+
+  has(key) {
+    for (const [k, v] of this.entries) {
+      if (k === key) {
+        return true;
+      }
+    }
+  }
+
+  clear() {
+    clearArray(this.entries);
+  }
+
+  forEach(callback) {
+    for (const [k, v] of this.entries) {
+      callback(v, k, this);
+    }
+  }
+
+  size() {
+    return this.entries.length;
+  }
+
+  keys() {
+    return this.entries.map(([k, v]) => k);
+  }
+
+  values() {
+    return this.entries.map(([k, v]) => v);
+  }
+}
+
+// comment this out if you want to run in pyonpyon
+class Set {
+  entries = [];
+
+  add(value) {
+    for (const [k, v] of this.entries) {
+      if (v === value) {
+        return this;
+      }
+    }
+    this.entries.push([value, value]);
+    return this;
+  }
+
+  delete(value) {
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i][1] === value) {
+        this.entries.splice(i, 1);
+        return;
+      }
+    }
+  }
+
+  has(value) {
+    for (const [k, v] of this.entries) {
+      if (v === value) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  clear() {
+    this.entries = [];
+  }
+
+  forEach(callback) {
+    for (const [k, v] of this.entries) {
+      callback(v, k, this);
+    }
+  }
+
+  size() {
+    return this.entries.length;
+  }
+
+  keys() {
+    return this.entries.map(([k, v]) => k);
+  }
+
+  values() {
+    return this.entries.map(([k, v]) => v);
+  }
+}
+
+// +----------------------------------+
+// |  Ephemeral interaction streaming |
+// +----------------------------------+
+// While a user drags/rotates/resizes a morph, per-frame state lives only in the
+// ephemeral overlays ($transform/$bounds) and the document sees ONE write at the
+// end. So that other users can still watch the interaction live, each replica
+// broadcasts its active overlays once per frame via automerge-repo ephemeral
+// messages (peer-to-peer through the sync server, never persisted), and applies
+// incoming ones to the same $-overlays on its side.
+//
+// Wire format — plain JSON, and deliberately NO $-prefixed keys: LM reads/writes of
+// $-names on HOST objects route to the ephemeral-property sidecar, not the object,
+// so $-keys on a message would be invisible from LM code.
+//   { type: 'lm-eph', v: 1, actor, sid, end?, objects: [{ id, props: { transform, bounds, vertices? } }] }
+// Values are className-tagged trees ({ c: 'Point', x, y }, ...). Receivers decode by
+// prototype delegation (Object.create($global[c].prototype) + fields), validate
+// every number, and may ONLY write the whitelisted $-props (see
+// ephApplyOverlayEntry) — a malformed or malicious message can never touch the
+// document, because $-props never persist by construction.
+// `vertices` (line reshapes only, gated on $vertexDragActive) is a flat
+// [x0, y0, x1, y1, ...] number array — NOT the class-tagged codec, whose v1
+// deliberately carries no arrays; it has its own validator (ephValidVerticesValue).
+//
+// Echo suppression uses `sid`, a random per-SESSION replica id ($ephSessionID),
+// NOT `actor`: $actorID is the acting-USER id and the multi-hand feature rebinds
+// it to small shared integers (initHand gives hands ids 0, 1, 2, ... and clicking
+// a hand adopts its id via activateHand — hands are persisted, so two users can
+// easily hold the SAME $actorID). Comparing on actor made such replicas drop every
+// message from each other as an "echo". `actor` is still sent for attribution;
+// receivers fall back to it only for messages from pre-`sid` senders.
+//
+// Timing policy is entirely receiver-side: an overlay lapses $EPH_OVERLAY_MS after
+// the last message about it, so a sender that dies mid-drag self-heals. The final
+// message (sent from finishPointerDrag AFTER the commit, so it carries exactly the
+// committed values) is flagged end:true; the receiver gives it the short
+// $EPH_OVERLAY_END_MS deadline — but does NOT drop the overlay at that deadline
+// unless this replica's document already shows the committed values. Document sync
+// is not prompt: now that idle replicas make no doc writes (op economy), a commit
+// can take arbitrarily long to sync in, and dropping the overlay early would snap
+// the morph back to its stale pre-drag position until then. So the sweep holds an
+// end overlay (which already shows the committed values) until the document catches
+// up, giving up after $EPH_OVERLAY_COMMIT_WAIT_MS if the commit never arrives.
+//
+// GC note: decoded overlays are shadow objects reachable only through $-props
+// (ephemeral-live, swept once the lease cleanup nulls them), and window._ephOverlays
+// holds only ids and numbers — nothing here pins heap objects.
+
+function ephStreamRegister(morph) {
+  /** Called by {@link Morph#continuePointerDrag} on the first real move. */
+  if (!$uiState || !$uiState.ephStreamMorphs) return;
+  if (morph.$transform == null) return; // legacy/shadowed morph: nothing ephemeral to stream
+  if (!$uiState.ephStreamMorphs.includes(morph)) $uiState.ephStreamMorphs.push(morph);
+}
+function ephStreamEnd(morph) {
+  /** Called by {@link Morph#finishPointerDrag} after the commit: deregister and send
+   * the final (end:true) message with the committed values. */
+  if (!$uiState || !$uiState.ephStreamMorphs) return;
+  let ix = $uiState.ephStreamMorphs.indexOf(morph);
+  if (ix < 0) return; // never moved (plain click) or streaming unavailable
+  $uiState.ephStreamMorphs.splice(ix, 1);
+  if (!window.handle || !window.handle.broadcast) return;
+  let objs = new window.Array();
+  objs.push(ephOverlayEntryFor(morph));
+  ephBroadcast(objs, true);
+}
+function flushEphemeralStream() {
+  /** Once per frame (see onFrame): one batched message for all active overlays. */
+  if (!$uiState || !$uiState.ephStreamMorphs || $uiState.ephStreamMorphs.length === 0) return;
+  if (!window.handle || !window.handle.broadcast) return;
+  let objs = new window.Array();
+  $uiState.ephStreamMorphs.forEach((m) => {
+    if (m.$transform != null) objs.push(ephOverlayEntryFor(m));
+  });
+  if (objs.length > 0) ephBroadcast(objs, false);
+}
+function ephOverlayEntryFor(morph) {
+  // Host objects throughout (new window.Object/Array): handle.broadcast needs plain
+  // JSON, and building it host-side avoids any LM->JS conversion questions.
+  let entry = new window.Object();
+  entry.id = morph.$id;
+  let props = new window.Object();
+  props.transform = ephEncodeValue(morph.transform, 0);
+  if (morph.bounds != null) props.bounds = ephEncodeValue(morph.bounds, 0);
+  // A vertex-handle drag reshapes the line, so peers need the vertex list too.
+  // Gated on $vertexDragActive (NOT on having vertices) so whole-morph drags of
+  // vertex-heavy shapes (pen trails) never ship vertex lists. Reads through the
+  // getter: mid-drag frames carry the ephemeral list, and the end message — sent
+  // after the commit, while the flag is still up — carries exactly the committed
+  // values.
+  if (morph.$vertexDragActive && morph.shape != null && morph.shape.vertices != null) {
+    let vs = morph.shape.vertices;
+    let arr = new window.Array();
+    for (let i = 0; i < vs.length; i++) {
+      arr.push(vs[i].x);
+      arr.push(vs[i].y);
+    }
+    props.vertices = arr;
+  }
+  entry.props = props;
+  return entry;
+}
+function ephBroadcast(objs, isEnd) {
+  let msg = new window.Object();
+  msg.type = 'lm-eph';
+  msg.v = 1;
+  msg.actor = $actorID;
+  msg.sid = $ephSessionID; // replica identity for echo suppression (see above)
+  if (isEnd) msg.end = true;
+  msg.objects = objs;
+  window.handle.broadcast(msg);
+}
+function ephEncodeValue(v, depth) {
+  /** LM value -> plain-JSON host tree. Data objects become { c: className, ...fields }.
+   * v1 carries primitives and class-tagged objects only (no arrays — the geometry
+   * types need none; extend BOTH codec directions together if that changes). */
+  if (v == null) return null;
+  let t = typeof v;
+  if (t === 'number' || t === 'string' || t === 'boolean') return v;
+  if (t === 'function' || depth >= 6) return null;
+  if (Array.isArray(v)) return null;
+  if (t === 'object' && typeof v.className === 'string') {
+    let out = new window.Object();
+    out.c = v.className;
+    Object.getOwnPropertyNames(v).forEach((k) => {
+      let ev = ephEncodeValue(v[k], depth + 1);
+      if (ev != null) out[k] = ev;
+    });
+    return out;
+  }
+  return null;
+}
+function ephDecodeValue(v, depth) {
+  /** Host tree -> LM value. { c } nodes revive by prototype delegation: in LM an
+   * instance IS fields + a prototype, so no constructors or per-class registry.
+   * NOTE: Object.keys here is LM's, which handles host objects; window.Object.keys
+   * would not work (host functions read through the window proxy are bound, and a
+   * bound Object loses its statics). */
+  if (v == null) return null;
+  let t = typeof v;
+  if (t === 'number' || t === 'string' || t === 'boolean') return v;
+  if (t !== 'object' || depth >= 6) return null;
+  let c = v.c;
+  if (typeof c !== 'string') return null;
+  let cls = $global[c];
+  if (!cls || !cls.prototype) return null;
+  let obj = Object.create(cls.prototype);
+  let ks = Object.keys(v);
+  for (let i = 0; i < ks.length; i++) {
+    let k = ks.at(i);
+    if (k === 'c') continue;
+    obj[k] = ephDecodeValue(v[k], depth + 1);
+  }
+  return obj;
+}
+function ephFiniteNumber(x) {
+  return typeof x === 'number' && Number.isFinite(x);
+}
+function ephValidPointValue(p) {
+  return p != null && p.className === 'Point' && ephFiniteNumber(p.x) && ephFiniteNumber(p.y);
+}
+function ephValidTransformValue(t) {
+  return (
+    t != null &&
+    t.className === 'SimpleTransform' &&
+    ephValidPointValue(t.translation) &&
+    ephFiniteNumber(t.rotation) &&
+    ephValidPointValue(t.scale)
+  );
+}
+function ephValidBoundsValue(b) {
+  return (
+    b != null &&
+    b.className === 'Rectangle' &&
+    ephValidPointValue(b.topLeft) &&
+    ephValidPointValue(b.extent)
+  );
+}
+function ephValidVerticesValue(arr) {
+  /** Flat [x0, y0, x1, y1, ...]: even length, every number finite, capped well
+   * above any hand-edited line (reshapes come from vertex handles, not pens). */
+  if (arr == null || typeof arr.length !== 'number') return false;
+  if (arr.length % 2 !== 0 || arr.length === 0 || arr.length > 1024) return false;
+  for (let i = 0; i < arr.length; i++) if (!ephFiniteNumber(arr[i])) return false;
+  return true;
+}
+function processEphemeralInbound() {
+  /** Once per frame (see onFrame): drain the inbound queue, then sweep lapsed overlays. */
+  if (!window._ephemeralMessages || !window._ephOverlays) return;
+  let now = $uiState && $uiState.lastFrameTime != null ? $uiState.lastFrameTime : 0;
+  if (window._ephemeralMessages.length > 0) {
+    for (const m of window._ephemeralMessages) ephApplyMessage(m, now);
+    window._ephemeralMessages = new window.Array();
+  }
+  ephSweepOverlays(now);
+}
+function ephApplyMessage(m, now) {
+  if (!m || m.type !== 'lm-eph' || m.v !== 1) return;
+  // Echo safety on the per-session replica id — NEVER on actor alone: two users
+  // can legitimately hold the same $actorID (see the comment block above). The
+  // actor comparison remains only for messages from pre-`sid` senders.
+  if (m.sid != null ? m.sid === $ephSessionID : m.actor === $actorID) return;
+  let objs = m.objects;
+  if (!objs) return;
+  let n = Math.min(objs.length, 32);
+  for (let i = 0; i < n; i++) ephApplyOverlayEntry(objs[i], !!m.end, now);
+}
+function ephApplyOverlayEntry(entry, isEnd, now) {
+  if (!entry || typeof entry.id !== 'string' || !entry.props) return;
+  let morph = topLevelMorph ? morphWithId(topLevelMorph, entry.id) : null;
+  // Unknown id: e.g. motion messages for a remote copy can outrun the doc change
+  // that creates it — drop silently; later messages apply once sync catches up.
+  if (!morph) return;
+  // Local interaction wins: apply only when the morph has no overlay at all, or
+  // when the existing overlay is remote-owned (i.e. tracked in _ephOverlays).
+  // Locally-initiated overlays are never in that table.
+  if (morph.$transform != null && window._ephOverlays[entry.id] == null) return;
+  // THE WHITELIST: these ephemeral props, validated, applied as a group —
+  // hit-testing and fullBounds assume transform, bounds, and vertices agree.
+  // Extend here (with a validator) to stream more ephemeral state.
+  let tfm = ephDecodeValue(entry.props.transform, 0);
+  if (!ephValidTransformValue(tfm)) return;
+  let bnds = null;
+  if (entry.props.bounds != null) {
+    bnds = ephDecodeValue(entry.props.bounds, 0);
+    if (!ephValidBoundsValue(bnds)) return;
+  }
+  let vertsFlat = entry.props.vertices != null ? entry.props.vertices : null;
+  if (vertsFlat != null && !ephValidVerticesValue(vertsFlat)) return;
+  morph.$transform = tfm;
+  morph.$bounds = bnds;
+  // Vertices apply only to a shape on the accessor path (_vertices present) —
+  // a pre-getter shape's own `vertices` property shadows the getter, so the
+  // overlay would be invisible there and could later be mistaken for local
+  // ephemeral state by a commit.
+  if (vertsFlat != null && morph.shape != null && morph.shape._vertices != null) {
+    let vs = [];
+    for (let i = 0; i < vertsFlat.length; i += 2) vs.push(pt(vertsFlat[i], vertsFlat[i + 1]));
+    morph.shape.$vertices = vs;
+  }
+  // The lease record: a host object of numbers only (never LM heap objects — see
+  // the GC note above).
+  let lease = new window.Object();
+  lease.deadline = now + (isEnd ? $EPH_OVERLAY_END_MS || 250 : $EPH_OVERLAY_MS || 1000);
+  if (isEnd) {
+    // The end message carries exactly the values the sender committed. Record them
+    // so the sweep can hold the overlay until this replica's document has caught
+    // up — sync can lag long behind the 250ms end deadline (see the timing-policy
+    // comment above).
+    lease.tx = tfm.translation.x;
+    lease.ty = tfm.translation.y;
+    lease.rot = tfm.rotation;
+    lease.sx = tfm.scale.x;
+    lease.sy = tfm.scale.y;
+    if (bnds != null) {
+      lease.hasBounds = true;
+      lease.bx = bnds.topLeft.x;
+      lease.by = bnds.topLeft.y;
+      lease.bw = bnds.extent.x;
+      lease.bh = bnds.extent.y;
+    }
+    if (vertsFlat != null) {
+      // Numbers only, copied out of the message (leases must never pin LM heap
+      // objects or alias inbound payloads — see the GC note above).
+      let lv = new window.Array();
+      for (let i = 0; i < vertsFlat.length; i++) lv.push(vertsFlat[i]);
+      lease.verts = lv;
+    }
+  }
+  window._ephOverlays[entry.id] = lease;
+  morph.changed();
+}
+function ephCommitLanded(morph, lease) {
+  /** True once the persistent (document) transform/bounds show exactly the values
+   * the sender's end message said it committed. Values travel verbatim (doubles
+   * survive JSON and Automerge exactly), so equality is exact — and the
+   * elided-commit case (a drag that ended where it started, so the sender wrote
+   * nothing) matches immediately. */
+  let t = morph._transform;
+  if (t == null || t.translation == null) return false;
+  if (t.translation.x !== lease.tx || t.translation.y !== lease.ty) return false;
+  if ((t.rotation || 0) !== lease.rot) return false;
+  let sx = t.scale != null ? t.scale.x : 1;
+  let sy = t.scale != null ? t.scale.y : 1;
+  if (sx !== lease.sx || sy !== lease.sy) return false;
+  if (lease.hasBounds) {
+    let b = morph._bounds;
+    if (b == null || b.topLeft == null || b.extent == null) return false;
+    if (b.topLeft.x !== lease.bx || b.topLeft.y !== lease.by) return false;
+    if (b.extent.x !== lease.bw || b.extent.y !== lease.bh) return false;
+  }
+  if (lease.verts != null) {
+    let sh = morph.shape;
+    // The persistent list even while $vertices is applied: _vertices on
+    // accessor-path shapes, the own `vertices` property on pre-getter ones.
+    let pv = sh != null ? (sh._vertices != null ? sh._vertices : sh.vertices) : null;
+    if (pv == null || pv.length * 2 !== lease.verts.length) return false;
+    for (let i = 0; i < pv.length; i++) {
+      if (pv[i].x !== lease.verts[2 * i] || pv[i].y !== lease.verts[2 * i + 1]) return false;
+    }
+  }
+  return true;
+}
+function ephSweepOverlays(now) {
+  // LM's Object.keys (handles host objects); window.Object.keys does not exist —
+  // host functions read through the window proxy are bound, losing their statics.
+  let ids = Object.keys(window._ephOverlays);
+  for (let i = 0; i < ids.length; i++) {
+    let id = ids.at(i);
+    let lease = window._ephOverlays[id];
+    let morph = topLevelMorph ? morphWithId(topLevelMorph, id) : null;
+    if (!morph) {
+      // Morph not reachable right now (still syncing in, or deleted). Keep the
+      // lease: dropping it while the morph may still carry $-overlays would orphan
+      // them, and the local-wins guard in ephApplyOverlayEntry would then read
+      // every later remote message as a local interaction — masking the morph's
+      // document state for good. Give up only long after any overlay would have
+      // lapsed anyway (a stale lease is just an id and a few numbers).
+      if (now > lease.deadline + ($EPH_OVERLAY_ABANDON_MS || 60000))
+        delete window._ephOverlays[id];
+      continue;
+    }
+    if (morph.$transform == null && morph.$bounds == null) {
+      // Overlay already cleared elsewhere (e.g. this user dragged the morph and
+      // finishPointerDrag committed it) — just drop the lease. $vertices is
+      // cleared alongside the others everywhere, but sweep it defensively so a
+      // dropped lease can never strand a vertex overlay.
+      if (morph.shape != null && morph.shape.$vertices != null) morph.shape.$vertices = null;
+      delete window._ephOverlays[id];
+      continue;
+    }
+    if (lease.deadline > now) continue;
+    if (lease.tx != null && !ephCommitLanded(morph, lease)) {
+      // End-of-drag overlay whose committed values haven't synced into this
+      // replica's document yet: hold it (it already shows the right position)
+      // rather than snapping back to the stale pre-drag position. Give up after
+      // $EPH_OVERLAY_COMMIT_WAIT_MS in case the sender's commit never arrives.
+      if (now <= lease.deadline + ($EPH_OVERLAY_COMMIT_WAIT_MS || 30000)) {
+        ephNudgeSync(now);
+        continue;
+      }
+    }
+    delete window._ephOverlays[id];
+    morph.$transform = null;
+    morph.$bounds = null;
+    if (morph.shape != null && morph.shape.$vertices != null) morph.shape.$vertices = null;
+    morph.changed();
+  }
+}
+function ephNudgeSync(now) {
+  /** Called while an end overlay is waiting for its commit to sync in — i.e. we
+   * KNOW a remote commit exists that this replica doesn't have. The sync layer
+   * runs a round when this replica commits something, so an idle watcher can lag
+   * behind indefinitely (the "my drags only show up after my partner does
+   * something" bug). Bump a tiny shared counter — one register write, throttled
+   * to one per $EPH_SYNC_NUDGE_MS — purely so this replica commits a change and
+   * the sync layer goes and fetches what we're missing. Set $EPH_SYNC_NUDGE_MS
+   * to 0 to disable. */
+  let interval = $EPH_SYNC_NUDGE_MS != null ? $EPH_SYNC_NUDGE_MS : 5000;
+  if (interval <= 0) return;
+  if (window._ephLastSyncNudge != null && now - window._ephLastSyncNudge < interval) return;
+  window._ephLastSyncNudge = now;
+  lmSyncNudgeCounter = typeof lmSyncNudgeCounter === 'number' ? (lmSyncNudgeCounter + 1) % 1000000 : 0;
+}
+function morphWithId(root, id) {
+  if (root.$id === id) return root;
+  let found = null;
+  root.eachSubmorph((m) => {
+    if (found == null) found = morphWithId(m, id);
+  });
+  return found;
+}
+
+function initUI() {
+  // Per-user UI state: ephemeral (never in the Automerge document), survives across
+  // transactions, reset on reload. `eventListeners` keeps the listener closures (and
+  // their captured scopes) alive across transactions; without it the GC would collect
+  // them and the browser-held listener proxies would go stale.
+  $uiState = {
+    eventListeners: [],
+    /** pointerId → { timer, pressPt, startPt, longClickMoveCancelPx? }; raw DOM events
+     *  are not representable in the heap, so they live in window._lcEvts instead. */
+    longClickByPointerId: {},
+    pointerLocation: null,
+    lastFrameTime: null,
+    /** Morphs whose interaction overlays this user is broadcasting (see the
+     *  "Ephemeral interaction streaming" section). */
+    ephStreamMorphs: [],
+  };
+  // Raw side-tables (plain JS on the real window; never touch the LM heap):
+  window._canvasEvents = new window.Array(); // DOM events queued between frames
+  window._lcEvts = new window.Object(); // pointerId → raw pointerdown event
+  window._lcTimers = new window.Object(); // pointerId → raw timer handle (a host object in Node)
+  window._ephemeralMessages = new window.Array(); // inbound lm-eph payloads queued between frames
+  // morphId → lease {deadline, committed values...} for remote-owned overlays.
+  // PRESERVED across re-inits: morphs may still carry $-overlays from before, and
+  // resetting the table would orphan them (the local-wins guard would then block
+  // every later remote message for those morphs).
+  if (window._ephOverlays == null) window._ephOverlays = new window.Object();
+
+  function addEventListener(source, type, listener, optsIfAny) {
+    // prevents GC from collecting the listener
+    $uiState.eventListeners.push(listener);
+    if (optsIfAny) source.addEventListener(type, listener, optsIfAny);
+    else source.addEventListener(type, listener);
+  }
+
+  /** After this many ms with the pointer still down, the original pointerdown gets `longClick === true`. */
+  $LONG_CLICK_MS = 700;
+  /** Cancel long-click timer if the pointer moves farther than this from press (CSS px). */
+  $LONG_CLICK_MOVE_CANCEL_PX = 7;
+  /** When true, a completed long-click runs halo cycling like meta-click (see {@link WorldMorph.longClickHaloDefersAt}). Default false; toggled from world menu "Long click for halos". */
+  $longClickForHalos = false;
+  $uiState.longClickDisarmPointer = function (pointerId) {
+    let arm = $uiState.longClickByPointerId[pointerId];
+    if (!arm) return;
+    if (window._lcTimers[pointerId] != null) clearTimeout(window._lcTimers[pointerId]);
+    delete $uiState.longClickByPointerId[pointerId];
+    delete window._lcEvts[pointerId];
+    delete window._lcTimers[pointerId];
+  };
+  $uiState.longClickArmIfNeeded = function (pressPt, downEvt) {
+    if (!downEvt || typeof downEvt.pointerId !== 'number') return;
+    if (typeof downEvt.button === 'number' && downEvt.button !== 0) return;
+    $uiState.longClickDisarmPointer(downEvt.pointerId);
+    let pid = downEvt.pointerId;
+    let ms = $LONG_CLICK_MS != null ? $LONG_CLICK_MS : 1000;
+    let timer = setTimeout(function () {
+      let arm = $uiState.longClickByPointerId[pid];
+      if (!arm) return;
+      let downEvt = window._lcEvts[pid];
+      try {
+        if (downEvt) downEvt.longClick = true;
+      } catch (err) {
+        /* ignore */
+      }
+      if ($longClickForHalos !== false && topLevelMorph && topLevelMorph.onLongClickHalo)
+        topLevelMorph.onLongClickHalo(arm.pressPt, downEvt);
+    }, ms);
+    window._lcEvts[pid] = downEvt;
+    window._lcTimers[pid] = timer; // raw handle stays out of the heap
+    $uiState.longClickByPointerId[pid] = {
+      armed: true,
+      pressPt: pt(pressPt.x, pressPt.y),
+      startPt: pt(pressPt.x, pressPt.y),
+    };
+  };
+
+  $actorID = window.Automerge.getActorId(window.handle.doc());
+
+  // Receiver-side overlay lifetimes (the sender never dictates timing): lapse after
+  // this much silence about an ongoing interaction / after its end:true message.
+  $EPH_OVERLAY_MS = 1000;
+  $EPH_OVERLAY_END_MS = 250;
+  // How long past its deadline an end overlay may wait for the sender's committed
+  // values to sync into this replica's document, and how long an unreachable
+  // morph's lease is kept before it's abandoned. See ephSweepOverlays.
+  $EPH_OVERLAY_COMMIT_WAIT_MS = 30000;
+  $EPH_OVERLAY_ABANDON_MS = 60000;
+  // Minimum spacing between sync nudges (see ephNudgeSync); <= 0 disables nudging.
+  $EPH_SYNC_NUDGE_MS = 5000;
+  // Per-session replica id for ephemeral-message echo suppression. Session-unique
+  // and never persisted; preserved across re-inits (like the overlay table) so a
+  // mid-session initUI can't make this replica re-apply its own in-flight messages.
+  if ($ephSessionID == null)
+    $ephSessionID = 'eph-' + Math.random().toString(36).slice(2) + '-' + Date.now().toString(36);
+  // Inbound ephemeral messages: like the canvas listeners below, the callback runs
+  // OUTSIDE the frame transaction, so it may only touch window side-tables; the
+  // queue is drained inside the frame by processEphemeralInbound. The listener is
+  // held in a $-global (NOT a window slot: reading an LM function back through the
+  // host-object proxy breaks — no `bind` — and the $-global also keeps it alive
+  // for the GC, like $uiState.eventListeners does for the canvas listeners).
+  if (window.handle.on) {
+    if ($lmEphListener != null && window.handle.off)
+      window.handle.off('ephemeral-message', $lmEphListener);
+    $lmEphListener = (payload) => {
+      if (payload && payload.message) window._ephemeralMessages.push(payload.message);
+    };
+    window.handle.on('ephemeral-message', $lmEphListener);
+  }
+  // Fresh UI init must not inherit stale soft-shift state.
+  $shiftKeyPressedFlag = false; // per-user soft-shift resets on session start
+  if (topLevelMorph) topLevelMorph.$shiftKeyDown = false;
+  _refreshPadModifierStyles();
+
+  // Remove any previous listeners so we never double-register (avoids doubled clicks)
+
+  if (window._uiAbortController) window._uiAbortController.abort();
+  window._uiAbortController = new window.AbortController();
+
+  canvas.style.touchAction = 'none';
+  addEventListener(canvas, 'pointerdown', (e) => window._canvasEvents.push(e));
+  // pointerup / keydown(c,x): may run sync via $uiState hooks (clipboard needs user gesture).
+  addEventListener(canvas, 'pointerup', (e) => {
+    if ($uiState && $uiState.$onCanvasPointerUp) $uiState.$onCanvasPointerUp(e);
+    else window._canvasEvents.push(e);
+  });
+  addEventListener(canvas, 'pointermove', (e) => window._canvasEvents.push(e));
+  addEventListener(canvas, 'pointercancel', (ev) => {
+    if (ev && ev.pointerId != null) $uiState.longClickDisarmPointer(ev.pointerId);
+  });
+  canvas.tabIndex = 1;
+  addEventListener(canvas, 'keydown', (e) => {
+    if ($uiState && $uiState.$onCanvasKeyDown) $uiState.$onCanvasKeyDown(e);
+    else window._canvasEvents.push(e);
+  });
+  addEventListener(canvas, 'keypress', (e) => window._canvasEvents.push(e));
+  addEventListener(canvas, 'keyup', (e) => window._canvasEvents.push(e));
+  // Wheel must preventDefault synchronously (too late inside rAF processEvents).
+  addEventListener(
+    canvas,
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      window._canvasEvents.push(e);
+    },
+    { passive: false },
+  );
+
+  /** Target time between frames (ms). rAF fires at the display's refresh rate
+   *  (60Hz+); frames that arrive sooner than this are skipped, so events/render
+   *  run at ~30Hz. */
+  $FRAME_INTERVAL_MS = 1000 / 30;
+
+  function onFrame(now) {
+    if ($uiState.lastFrameTime != null && now - $uiState.lastFrameTime < $FRAME_INTERVAL_MS) {
+      window._uiRafId = window.requestAnimationFrame(onFrame);
+      return;
+    }
+    // Advance by the interval rather than to `now`, so 16.7ms rAF ticks don't drift
+    // us down to 20Hz; snap to `now` when we've fallen behind (hidden tab, slow frame).
+    $uiState.lastFrameTime =
+      $uiState.lastFrameTime == null || now - $uiState.lastFrameTime >= 2 * $FRAME_INTERVAL_MS
+        ? now
+        : $uiState.lastFrameTime + $FRAME_INTERVAL_MS;
+    try {
+      window.runtime.change(() => {
+        maybeRepairAfterMerge();
+        processEvents();
+        processEphemeralInbound();
+        flushEphemeralStream();
+        if (render) {
+          render();
+        }
+        window._uiRafId = window.requestAnimationFrame(onFrame);
+      });
+    } catch (e) {
+      if (handleRuntimeError) handleRuntimeError(e, 'animation frame');
+      window._uiRafId = window.requestAnimationFrame(onFrame);
+    }
+  }
+
+  // requestAnimationFrame holds onFrame's proxy, but that is invisible to the LM GC:
+  // without an LM-visible root, onFrame's captured scope would be collected and the
+  // next frame would fire a stale closure. Retaining it here keeps it (and everything
+  // it captures, e.g. processEvents) alive — ephemerally, per user.
+  $uiState.onFrame = onFrame;
+  if (window._uiRafId != null) window.cancelAnimationFrame(window._uiRafId);
+  window._uiRafId = window.requestAnimationFrame(onFrame);
+
+  function maybeRepairAfterMerge() {
+    /** Run the scene-graph merge repair ({@link Morph#repairSubmorphOwnership})
+     * once per batch of external (remote-replica) changes — detected via the
+     * runtime's externalChangeCount — plus once on the first frame, so a document
+     * corrupted by a merge in an earlier session heals on load. Runs before event
+     * processing so hit-testing and rendering never see a duplicated entry. */
+    if (!topLevelMorph || !topLevelMorph.repairSubmorphOwnership) return;
+    let n =
+      window.runtime && window.runtime.externalChangeCount
+        ? window.runtime.externalChangeCount()
+        : 0;
+    if ($uiState.externalChangeCountSeen === n) return;
+    $uiState.externalChangeCountSeen = n;
+    topLevelMorph.repairSubmorphOwnership();
+  }
+
+  function processEvents() {
+    const seen = new window.Set(); // native Set; holds raw DOM events
+    for (const e of window._canvasEvents) {
+      if (seen.has(e)) continue;
+      seen.add(e);
+
+      e.actorID = $actorID;
+
+      switch (e.type) {
+        case 'pointerdown': {
+          const pt = pointerEventCanvasLocalPt(canvas, e);
+          onPointerDown(pt, e);
+          break;
+        }
+        case 'pointerup': {
+          const pt = pointerEventCanvasLocalPt(canvas, e);
+          onPointerUp(pt, e);
+          break;
+        }
+        case 'pointermove': {
+          const pt = pointerEventCanvasLocalPt(canvas, e);
+          onPointerMove(pt, e);
+          break;
+        }
+        case 'keydown':
+          onKeyDown(e);
+          break;
+        case 'keypress':
+          onKeyPress(e);
+          break;
+        case 'keyup':
+          onKeyUp(e);
+          break;
+        case 'wheel': {
+          const pt = pointerEventCanvasLocalPt(canvas, e);
+          onWheel(pt, e);
+          break;
+        }
+        default:
+          console.error('unsupported event type', e.type);
+      }
+    }
+    window._canvasEvents = new window.Array();
+  }
+
+  function eventTargetsMenuMorph(worldPt) {
+    if (!topLevelMorph || !topLevelMorph.topMorphAt) return false;
+    let hit = topLevelMorph.topMorphAt(worldPt);
+    while (hit) {
+      if (hit.className === 'MenuMorph') return true;
+      hit = hit.owner;
+    }
+    return false;
+  }
+
+  // Clipboard API needs transient user activation. Normal canvas events are deferred
+  // to rAF inside runtime.change(), which drops that activation — so Ctrl/Cmd-C/X and
+  // menu copy/export must run on the real gesture turn.
+  $uiState.$onCanvasKeyDown = (e) => {
+    let k = e.key && e.key.length === 1 ? e.key.toLowerCase() : '';
+    if ((e.metaKey || e.ctrlKey) && (k === 'c' || k === 'x')) {
+      e.preventDefault();
+      try {
+        window.runtime.change(() => {
+          processEvents(); // apply any pending selection updates first
+          e.actorID = $actorID;
+          onKeyDown(e);
+        });
+      } catch (err) {
+        if (handleRuntimeError) handleRuntimeError(err, 'sync clipboard keydown');
+        else console.log(err);
+      }
+      return;
+    }
+    // The deferred path preventDefaults inside rAF processEvents — too late to
+    // stop browser defaults like Cmd-P (print), Cmd-D (bookmark), Cmd-S (save
+    // page), Cmd-F (find bar). Block those now, on the real gesture turn; the
+    // event still goes through the normal deferred processing.
+    if ((e.metaKey || e.ctrlKey) && 'dacxvzgspf'.indexOf(k) >= 0) e.preventDefault();
+    window._canvasEvents.push(e);
+  };
+  $uiState.$onCanvasPointerUp = (e) => {
+    let handled = false;
+    try {
+      window.runtime.change(() => {
+        let localPt = pointerEventCanvasLocalPt(canvas, e);
+        if (!eventTargetsMenuMorph(localPt)) return;
+        processEvents(); // pending pointerdown on the menu item first
+        e.actorID = $actorID;
+        onPointerUp(localPt, e);
+        handled = true;
+      });
+    } catch (err) {
+      if (handleRuntimeError) handleRuntimeError(err, 'sync menu pointerup');
+      else console.log(err);
+    }
+    if (!handled) window._canvasEvents.push(e);
+  };
+
+  console.log('initUI loaded');
+  ensureAlldefsSourceLines();
+}
+// function initLively() {
+//   Lively = new WorldMorph(getBounds()); // make up a morphic world
+//   topLevelMorph = Lively; // 'install' the morphic world in patchwork world
+//   return Lively;
+// }
+function onKeyDown(e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  // console.log('TODO(dan): handle key press event', e);
+  // if (e.key == 'Meta') return; // ignore; check evt.metaKey on simple chars
+  topLevelMorph.onKeyDown(e);
+  // hello
+  e.preventDefault();
+}
+function onKeyPress(e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  // console.log('TODO(dan): handle key onKeyPress event', e);
+  // topLevelMorph.onKeyPress(e);
+}
+function onKeyUp(e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  if (topLevelMorph && topLevelMorph.onKeyUp) topLevelMorph.onKeyUp(e);
+}
+function onPointerDown(p, e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  if ($uiState && $uiState.longClickArmIfNeeded) $uiState.longClickArmIfNeeded(p, e);
+  topLevelMorph.onPointerDown(p, e);
+}
+function onPointerDownNow(p, e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  topLevelMorph.onPointerDown(p, e);
+}
+function onPointerMove(p, e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  if (e && typeof e.pointerId === 'number' && $uiState) {
+    let arm = $uiState.longClickByPointerId[e.pointerId];
+    if (arm) {
+      let lim =
+        arm.longClickMoveCancelPx != null
+          ? arm.longClickMoveCancelPx
+          : $LONG_CLICK_MOVE_CANCEL_PX != null
+            ? $LONG_CLICK_MOVE_CANCEL_PX
+            : 18;
+      if (p.dist(arm.startPt) > lim) $uiState.longClickDisarmPointer(e.pointerId);
+    }
+  }
+  topLevelMorph.onPointerMove(p, e);
+}
+function onPointerUp(p, e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  if (e && typeof e.pointerId === 'number' && $uiState) $uiState.longClickDisarmPointer(e.pointerId);
+  topLevelMorph.onPointerUp(p, e);
+}
+function onWheel(p, e) {
+  if (e && e.actorID == null) e.actorID = $actorID;
+  if (topLevelMorph && topLevelMorph.onWheel) topLevelMorph.onWheel(p, e);
+}
+function pointerEventCanvasLocalPt(canvas, e) {
+  /** Local coords on canvas for Pointer Events. Touch/pen use clientX/Y − rect (Safari often omits or misreports offsetX/Y). */
+  if (!canvas || !e) return pt(0, 0);
+  let clientBased =
+    e.pointerType === 'touch' ||
+    e.pointerType === 'pen' ||
+    typeof e.offsetX !== 'number' ||
+    typeof e.offsetY !== 'number' ||
+    Number.isNaN(e.offsetX) ||
+    Number.isNaN(e.offsetY);
+  if (!clientBased) return pt(e.offsetX, e.offsetY);
+  let r = canvas.getBoundingClientRect();
+  let cx = e.clientX != null ? e.clientX : 0;
+  let cy = e.clientY != null ? e.clientY : 0;
+  return pt(cx - r.left, cy - r.top);
+}
+function setShiftKeyPressed(v) {
+  $shiftKeyPressedFlag = !!v;
+  _refreshPadModifierStyles();
+}
+function setLockKeyPressed(v) {
+  $lockKeyPressedFlag = !!v;
+  _refreshPadModifierStyles();
+}
+function setMetaKeyPressed(v) {
+  $metaKeyPressedFlag = !!v;
+  _refreshPadModifierStyles();
+}
+function toggleMetaKeyPressed() {
+  setMetaKeyPressed(!$metaKeyPressedFlag);
+}
+function consumeSoftMetaKey() {
+  if (!$metaKeyPressedFlag) return;
+  $metaKeyPressedFlag = false;
+  _refreshPadModifierStyles();
+}
+function consumeSoftShiftKey() {
+  /** Clear one-shot soft SHIFT (LOCK is unchanged). */
+  if (!$shiftKeyPressedFlag || $lockKeyPressedFlag) return;
+  setShiftKeyPressed(false);
+}
+function isShiftKeyPressed() {
+  /** True if shift should apply: hardware shift, LOCK, shift flag, or world shiftKeyDown from keys. */
+  let worldDown = topLevelMorph && topLevelMorph.$shiftKeyDown;
+  return $shiftKeyPressedFlag || $lockKeyPressedFlag || !!worldDown;
+}
+function isLockKeyPressed() {
+  return $lockKeyPressedFlag;
+}
+function isMetaKeyPressed() {
+  return $metaKeyPressedFlag;
+}
+function effectiveMetaKey(evt) {
+  /** True if meta should apply: hardware meta or soft META flag (use {@link consumeSoftMetaKey} after halo use). */
+  return !!(evt && evt.metaKey) || $metaKeyPressedFlag;
+}
+function effectiveShiftKey(evt) {
+  /** True if shift should apply for this event (LOCK forces shift until cleared). */
+  let hardware = !!evt && evt.shiftKey;
+  let worldDown = topLevelMorph && topLevelMorph.$shiftKeyDown;
+  let evtType = evt && evt.type ? evt.type : '';
+  let worldDownApplies =
+    worldDown && evtType !== 'pointerdown' && evtType !== 'pointermove' && evtType !== 'pointerup';
+  let flag = $shiftKeyPressedFlag;
+  if (flag) $shiftKeyPressedFlag = false;
+  if (flag) _refreshPadModifierStyles();
+  return hardware || flag || $lockKeyPressedFlag || worldDownApplies;
+}
+function _refreshPadModifierStyles() {
+  let root = topLevelMorph;
+  if (!root) return;
+  let kb = $onScreenKeyboardMorph;
+  if (kb && kb.world() && kb.refreshModifierKeyHighlights) kb.refreshModifierKeyHighlights();
+  if (kb && kb.world() && kb.refreshKeyLabels) kb.refreshKeyLabels();
+  if (root.changed) root.changed();
+}
+function pointerOnOskKeyUI(world, worldPt) {
+  /** Pointer is over an OSK key so world should not steal meta for cycleHalo. */
+  let t = world.topMorphAt(worldPt);
+  while (t) {
+    if (t.className === 'KbdKeyMorph') return true;
+    t = t.owner;
+  }
+  return false;
+}
+function testTransforms() {
+  Lively.box.testTransform(() => {
+    Lively.oval.testTransform(() => {
+      Lively.star.testTransform();
+    });
+  });
+}
+// +------------+
+// |  Geometry  |
+// +------------+
+// Points, rectangles, transforms, and pen/turtle geometry.
+
+function pt(x, y) {
+  return new Point(x, y); // make-a-point
+}
+function ptPolar(r, theta) {
+  return new Point(r * Math.sin(theta), r * Math.cos(theta));
+}
+function rect(x, y, width, height) {
+  return new Rectangle(pt(x, y), pt(width, height)); // make-a-point
+}
+function unionPts(points) {
+  return Rectangle.prototype.unionPts(points);
+}
+//  Point
+// -------
+// 2D point: addPt, subPt, scaleBy, dist, gridBy, boundsWithRadius.
+class Point {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+  }
+  addPt(p) {
+    return pt(this.x + p.x, this.y + p.y);
+  }
+  adhereTo(rect) {
+    if (rect.includesPt(this)) return this; // it's inside
+    let br = rect.bottomRight();
+    return pt(
+      Math.min(Math.max(this.x, rect.topLeft.x), br.x),
+      Math.min(Math.max(this.y, rect.topLeft.y), br.y),
+    );
+  }
+  toString() {
+    return `pt(${this.x.toFixed(2)}, ${this.y.toFixed(2)})`;
+  }
+  boundsWithRadius(r) {
+    return rect(this.x - r, this.y - r, 2 * r, 2 * r);
+  }
+  copy() {
+    return pt(this.x, this.y);
+  }
+  dist(p) {
+    let dx = p.x - this.x;
+    let dy = p.y - this.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  extent(ext) {
+    // Make a rectangle
+    return new Rectangle(this, ext);
+  }
+  flipX() {
+    /** Reflect velocity off a vertical wall (negate x). */
+    return pt(-this.x, this.y);
+  }
+  flipY() {
+    /** Reflect velocity off a horizontal wall (negate y). */
+    return pt(this.x, -this.y);
+  }
+  gridBy(n) {
+    return this.scaleBy(1 / n)
+      .round()
+      .scaleBy(n);
+  }
+  lePt(p) {
+    return this.x <= p.x && this.y <= p.y;
+  }
+  maxPt(p) {
+    return new Point(Math.max(this.x, p.x), Math.max(this.y, p.y));
+  }
+  minPt(p) {
+    return new Point(Math.min(this.x, p.x), Math.min(this.y, p.y));
+  }
+  moveBy(p) {
+    // ** why are we side-effecting here, but copying in other methods?
+    this.x += p.x;
+    this.y += p.y;
+  }
+  nearestPointOnLineFrom(p1, p2) {
+    let dx = p2.x - p1.x;
+    let dy = p2.y - p1.y;
+    let len2 = dx * dx + dy * dy;
+    if (len2 === 0) return pt(p1.x, p1.y);
+    let t = ((this.x - p1.x) * dx + (this.y - p1.y) * dy) / len2;
+    if (t <= 0) return pt(p1.x, p1.y);
+    if (t >= 1) return pt(p2.x, p2.y);
+    return pt(p1.x + t * dx, p1.y + t * dy);
+  }
+  negated() {
+    return pt(-this.x, -this.y);
+  }
+  polarAngle() {
+    return Math.atan2(this.x, this.y);
+  }
+  rect(p) {
+    return rect(this.minPt(p), this.maxPt(p));
+  }
+  render(ctx) {
+    // ctx.beginPath();
+    ctx.fillStyle = Color.black.fillStyle;
+    ctx.arc(this.x, this.y, 8, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  rotatedBy(radians, pivotPt) {
+    let v = this.subPt(pivotPt);
+    let polarDist = v.dist(pt(0, 0));
+    let rot = ptPolar(polarDist, v.polarAngle() + radians);
+    return rot.addPt(pivotPt);
+  }
+  round() {
+    return pt(Math.round(this.x), Math.round(this.y));
+  }
+  scaleBy(s) {
+    const sp = typeof s === 'number' ? pt(s, s) : s;
+    return pt(this.x * sp.x, this.y * sp.y);
+  }
+  setToPt(p) {
+    //NOTE: this does not return a copy, but *changes this point* — value writes
+    // only, so a doc-backed point can be updated in place (doc entries are
+    // immortal; replacing the point wholesale would orphan it).
+    this.x = p.x;
+    this.y = p.y;
+    return this;
+  }
+  subPt(p) {
+    return pt(this.x - p.x, this.y - p.y);
+  }
+  translatedBy(p) {
+    return this.addPt(p);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  Rectangle
+// -----------
+// Axis-aligned rect: union, intersection, includesPt.
+class Rectangle {
+  constructor(p, ext) {
+    this.topLeft = p;
+    this.extent = ext;
+  }
+  toString() {
+    return `${this.topLeft.toString()}.extent(${this.extent.toString()})`;
+  }
+  bottom() {
+    return this.topLeft.y + this.extent.y;
+  }
+  bottomLeft() {
+    return this.topLeft.addPt(pt(0, this.height()));
+  }
+  bottomRight() {
+    return this.topLeft.addPt(this.extent);
+  }
+  center() {
+    return this.topLeft.addPt(this.extent.scaleBy(0.5));
+  }
+  copy() {
+    return this.topLeft.copy().extent(this.extent.copy());
+  }
+  expandBy(n) {
+    const d = typeof n === 'number' ? n : n.x;
+    return this.insetBy(pt(-d, -d));
+  }
+  getBounds() {
+    return new Rectangle(this.topLeft, this.extent);
+  }
+  height() {
+    return this.extent.y;
+  }
+  includesPt(p) {
+    return this.topLeft.lePt(p) && p.lePt(this.bottomRight());
+  }
+  insetBy(numOrPt) {
+    const inset = typeof numOrPt === 'number' ? pt(numOrPt, numOrPt) : numOrPt;
+    return this.topLeft.addPt(inset).extent(this.extent.subPt(inset).subPt(inset));
+  }
+  intersection(other) {
+    /** Axis-aligned overlap, or zero-size rect at this topLeft when disjoint. */
+    if (!this.overlapsRect(other)) return rect(this.topLeft.x, this.topLeft.y, 0, 0);
+    let tl = this.topLeft.maxPt(other.topLeft);
+    let br = this.bottomRight().minPt(other.bottomRight());
+    return rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+  }
+  moveBy(p) {
+    //NOTE: this does not return a copy, but *changes this rect* — and moves
+    // topLeft in place (replacing it allocated a fresh doc Point per call and
+    // orphaned the old one, e.g. once per step for stepper-driven morphs).
+    this.topLeft.moveBy(p);
+  }
+  setToRect(r) {
+    //NOTE: this does not return a copy, but *changes this rect* — value writes
+    // only, no new Points, so a doc-backed rect can be updated in place (doc
+    // entries are immortal; replacing the rect wholesale would orphan it).
+    this.topLeft.x = r.topLeft.x;
+    this.topLeft.y = r.topLeft.y;
+    this.extent.x = r.extent.x;
+    this.extent.y = r.extent.y;
+    return this;
+  }
+  movedBy(p) {
+    //NOTE: this *does* return a copy, and doesnt change this rect
+    return this.topLeft.addPt(p).extent(this.extent.copy());
+  }
+  onPointerDown(p, e) {
+    if (this.includesPt(p)) {
+      this.$hitPoint = p;
+      this.$dragActorID = e.actorID;
+      return true;
+    }
+    return false;
+  }
+  onPointerMove(p, e) {
+    if (this.$hitPoint) {
+      this.moveBy(p.subPt(this.$hitPoint));
+      this.$hitPoint = p;
+    }
+  }
+  onPointerUp(p) {
+    this.$dragActorID = null;
+    delete this.$hitPoint;
+  }
+  overlapBounceAxis(other, velIfAny) {
+    /**
+     * When this overlaps `other`, which velocity component to flip: return `'x'` for a vertical wall
+     * (overlap shallower on x), `'y'` for a horizontal wall. `velIfAny` breaks ties when depths are equal.
+     */
+    if (!this.overlapsRect(other)) return null;
+    let ox =
+      Math.min(this.bottomRight().x, other.bottomRight().x) -
+      Math.max(this.topLeft.x, other.topLeft.x);
+    let oy =
+      Math.min(this.bottomRight().y, other.bottomRight().y) -
+      Math.max(this.topLeft.y, other.topLeft.y);
+    if (ox <= 0 || oy <= 0) return null;
+    if (ox < oy) return 'x';
+    if (oy < ox) return 'y';
+    if (velIfAny) {
+      if (Math.abs(velIfAny.x) > Math.abs(velIfAny.y)) return 'x';
+      if (Math.abs(velIfAny.y) > Math.abs(velIfAny.x)) return 'y';
+    }
+    return 'x';
+  }
+  overlapsRect(other) {
+    /** True if this axis-aligned rect overlaps `other` (positive area overlap). */
+    let a2 = this.bottomRight();
+    let b2 = other.bottomRight();
+    return (
+      this.topLeft.x < b2.x &&
+      a2.x > other.topLeft.x &&
+      this.topLeft.y < b2.y &&
+      a2.y > other.topLeft.y
+    );
+  }
+  render(ctx, fillColor, borderWidth, borderColor) {
+    let x = this.topLeft.x;
+    let y = this.topLeft.y;
+    let wdt = this.extent.x;
+    let hgt = this.extent.y;
+    if (fillColor) {
+      ctx.fillStyle = fillColor.fillStyle;
+      ctx.fillRect(x, y, wdt, hgt);
+    }
+    if (borderWidth > 0 && borderColor) {
+      ctx.strokeStyle = borderColor.fillStyle;
+      ctx.lineWidth = borderWidth;
+      ctx.strokeRect(x, y, wdt, hgt);
+    }
+  }
+  renderOn(ctx) {
+    //console.log('rendering rectangle', this._id);
+    // this.render(ctx, 'white', 1, 'black')
+  }
+  scaleRect(spec) {
+    // spec is a rectangle giving a relative placement of, eg a browser pane
+    let topLeft = this.topLeft.addPt(spec.topLeft.scaleBy(this.extent));
+    let extent = this.extent.scaleBy(spec.extent);
+    return topLeft.extent(extent);
+  }
+  setBounds(rect) {
+    // In-place when possible: doc-backed shapes get cheap value writes instead
+    // of adopting the caller's points (which would allocate fresh doc objects
+    // and orphan the old ones on every relayout).
+    if (this.topLeft) this.topLeft.setToPt(rect.topLeft);
+    else this.topLeft = rect.topLeft;
+    if (this.extent) this.extent.setToPt(rect.extent);
+    else this.extent = rect.extent;
+  }
+  top() {
+    return this.topLeft.y;
+  }
+  topRight() {
+    return this.topLeft.addPt(pt(this.width(), 0));
+  }
+  translatedBy(p) {
+    // Synonym of movedBy
+    return this.topLeft.addPt(p).extent(this.extent.copy());
+  }
+  union(other) {
+    let tl = this.topLeft.minPt(other.topLeft);
+    let br = this.bottomRight().maxPt(other.bottomRight());
+    return new Rectangle(tl, br.subPt(tl));
+  }
+  unionPts(points) {
+    // points is an array
+    let tl = points[0];
+    let br = points[0];
+    points.forEach((each) => {
+      tl = tl.minPt(each);
+      br = br.maxPt(each);
+    });
+    return new Rectangle(tl, br.subPt(tl));
+  }
+  width() {
+    return this.extent.x;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  SimpleTransform
+// -----------------
+// Translation, rotation, scale — local ↔ owner coords.
+class SimpleTransform {
+  constructor(trans, rot, scale) {
+    this.translation = trans; // a point
+    this.rotation = rot; // radians
+    this.scale = scale; // a point
+  }
+  toString() {
+    let deg = ((this.rotation * 180) / Math.PI).toFixed(1);
+    let s = 'trans: ' + this.translation.toString() + '; rot: ' + deg + '°';
+    let sx = this.scale && this.scale.x !== undefined ? this.scale.x : 1;
+    let sy = this.scale && this.scale.y !== undefined ? this.scale.y : 1;
+    if (Math.abs(sx - 1) > 1e-6 || Math.abs(sy - 1) > 1e-6) {
+      s += '; scale: ' + this.scale.toString();
+    }
+    return s;
+  }
+  copy() {
+    // Deep: translation/scale are mutated in place (moveBy/scaleBy), so a
+    // shallow copy would leave the copy and the original moving together.
+    return new SimpleTransform(
+      this.translation.copy(),
+      this.rotation,
+      this.scale ? this.scale.copy() : this.scale,
+    );
+  }
+  // NOTE: Point.rotatedBy(r) turns the OPPOSITE way from ctx.rotate(r)
+  // (polarAngle is measured from +y, so rotatedBy(r) is the canvas rotation
+  // by -r). Rendering applies ctx.rotate(+rotation), so transformPt must use
+  // rotatedBy(-rotation) and invertPt must use rotatedBy(+rotation).
+  invertPt(p) {
+    // owner -> local (inverse of transformPt)
+    let q = p.subPt(this.translation); // undo translation
+    q = q.rotatedBy(this.rotation, pt(0, 0)); // undo rotation (see NOTE above)
+    // guard against degenerate scale
+    let sx = this.scale.x || 1;
+    let sy = this.scale.y || 1;
+    return pt(q.x / sx, q.y / sy); // undo scale
+  }
+  transformPt(p) {
+    // local -> owner
+    // Match render order used in rendering:
+    //   ctx.translate(tx, ty); ctx.rotate(rot); ctx.scale(sx, sy);
+    // Applied to a point, that means: scale, then rotate, then translate.
+    let q = p.scaleBy(this.scale); // scale about origin
+    q = q.rotatedBy(-this.rotation, pt(0, 0)); // rotate about origin (see NOTE above)
+    return q.addPt(this.translation); // then translate
+  }
+  translateBy(delta) {
+    this.translation.moveBy(delta);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  StepSpec
+// ----------
+// One entry in a morph stepping schedule.
+class StepSpec {
+  constructor(morph, method, argIfAny, msTime, nextStepTimeIfAny) {
+    this.stepMorph = morph;
+    this.methodName = method;
+    this.arg = argIfAny;
+    this.stepPeriod = msTime;
+    this.nextStepTime = nextStepTimeIfAny != null ? nextStepTimeIfAny : Date.now();
+  }
+  toString() {
+    return `StepSpec(${this.stepMorph.className}.${this.methodName} every ${this.stepPeriod}ms)`;
+  }
+  copyForMorph(morph) {
+    return new StepSpec(morph, this.methodName, this.arg, this.stepPeriod, this.nextStepTime);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  Pen
+// -----
+// Turtle pen: vertices → PolyLine shapes and demo spirals.
+class Pen {
+  constructor(startLocation) {
+    this.location = startLocation ? pt(startLocation.x, startLocation.y) : pt(0, 0);
+    this.startingLocation = this.location;
+    this.penWidth = 2;
+    this.penColor = Color.blue;
+    this.fillColor = null;
+    this.heading = 0;
+    this.vertices = [this.location];
+    this.bug = null;
+  }
+  fillLines(color) {
+    this.fillColor = color;
+    this.drawLines();
+  }
+  go(dist) {
+    // debugger;
+    this.location = this.location.addPt(ptPolar(dist, (this.heading / 180) * Math.PI));
+    this.vertices.push(this.location);
+    if (this.bug) this.bug.moveTo(this.location);
+  }
+  makeHandShape(location, color) {
+    /* (Lively.addMorph(new Morph(null,
+    new Pen().makeHandShape(pt(100, 100), Color.red)))) */
+    this.setPenColor(color);
+    this.location = location;
+    this.vertices = [this.location];
+    for (let i = 1; i <= 3; i++) {
+      this.go(20);
+      this.turn(120);
+    }
+    let handShape = this.polyLine();
+    handShape.setColor(color);
+    handShape.setBorderWidth(1);
+    handShape.setBorderColor(Color.black);
+    return handShape;
+  }
+  makeMorph() {
+    let morph = new Morph(null, this.polyLine());
+    return morph;
+  }
+  polyLine() {
+    return new PolyLine(this.vertices, this.penWidth, this.penColor);
+  }
+  setPenColor(color) {
+    this.penColor = color;
+  }
+  setPenWidth(size) {
+    this.penWidth = size;
+  }
+  spiral(n, d, a) {
+    this.setPenColor(Color.red);
+    for (let i = 1; i <= n; i++) {
+      this.go(d * i);
+      this.turn(a);
+    }
+    return this.polyLine().setMorphOrigin(this.vertices[0]);
+  }
+  star(nVerts, radius, colr) {
+    // Really belongs in PolyLine
+    let vertices = [];
+    for (let i = 0; i <= nVerts; i++) {
+      let angle = ((2 * Math.PI) / nVerts) * i;
+      let p = ptPolar(radius, angle);
+      if (i % 2 == 0) p = p.scaleBy(0.39);
+      vertices.push(p.addPt(this.location));
+    }
+    return new PolyLine(vertices, 2, Color.black).setMorphOrigin(pt(0, 0));
+  }
+  turn(degrees) {
+    this.heading += degrees;
+    if (this.bug) this.bug.setHeading(this.heading);
+  }
+  withBug(emoji) {
+    let morph;
+    if (bugImage && bugImage.instanceOf && bugImage.instanceOf(EmojiMorph)) {
+      morph = new EmojiMorph(bugImage._emojiName, bugImage._emojiSize);
+      //morph.transform.scale = pt(0.5, 0.5);
+    } else {
+      morph = new EmojiMorph(emoji || 'LADYBUG', 32);
+      //morph.transform.scale = pt(0.5, 0.5);
+    }
+    morph.moveTo(this.location);
+    morph.setHeading(this.heading);
+    // Ephemeral: demo bugs move every tick — must not sync into Automerge.
+    Lively.addEphemeralMorph(morph);
+    this.bug = morph;
+    return this;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +--------------------+
+// |  Colors and Style  |
+// +--------------------+
+// Color model, HSV, style snapshots, and StylePanel paint helpers.
+
+function styleColorNames() {
+  return ['none', 'black', 'white', 'gray', 'red', 'orange', 'yellow', 'green', 'blue', 'cyan'];
+}
+function colorByStyleName(name) {
+  if (!name || name === 'none') return null;
+  return Color[name] ? Color[name].copy() : Color.gray.copy();
+}
+function baseColorFromPaint(paint) {
+  if (!paint) return null;
+  if (paint.r != null && paint.g != null && paint.b != null) return paint.copy();
+  let fs = paint.fillStyle;
+  if (!fs) return null;
+  let m = fs.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (!m) return null;
+  return new Color(parseInt(m[1], 10) / 255, parseInt(m[2], 10) / 255, parseInt(m[3], 10) / 255);
+}
+function colorAlphaFromPaint(paint) {
+  if (!paint) return 1;
+  if (paint.r != null && paint.g != null && paint.b != null) return 1;
+  let fs = paint.fillStyle;
+  if (!fs) return 1;
+  let m = fs.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([^)]+)\)/);
+  if (m) return Math.min(1, Math.max(0, parseFloat(m[1])));
+  return 1;
+}
+function paintWithAlpha(color, alpha) {
+  if (!color) return null;
+  let a = alpha != null ? alpha : 1;
+  if (a >= 0.999) return color.copy();
+  return color.withAlpha(a);
+}
+function hsvToColor(h, s, v) {
+  let hh = ((h % 1) + 1) % 1;
+  let ss = Math.min(1, Math.max(0, s));
+  let vv = Math.min(1, Math.max(0, v));
+  let i = Math.floor(hh * 6);
+  let f = hh * 6 - i;
+  let p = vv * (1 - ss);
+  let q = vv * (1 - f * ss);
+  let t = vv * (1 - (1 - f) * ss);
+  let r;
+  let g;
+  let b;
+  switch (i % 6) {
+    case 0:
+      r = vv;
+      g = t;
+      b = p;
+      break;
+    case 1:
+      r = q;
+      g = vv;
+      b = p;
+      break;
+    case 2:
+      r = p;
+      g = vv;
+      b = t;
+      break;
+    case 3:
+      r = p;
+      g = q;
+      b = vv;
+      break;
+    case 4:
+      r = t;
+      g = p;
+      b = vv;
+      break;
+    default:
+      r = vv;
+      g = p;
+      b = q;
+  }
+  return new Color(r, g, b);
+}
+function styleNameForColor(color) {
+  if (!color) return 'none';
+  let base = baseColorFromPaint(color);
+  if (!base) return 'none';
+  for (let i = 1; i < styleColorNames().length; i++) {
+    let name = styleColorNames()[i];
+    let c = Color[name];
+    if (
+      c &&
+      Math.abs(c.r - base.r) < 0.02 &&
+      Math.abs(c.g - base.g) < 0.02 &&
+      Math.abs(c.b - base.b) < 0.02
+    )
+      return name;
+  }
+  return 'gray';
+}
+function styleSnapshotFromMorph(morph) {
+  let sh = morph && morph.shape;
+  if (!sh)
+    return { fillColor: null, fillAlpha: 1, borderColor: null, borderAlpha: 1, borderWidth: 0 };
+  return {
+    fillColor: baseColorFromPaint(sh.fillColor),
+    fillAlpha: colorAlphaFromPaint(sh.fillColor),
+    borderColor: baseColorFromPaint(sh.borderColor),
+    borderAlpha: colorAlphaFromPaint(sh.borderColor),
+    borderWidth: roundLineWidth(sh.borderWidth != null ? sh.borderWidth : 0),
+  };
+}
+function morphLineStyleIsBorder(morph) {
+  let sh = morph && morph.shape;
+  if (!sh) return false;
+  if (sh.className === 'PolyLine' || morph.className === 'LineMorph') return false;
+  if (sh.className === 'Ellipse') return true;
+  if (sh.className === 'Shape') return true;
+  return false;
+}
+function morphDefaultLineWidth(morph) {
+  return 2;
+}
+function roundLineWidth(width) {
+  return Math.round(width * 10) / 10;
+}
+function lineWidthCaptionText(width) {
+  let w10 = roundLineWidth(width != null ? width : 0);
+  let s = w10 % 1 === 0 ? '' + w10 : w10.toFixed(1);
+  return 'line width = ' + s;
+}
+function copyStyleSnapshot(snap) {
+  return {
+    fillColor: snap.fillColor ? snap.fillColor.copy() : null,
+    fillAlpha: snap.fillAlpha != null ? snap.fillAlpha : 1,
+    borderColor: snap.borderColor ? snap.borderColor.copy() : null,
+    borderAlpha: snap.borderAlpha != null ? snap.borderAlpha : 1,
+    borderWidth: snap.borderWidth != null ? snap.borderWidth : 0,
+  };
+}
+function colorsEqual(a, b) {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return Math.abs(a.r - b.r) < 0.02 && Math.abs(a.g - b.g) < 0.02 && Math.abs(a.b - b.b) < 0.02;
+}
+function styleSnapshotsEqual(a, b) {
+  if (!a || !b) return false;
+  if (!colorsEqual(a.fillColor, b.fillColor)) return false;
+  if (!colorsEqual(a.borderColor, b.borderColor)) return false;
+  if (
+    Math.abs((a.fillAlpha != null ? a.fillAlpha : 1) - (b.fillAlpha != null ? b.fillAlpha : 1)) >
+    0.001
+  )
+    return false;
+  if (
+    Math.abs(
+      (a.borderAlpha != null ? a.borderAlpha : 1) - (b.borderAlpha != null ? b.borderAlpha : 1),
+    ) > 0.001
+  )
+    return false;
+  return roundLineWidth(a.borderWidth) === roundLineWidth(b.borderWidth);
+}
+function applyStyleSnapshotToMorph(morph, snap) {
+  if (!morph || !morph.shape || !snap) return;
+  let fill = snap.fillColor ? paintWithAlpha(snap.fillColor, snap.fillAlpha) : null;
+  let border = snap.borderColor ? paintWithAlpha(snap.borderColor, snap.borderAlpha) : null;
+  let width = snap.borderWidth != null ? snap.borderWidth : 0;
+  if (!border) width = 0;
+  morph.setStyles(fill, width, border);
+  morph.changed();
+  let world = morph.world();
+  if (world && world.changed) world.changed();
+}
+
+// +--------------------+
+// |  Text Composition  |
+// +--------------------+
+// Low-level specs used by TextBox layout and selection.
+
+//  TextCharSpec
+// --------------
+// Caret/selection anchor: string index + line geometry.
+class TextCharSpec {
+  constructor(lineNo, lineY, charX, strIx) {
+    this.lineNo = lineNo;
+    this.lineY = lineY;
+    this.charX = charX;
+    this.strIx = strIx;
+  }
+  toString() {
+    return `spec: lineNo=${this.lineNo}, lineY=${this.lineY}, charX=${this.charX}, strIx = ${this.strIx}`;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  TextLineSpec
+// --------------
+// One composed line of text (array of TextCharSpec).
+class TextLineSpec {
+  constructor(p, ext, str) {
+    this.topLeft = p;
+    this.extent = ext;
+    this.string = str;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +----------+
+// |  Shapes  |
+// +----------+
+// Drawable shapes: rects, ellipses, polylines, images, text layout.
+
+//  Shape
+// -------
+// Rectangle-backed drawable with border and fill.
+class Shape extends Rectangle {
+  constructor(shapeType, bounds, color, borderWidth, borderColor) {
+    // Copies, not the caller's points: setBounds updates topLeft/extent in
+    // place, so adopting them would let this shape mutate the caller's rect
+    // (callers reuse one rect to lay out several morphs).
+    super(bounds.topLeft.copy(), bounds.extent.copy());
+    this.shapeType = shapeType;
+    this.morphOrigin = bounds.topLeft.copy(); // default for, eg, rectangles
+    this.setStyles(color, borderWidth, borderColor);
+  }
+  toString() {
+    return (
+      'a ' + this.className + ' (' + this.shapeType + ' at ' + this.getBounds().toString() + ')'
+    );
+  }
+  copy(color) {
+    return new Shape(
+      this.shapeType,
+      this.getBounds(),
+      this.fillColor ? this.fillColor.copy() : null,
+      this.borderWidth,
+      this.borderColor ? this.borderColor.copy() : null,
+    );
+  }
+  renderOn(ctx) {
+    this.getBounds().render(ctx, this.fillColor, this.borderWidth, this.borderColor);
+  }
+  setBorderColor(color) {
+    this.borderColor = color;
+  }
+  setBorderWidth(width) {
+    this.borderWidth = width;
+  }
+  setBounds(newBounds) {
+    super.setBounds(newBounds);
+  }
+  setColor(color) {
+    this.fillColor = color;
+  }
+  setMorphOrigin(p) {
+    // Copy: moveBy shifts morphOrigin in place, and the callers pass points
+    // they keep using (e.g. Pen.spiral passes the pen's first vertex).
+    this.morphOrigin = p.copy();
+    return this;
+  }
+  setStyles(color, borderWidth, borderColor) {
+    this.fillColor = color || null;
+    this.borderWidth = borderWidth || 0;
+    this.borderColor = borderColor || null;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  Ellipse
+// ---------
+// Ellipse shape; used for line handles and round hit targets.
+class Ellipse extends Shape {
+  constructor(center, rn) {
+    // Copies, not the caller's points: setBounds updates p/r in place (see
+    // Shape's constructor note) — adopting them would tie this ellipse to the
+    // caller's points and to its own morphOrigin.
+    const p = center.copy();
+    const r = typeof rn === 'number' ? pt(rn, rn) : rn.copy();
+    super('Ellipse', rect(p.x - r.x, p.y - r.y, r.x * 2, r.y * 2));
+    this.p = p;
+    this.r = r;
+    this.morphOrigin = center.copy();
+    if (!this.fillColor) this.fillColor = Color.blue;
+  }
+  toString() {
+    return `Ellipse at ${this.p.toString()} with radius ${this.r}`;
+  }
+  copy() {
+    let copy = new Ellipse(this.p, this.r);
+    copy.setStyles(this.fillColor, this.borderWidth, this.borderColor);
+    return copy;
+  }
+  includesPt(q) {
+    let dx = (q.x - this.p.x) / this.r.x;
+    let dy = (q.y - this.p.y) / this.r.y;
+    return dx * dx + dy * dy <= 1;
+  }
+  moveBy(delta) {
+    super.moveBy(delta);
+    this.p.moveBy(delta);
+  }
+  render(ctx) {
+    ctx.beginPath();
+    ctx.ellipse(this.p.x, this.p.y, this.r.x, this.r.y, 0, 0, Math.PI * 2);
+    if (this.fillColor) {
+      ctx.fillStyle = this.fillColor.fillStyle;
+      ctx.fill();
+    }
+    if (this.borderWidth > 0 && this.borderColor) {
+      ctx.lineWidth = this.borderWidth;
+      ctx.strokeStyle = this.borderColor.fillStyle;
+      ctx.stroke();
+    }
+  }
+  renderOn(ctx) {
+    this.render(ctx);
+  }
+  setBounds(bnds) {
+    if (this.p) this.p.setToPt(bnds.center());
+    else this.p = bnds.center();
+    let r = bnds.extent.scaleBy(0.5).maxPt(pt(0, 0));
+    if (this.r) this.r.setToPt(r);
+    else this.r = r;
+    super.setBounds(bnds); // keep Rectangle topLeft/extent in sync so getBounds() is correct
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  PolyLine
+// ----------
+// Vertex list, optional curve/close/fill; hit test = painted fill (when filled
+// or closed) plus a tolerance band around the outline.
+class PolyLine extends Shape {
+  constructor(verts, width, color) {
+    const bounds = PolyLine.boundsForVertices(verts, width);
+    super('PolyLine', bounds, null, width, color);
+    // Copies, not the caller's points: moveBy shifts vertices in place, so
+    // adopting them would tie this polyline to the caller's points (Pen keeps
+    // drawing with its vertex list; copy() reuses the original's).
+    this.vertices = verts.map((v) => v.copy());
+    this.curved = false;
+    this.closed = false;
+    this.arrowheads = 'none';
+    this.morphOrigin = pt(0, 0);
+  }
+  get vertices() {
+    /**
+     * The vertex list to use for rendering, hit-testing, and mutation. During a
+     * direct-manipulation reshape (vertex/midpoint handle drag) this is $vertices,
+     * a PER-USER ephemeral copy, so per-frame vertex edits never touch the
+     * Automerge document; it is promoted into the persistent _vertices once, on
+     * pointer-up. Same idiom as {@link Morph#transform} — see
+     * {@link LineMorph#beginEphemeralTransform} and
+     * {@link LineMorph#commitEphemeralTransform}.
+     */
+    return this.$vertices != null ? this.$vertices : this._vertices;
+  }
+  set vertices(verts) {
+    // Mid-interaction, a wholesale assignment replaces the ephemeral view (commit
+    // then persists its values); otherwise it lands on the persistent slot.
+    if (this.$vertices != null) this.$vertices = verts;
+    else this._vertices = verts;
+  }
+  toString() {
+    return `PolyLine at ${this.topLeft.toString()} with size ${this.extent}`;
+  }
+  boundsForVertices(vertices, borderWidth) {
+    return PolyLine.boundsForVertices(vertices, borderWidth);
+  }
+  static boundsForVertices(vertices, borderWidth) {
+    /** Union of vertices with minimum width/height so flat lines stay hittable and setBounds never divides by zero. */
+    let b = unionPts(vertices);
+    let pad = Math.max(2, borderWidth != null ? borderWidth : 2);
+    let wdt = b.width();
+    let hgt = b.height();
+    if (wdt < 1) wdt = 1;
+    if (hgt < 1) hgt = pad;
+    return rect(b.topLeft.x, b.topLeft.y, wdt, hgt);
+  }
+  copy() {
+    let copy = new PolyLine([...this.vertices], this.borderWidth, this.borderColor);
+    copy.setStyles(this.fillColor, this.borderWidth, this.borderColor);
+    copy.curved = this.curved;
+    copy.closed = this.closed;
+    copy.arrowheads = this.arrowheads;
+    return copy;
+  }
+  containsPointInFill(p) {
+    /** Nonzero-winding point-in-polygon on straight chords (curve approximation),
+     * with an implicit last→first closing segment — matching what ctx.fill() paints. */
+    let verts = this.vertices;
+    if (!verts || verts.length < 3) return false;
+    let winding = 0;
+    let n = verts.length;
+    for (let i = 0; i < n; i++) {
+      let a = verts[i];
+      let b = verts[(i + 1) % n];
+      let cross = (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y);
+      if (a.y <= p.y) {
+        if (b.y > p.y && cross > 0) winding++;
+      } else if (b.y <= p.y && cross < 0) winding--;
+    }
+    return winding !== 0;
+  }
+  distanceFromPoint(vertices, closed, pt) {
+    /** Shortest distance from `pt` to straight segments between vertices (chord approximation when curved). */
+    if (!vertices || vertices.length < 2) return Infinity;
+    let min = Infinity;
+    let n = vertices.length;
+    let segCount = closed ? n : n - 1;
+    for (let i = 0; i < segCount; i++) {
+      let p1 = vertices[i];
+      let p2 = vertices[(i + 1) % n];
+      let nearest = pt.nearestPointOnLineFrom(p1, p2);
+      min = Math.min(min, pt.dist(nearest));
+    }
+    return min;
+  }
+  drawArrowhead(ctx, from, tip, size) {
+    /** Draw filled arrowhead at `tip` pointing from `from`. */
+    let angle = Math.atan2(tip.y - from.y, tip.x - from.x);
+    let wing = Math.PI * 0.82;
+    ctx.beginPath();
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(tip.x + Math.cos(angle + wing) * size, tip.y + Math.sin(angle + wing) * size);
+    ctx.lineTo(tip.x + Math.cos(angle - wing) * size, tip.y + Math.sin(angle - wing) * size);
+    ctx.closePath();
+    ctx.fill();
+  }
+  drawBezierThrough(ctx, verts, closed) {
+    /** Smooth cubic Bézier through vertices (Catmull–Rom style). If `closed`, includes last→first segment. */
+    if (verts.length < 2) return;
+    let n = verts.length;
+    ctx.moveTo(verts[0].x, verts[0].y);
+    if (n === 2) {
+      ctx.lineTo(verts[1].x, verts[1].y);
+      if (closed) ctx.closePath();
+      return;
+    }
+    let segments = closed ? n : n - 1;
+    for (let i = 0; i < segments; i++) {
+      let p0, p1, p2, p3;
+      if (closed) {
+        p0 = verts[(i - 1 + n) % n];
+        p1 = verts[i % n];
+        p2 = verts[(i + 1) % n];
+        p3 = verts[(i + 2) % n];
+      } else {
+        p0 = verts[Math.max(0, i - 1)];
+        p1 = verts[i];
+        p2 = verts[i + 1];
+        p3 = verts[Math.min(n - 1, i + 2)];
+      }
+      let cp1x = p1.x + (p2.x - p0.x) / 6;
+      let cp1y = p1.y + (p2.y - p0.y) / 6;
+      let cp2x = p2.x - (p3.x - p1.x) / 6;
+      let cp2y = p2.y - (p3.y - p1.y) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+    }
+  }
+  hitTolerance(borderWidth) {
+    return Math.max(6, (borderWidth != null ? borderWidth : 2) * 2) + 1 + 2;
+  }
+  includesPt(pt) {
+    if (!Rectangle.prototype.includesPt.call(this, pt)) return false;
+    if ((this.fillColor !== null || this.closed) && this.containsPointInFill(pt)) return true;
+    let tol = this.hitTolerance(this.borderWidth);
+    return this.distanceFromPoint(this.vertices, this.closed, pt) <= tol;
+  }
+  moveBy(d) {
+    super.moveBy(d); // moves the bounds
+    // In place: remapping allocated a fresh doc list + Points per call, and
+    // orphaned any vertex refs held elsewhere (e.g. line handles).
+    this.vertices.forEach((vert) => vert.moveBy(d));
+    this.morphOrigin.moveBy(d);
+  }
+  onPointerMove(p) {
+    if (this.$hitPoint) {
+      this.moveBy(p.subPt(this.$hitPoint));
+      this.$hitPoint = p;
+    }
+  }
+  recomputeBounds() {
+    // In place, like Rectangle.setBounds: adopting b's points allocated fresh doc
+    // Points and orphaned the old ones on every reshape.
+    let b = this.boundsForVertices(this.vertices, this.borderWidth);
+    if (this.topLeft) this.topLeft.setToPt(b.topLeft);
+    else this.topLeft = b.topLeft;
+    if (this.extent) this.extent.setToPt(b.extent);
+    else this.extent = b.extent;
+  }
+  render(ctx) {
+    let verts = this.vertices;
+    if (!verts || verts.length < 1) return;
+    ctx.beginPath();
+    if (this.curved && verts.length > 2) {
+      this.drawBezierThrough(ctx, verts, this.closed);
+    } else {
+      ctx.moveTo(verts[0].x, verts[0].y);
+      for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+      if (this.closed && verts.length > 2) ctx.closePath();
+    }
+    if (this.fillColor !== null) {
+      ctx.fillStyle = this.fillColor.fillStyle;
+      ctx.fill();
+    }
+    if (this.borderColor !== null) {
+      ctx.lineWidth = this.borderWidth;
+      ctx.strokeStyle = this.borderColor.fillStyle;
+      ctx.stroke();
+    }
+    let ah = this.arrowheads || 'none';
+    if (ah !== 'none' && verts.length >= 2) {
+      let size = Math.max(6, (this.borderWidth || 2) * 4);
+      ctx.fillStyle = (this.borderColor || Color.black).fillStyle;
+      if (ah === 'start' || ah === 'both') this.drawArrowhead(ctx, verts[1], verts[0], size);
+      if (ah === 'end' || ah === 'both')
+        this.drawArrowhead(ctx, verts[verts.length - 2], verts[verts.length - 1], size);
+    }
+  }
+  renderOn(ctx) {
+    // console.log('rendering Shape', this.shapeType);
+    this.render(ctx);
+  }
+  rotateBy(radians, pivotPt) {
+    let pivot = pivotPt ? pivotPt : this.center();
+    this.vertices = this.vertices.map((vert) => {
+      return vert.rotatedBy(radians, pivot);
+    });
+  }
+  setBounds(newBnds) {
+    let oldBnds = this.getBounds();
+    let oldCtr = oldBnds.center();
+    let newCtr = newBnds.center();
+    let ow = Math.max(oldBnds.width(), 0.001);
+    let oh = Math.max(oldBnds.height(), 0.001);
+    let scale = pt(newBnds.width() / ow, newBnds.height() / oh);
+    this.vertices = this.vertices.map((vert) => {
+      return vert.subPt(oldCtr).scaleBy(scale).addPt(newCtr);
+    });
+    super.setBounds(this.boundsForVertices(this.vertices, this.borderWidth));
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  ImageShape
+// ------------
+// Bitmap/canvas shape with alpha tight bounds.
+// The bitmap itself is per-replica (`$image`): HTMLCanvasElement / HTMLImageElement
+// cannot live in the Automerge document. Prefer EmojiMorph for glyphs — it paints
+// with fillText and needs no bitmap at all.
+function isHtmlCanvasLike(x) {
+  // Duck-type: do NOT use `instanceof window.HTMLCanvasElement`. The LM `window`
+  // proxy returns a .bind()'d constructor, and `x instanceof boundFn` throws
+  // "Right-hand side of 'instanceof' is not an object".
+  return !!(x && typeof x.getContext === 'function' && typeof x.width === 'number');
+}
+function isHtmlImageLike(x) {
+  return !!(
+    x &&
+    typeof x === 'object' &&
+    (x.tagName === 'IMG' || (typeof x.src === 'string' && 'naturalWidth' in x))
+  );
+}
+class ImageShape extends Shape {
+  constructor(imageOrSize) {
+    let image = null;
+    let width = 32;
+    let height = 32;
+    if (typeof imageOrSize === 'object' && imageOrSize !== null) {
+      if (isHtmlImageLike(imageOrSize) || isHtmlCanvasLike(imageOrSize)) {
+        image = imageOrSize;
+        width = image.naturalWidth || image.width || 32;
+        height = image.naturalHeight || image.height || 32;
+      } else if (imageOrSize.width != null && imageOrSize.height != null) {
+        width = imageOrSize.width;
+        height = imageOrSize.height;
+      }
+    }
+    const bounds = rect(0, 0, width, height);
+    super('ImageShape', bounds, null, 0, null);
+    // Ephemeral: survives promotion; lost on remote load until re-bound.
+    this.$image = image;
+    this.width = width;
+    this.height = height;
+    this.morphOrigin = bounds.center();
+  }
+  alphaTightBoundsCanvas(canvas, alphaThreshold) {
+    /**
+     * Axis-aligned bounds of opaque pixels in canvas coordinates (origin top-left).
+     * Returns null if nothing above `alphaThreshold` or canvas empty.
+     */
+    let cw = canvas.width;
+    let ch = canvas.height;
+    let thr = alphaThreshold != null ? alphaThreshold : 8;
+    if (!cw || !ch) return null;
+    let ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    let imageData = ctx.getImageData(0, 0, cw, ch).data;
+    let minX = cw;
+    let minY = ch;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < ch; y++) {
+      let row = y * cw * 4;
+      for (let x = 0; x < cw; x++) {
+        let a = imageData[row + x * 4 + 3];
+        if (a > thr) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX) return null;
+    return rect(minX, minY, maxX - minX + 1, maxY - minY + 1);
+  }
+  copy() {
+    let img = this.$image;
+    let dup = null;
+    if (isHtmlCanvasLike(img)) {
+      dup = document.createElement('canvas');
+      dup.width = img.width;
+      dup.height = img.height;
+      dup.getContext('2d').drawImage(img, 0, 0);
+    } else if (img) {
+      dup = img;
+    }
+    let copy = new ImageShape(dup || { width: this.width, height: this.height });
+    if (this._contentBoundsLocal) copy._contentBoundsLocal = this._contentBoundsLocal.copy();
+    if (this._alphaBoundsTried) copy._alphaBoundsTried = this._alphaBoundsTried;
+    return copy;
+  }
+  includesPt(q) {
+    return this.getBounds().includesPt(q);
+  }
+  render(ctx) {
+    let b = this.getBounds();
+    let img = this.$image;
+    if (img && (img.complete || img.width)) {
+      ctx.drawImage(img, b.topLeft.x, b.topLeft.y, b.width(), b.height());
+    } else {
+      // Placeholder when the per-replica bitmap is missing (e.g. after a remote load).
+      ctx.fillStyle = 'rgba(200,100,100,0.8)';
+      ctx.fillRect(b.topLeft.x, b.topLeft.y, b.width(), b.height());
+      ctx.strokeStyle = '#333';
+      ctx.strokeRect(b.topLeft.x, b.topLeft.y, b.width(), b.height());
+    }
+  }
+  renderOn(ctx) {
+    this.render(ctx);
+  }
+  setContentBoundsFromTightCanvas(canvas) {
+    let tight = this.alphaTightBoundsCanvas(canvas);
+    if (tight)
+      this._contentBoundsLocal = this.getBounds().topLeft.addPt(tight.topLeft).extent(tight.extent);
+    return tight;
+  }
+  setImage(img) {
+    this.$image = img;
+    if (img) {
+      this.width = img.naturalWidth || img.width || this.width;
+      this.height = img.naturalHeight || img.height || this.height;
+      this.setBounds(rect(0, 0, this.width, this.height));
+    }
+    return this;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  TextBox
+// ---------
+// Multi-line editable text layout, selection, keyboard shortcuts.
+class TextBox extends Shape {
+  constructor(bounds, str, brk, lineHeight, fontSpec, textColr, boxColr, selColr) {
+    //let bounds = p.extent(ext);
+    super('TextBox', bounds, boxColr, 2, Color.black);
+    this.string = str;
+    this.breakChar = brk;
+    this.lineHeight = lineHeight;
+    this.font = fontSpec;
+    this.textColor = textColr ? textColr : Color.black;
+    this.boxColor = boxColr ? boxColr : null;
+    this.selectionColor = selColr ? selColr : Color.green.lighter().lighter();
+    this.fill = this.boxColor; // figure this out
+    this.inset = pt(4, 4); // inset of active text from bounds
+    this.hang = this.inset.y; // vert offset of top line from bounds
+    this.setText(str);
+    this.clearTyping();
+    this.editorID = null;
+    this.workspaceObj = {}; // used for doit and printit
+  }
+  acceptKeyboardInput(evt) {
+    // ** Note $selStart and stop may be reversed!
+    let paneDirty = !!(
+      this.owner &&
+      this.owner.owner &&
+      typeof this.owner.owner.hasUnsavedChanges == 'function' &&
+      this.owner.owner.hasUnsavedChanges()
+    );
+    if (paneDirty && this.editorID != null && evt.actorID !== this.editorID) return;
+    if (!pasteBufferItems || !Array.isArray(pasteBufferItems))
+      pasteBufferItems = ['nothing to paste'];
+    if (evt.key == 'Shift') return; // redundant keyDown names
+    if (evt.key == 'Control') return;
+    if (evt.key == 'Alt') return;
+    if (evt.key == 'Enter') {
+      this.paste(String.fromCharCode(evt.keyCode));
+      return;
+    }
+    if (evt.metaKey || evt.ctrlKey || evt.addLastKey) return this.handleKeyboardShortcuts(evt);
+    if (evt.key == 'Backspace') return this.handleBackspace();
+    if (evt.key == 'Escape') return this.handleEscapeKey();
+    if (evt.key.startsWith('Arrow')) return this.handleArrowKeys(evt.key);
+    let k = evt.key;
+    if (k && k.length === 1) {
+      let shiftTable = getKbdShiftTable ? getKbdShiftTable() : kbdShiftTable || {};
+      let shiftChar =
+        evt.shiftKey ||
+        $lockKeyPressedFlag ||
+        $shiftKeyPressedFlag ||
+        (topLevelMorph && topLevelMorph.$shiftKeyDown);
+      if (shiftChar && /^[a-z]$/.test(k)) k = k.toUpperCase();
+      else if (shiftChar && shiftTable[k]) k = shiftTable[k];
+      this.paste(k);
+      return;
+    }
+    this.paste(evt.key);
+  }
+  toString() {
+    return `TextBox[${this.string.slice(0, 4) + '...'}] at ${this.getBounds().toString()}`;
+  }
+  boxPath(ctx) {
+    let x = this.topLeft.x;
+    let y = this.topLeft.y;
+    let wdt = this.extent.x;
+    let hgt = this.extent.y;
+    let r = this.cornerRadius != null ? this.cornerRadius : 0;
+    ctx.beginPath();
+    if (r > 0 && ctx.roundRect) ctx.roundRect(x, y, wdt, hgt, r);
+    else ctx.rect(x, y, wdt, hgt);
+  }
+  charSpecForIndex(ix) {
+    let charSpec = null;
+    let lineY = this.topLeft.y + this.hang;
+    let lineNo = 0;
+    let lineStartsLength = this.lineStarts.length;
+    let nextLineStart = null;
+    // console.log('charSpecForIndex ' + ix + '; lineStartslength = ' + lineStartslength);
+    this.lineStarts.forEach((lineStart) => {
+      if (lineNo == lineStartsLength - 1)
+        nextLineStart = this.string.length + 1; // +1??
+      else nextLineStart = this.lineStarts[lineNo + 1];
+      if (ix >= lineStart && ix < nextLineStart) {
+        let xVals = this.xValuesForLine(lineNo);
+        let xInText = xVals[ix - lineStart];
+        let originX = this.textDrawOriginX(lineNo);
+        charSpec = new TextCharSpec(lineNo, lineY - 2, originX + xInText, ix);
+      }
+      lineNo += 1;
+      lineY += this.lineHeight;
+    });
+    if (charSpec == null) return new TextCharSpec(0, 0, 0, 0);
+    return charSpec;
+  }
+  charSpecForPt(worldPt) {
+    //if (!this.includesPt(p)) return new TextCharSpec(0, 0, 0, 0);
+    let p = worldPt.subPt(this.topLeft);
+    let lineIndex = Math.floor((p.y - this.hang) / this.lineHeight);
+    lineIndex = Math.max(lineIndex, 0);
+    lineIndex = Math.min(lineIndex, Math.max(0, this.lines.length - 1));
+    let lineY = this.topLeft.y + this.hang + lineIndex * this.lineHeight;
+    let xVals = this.xValuesForLine(lineIndex);
+    let originX = this.textDrawOriginX(lineIndex);
+    let minDist = 999;
+    let xBest = 0;
+    let iBest = 0;
+    let i = 0;
+    let px = p.x - originX;
+    xVals.forEach((xVal) => {
+      // Find closest x-value
+      if (Math.abs(xVal - px) < minDist) {
+        //Find nearest character x
+        xBest = xVal;
+        iBest = i;
+        minDist = Math.abs(xVal - px);
+      }
+      i++;
+    });
+    let strIx = this.lineStarts[lineIndex] + iBest;
+    // Fudge: click right of newLine actually selects before it
+    if (
+      strIx > 0 &&
+      (this.string.charCodeAt(strIx - 1) == 10 || this.string.charCodeAt(strIx - 1) == 13)
+    )
+      strIx -= 1;
+    return new TextCharSpec(lineIndex, lineY, originX + xBest, strIx);
+  }
+  clearTyping() {
+    this.$duringTyping = false;
+  }
+  compose() {
+    // Build the new layout in locals, then reconcile into the persisted
+    // lines/lineStarts in place — wholesale `this.lines = []` allocated a fresh
+    // doc array + TextLineSpec graph on every relayout and orphaned the old one.
+    let newLines = [];
+    let newLineStarts = [];
+    let ctx = this.getTextContext(this.font);
+    let str = this.string != null ? String(this.string) : '';
+    let lineStart = 0;
+    let lineTopLeft = this.topLeft.addPt(this.inset);
+    let lineNo = 0;
+    let bottomY = null;
+    if (str.length === 0) {
+      // Empty text still occupies one line of height so caret/selection are visible.
+      newLines.push(new TextLineSpec(lineTopLeft, pt(this.extent.x, this.lineHeight), ''));
+      newLineStarts.push(0);
+      bottomY = lineTopLeft.y + this.lineHeight + 2;
+    } else {
+      let inAlpha = false;
+      let alphaBreak = 0;
+      for (let idx = 0; idx < str.length; idx++) {
+        let c = str[idx];
+        let isAlpha = /^[a-zA-Z0-9]*$/.test(c);
+        if (c == '\n' || c == '\r' || idx == str.length - 1) {
+          let thisLine = new TextLineSpec(
+            lineTopLeft,
+            pt(this.extent.x, this.lineHeight),
+            str.slice(lineStart, idx + 1),
+          );
+          newLines.push(thisLine);
+          newLineStarts.push(lineStart);
+          lineNo++;
+          lineTopLeft = lineTopLeft.addPt(pt(0, this.lineHeight));
+          lineStart = idx + 1;
+        } else if (!this.noBreak) {
+          let maybeLine = str.slice(lineStart, idx + 1);
+          let metrics = ctx.measureText(maybeLine);
+          if (metrics.width >= this.extent.x) {
+            let thisLine = new TextLineSpec(
+              lineTopLeft,
+              pt(this.extent.x, this.lineHeight),
+              str.slice(lineStart, alphaBreak),
+            );
+            newLines.push(thisLine);
+            newLineStarts.push(lineStart);
+            lineNo++;
+            lineTopLeft = lineTopLeft.addPt(pt(0, this.lineHeight));
+            lineStart = alphaBreak;
+          }
+          if (!inAlpha && isAlpha) {
+            alphaBreak = idx;
+            inAlpha = true;
+          }
+          inAlpha = isAlpha;
+        }
+      }
+      bottomY = lineTopLeft.y + 2;
+    }
+    this.reconcileComposedLines(newLines, newLineStarts);
+    return bottomY;
+  }
+  reconcileComposedLines(newLines, newLineStarts) {
+    /** Update lines/lineStarts to match the freshly composed layout with value
+     * writes into the existing doc objects; unchanged lines cost nothing
+     * (same-value writes are elided at the storage layer). New/removed lines
+     * push/pop at the tail. */
+    let lines = this.lines;
+    let starts = this.lineStarts;
+    if (lines == null || starts == null) {
+      this.lines = newLines;
+      this.lineStarts = newLineStarts;
+      return;
+    }
+    for (let i = 0; i < newLines.length; i++) {
+      let n = newLines[i];
+      if (i < lines.length) {
+        let line = lines[i];
+        line.topLeft.setToPt(n.topLeft);
+        line.extent.setToPt(n.extent);
+        if (line.string !== n.string) line.string = n.string;
+      } else {
+        lines.push(n);
+      }
+    }
+    while (lines.length > newLines.length) lines.pop();
+    for (let i = 0; i < newLineStarts.length; i++) {
+      if (i < starts.length) {
+        if (starts[i] !== newLineStarts[i]) starts[i] = newLineStarts[i];
+      } else {
+        starts.push(newLineStarts[i]);
+      }
+    }
+    while (starts.length > newLineStarts.length) starts.pop();
+  }
+  copy() {
+    let copy = new TextBox(
+      this.getBounds().copy(),
+      this.string,
+      this.breakChar,
+      this.lineHeight,
+      this.font,
+      this.textColor,
+      this.boxColor,
+      this.selectionColor,
+    );
+    return copy;
+  }
+  extendSelectionTo(p) {
+    let spec = this.charSpecForPt(p);
+    if (this.$shiftAnchorIx != null) {
+      let a = this.$shiftAnchorIx;
+      let b = spec.strIx;
+      this.$selStart = this.charSpecForIndex(Math.min(a, b));
+      this.$selStop = this.charSpecForIndex(Math.max(a, b));
+    } else {
+      this.$selStop = spec;
+    }
+    // console.log("After extendSelectionTo" + spec.toString());
+  }
+  finSelection() {
+    this.ensureSelectionSpecs();
+    this.$shiftAnchorIx = null;
+    //  If we were selecting backward, now rectify so $selStart < $selStop
+    if (this.$selStart.strIx > this.$selStop.strIx) {
+      let swap = this.$selStart;
+      this.$selStart = this.$selStop;
+      this.$selStop = swap;
+    }
+    // A chance to notice null selections for selectWord
+    if (this.$selStart.strIx == this.$selStop.strIx) {
+      if (this.$priorNullSelection == this.$selStop.strIx) this.handleSelectWord();
+      else this.$priorNullSelection = this.$selStop.strIx;
+    } else {
+      this.$priorNullSelection = -1;
+    }
+    this.clearTyping();
+  }
+  getText() {
+    return this.string;
+  }
+  getTextContext(font) {
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.font = font;
+    return ctx;
+  }
+  handleArrowKeys(key) {
+    this.ensureSelectionSpecs();
+    let leftIx = this.$selStart.strIx;
+    let rightIx = this.$selStop.strIx;
+    if (key == 'ArrowLeft') {
+      this.$selStart = this.charSpecForIndex(leftIx - 1);
+      this.$selStop = this.charSpecForIndex(leftIx - 1);
+      return;
+    }
+    if (key == 'ArrowRight') {
+      this.$selStart = this.charSpecForIndex(rightIx + 1);
+      this.$selStop = this.charSpecForIndex(rightIx + 1);
+      return;
+    }
+    if (key == 'ArrowUp') return;
+    if (key == 'ArrowDown') return;
+  }
+  handleBackspace() {
+    // backspace
+    this.ensureSelectionSpecs();
+    if (this.selectedTextString().length > 0)
+      this.paste(''); // first BS deletes
+    else {
+      if (this.$selStart.strIx >= 1) {
+        // subsequent BS deletes backwards
+        this.setSelectionRange([this.$selStart.strIx - 1, this.$selStart.strIx - 1]);
+        this.paste('');
+      }
+    }
+    return;
+  }
+  handleEscapeKey(evt) {
+    // Typing ESC selects everything since typing started
+    // -- handy if your next action is to hit ctrl-F to search for it
+    // $selStop is already at the end of type-in
+    this.ensureSelectionSpecs();
+    if (this.$stringPutIn == null) return;
+    this.$selStart = this.charSpecForIndex(this.$selStop.strIx - this.$stringPutIn.length);
+  }
+  evalSelectionRange() {
+    /**
+     * Range to evaluate for do-it / print-it: existing selection, or (if null) the
+     * current line. If that line is entirely a //-comment, use the text after '//'.
+     * Updates the visible selection when expanding a null selection.
+     * Returns [start, end) as exclusive end indices into this.string.
+     */
+    this.ensureSelectionSpecs();
+    let selA = this.$selStart.strIx;
+    let selB = this.$selStop.strIx;
+    let start = Math.min(selA, selB);
+    let end = Math.max(selA, selB);
+    if (start !== end) return [start, end];
+
+    // Null selection: expand to current composed line.
+    if (!this.lineStarts || this.lineStarts.length === 0) return [start, end];
+    let ix = start;
+    let lineNo = 0;
+    for (let i = 0; i < this.lineStarts.length; i++) {
+      let ls = this.lineStarts[i];
+      let next =
+        i === this.lineStarts.length - 1 ? this.string.length + 1 : this.lineStarts[i + 1];
+      if (ix >= ls && ix < next) {
+        lineNo = i;
+        break;
+      }
+    }
+    let lineStart = this.lineStarts[lineNo];
+    let raw = this.lines[lineNo] ? this.lines[lineNo].string : '';
+    let content = dropNewline(raw);
+    start = lineStart;
+    end = lineStart + content.length;
+    // Entirely a //-comment (optional leading whitespace, then //)...
+    let lead = content.match(/^\s*/)[0].length;
+    if (content.slice(lead, lead + 2) === '//') {
+      start = lineStart + lead + 2;
+      // end remains at end of line content
+    }
+    if (end > start) this.setSelectionRange([start, end - 1]);
+    else {
+      this.$selStart = this.$selStop = this.charSpecForIndex(start);
+      this.$priorNullSelection = -1;
+    }
+    return [start, end];
+  }
+  handleKeyboardShortcuts(evt) {
+    this.ensureSelectionSpecs();
+    let k = evt.key && evt.key.length === 1 ? evt.key.toLowerCase() : evt.key;
+    if ('dacxvzgdspf'.indexOf(k) < 0) return; // so as to not prevent default for some useful cases??
+    if (k == 'a') this.setSelectionRange([0, this.string.length - 1]); // SELECT ALL
+    if (k == 'c') {
+      // COPY
+      let copied = this.selectedTextString();
+      addPasteBufferItem(copied);
+      copyTextToOSClipboard(copied);
+      evt.preventDefault();
+      evt.stopPropagation();
+      return;
+    }
+    if (k == 'x') {
+      let cut = this.selectedTextString();
+      addPasteBufferItem(cut); // Cut
+      copyTextToOSClipboard(cut);
+      this.paste('');
+    }
+    if (k == 'v') {
+      this.paste(latestPasteBufferItem()); // Paste
+    }
+    if (k == 'z') this.undoReplacement(); // Undo
+    if (k == 'g') this.redoReplacement(); // aGain
+    if (k == 'f') {
+      // FIND — avoid an empty throwaway panel when there are no hits
+      let term = this.selectedTextString();
+      let hits = methodsContaining(term);
+      if (!hits || hits.length === 0) {
+        // (was `let pt = ... : pt(120, 120)` — the local `pt` shadowed the global
+        //  pt() and referenced itself in its own initializer: a TDZ ReferenceError
+        //  whenever the pointer location was unknown.)
+        let at = getPointerLocation() ? getPointerLocation().copy() : pt(120, 120);
+        showFindNoMatchesMenu(Lively, at, term);
+      } else {
+        // Per-user tool window; promote via the halo's P handle to share it.
+        Lively.addEphemeralMorph(
+          new MethodListPanel(null, hits, null, 'Occurrences of "' + term + '"', term),
+        );
+      }
+    }
+    if (k == 's') {
+      // SAVE (eval all)
+      if (this.localStorageKey) {
+        storageSetItem(this.localStorageKey, this.string);
+      } else {
+        // The browser method pane shows bare class fragments; wrap them in a
+        // self-contained replaceMethod(...) call for eval and change tracking.
+        let fragmentClassName =
+          typeof this.fragmentSaveClassName == 'function' ? this.fragmentSaveClassName() : null;
+        let str = this.string;
+        if (fragmentClassName && !looksLikeLegacyMethodText(str)) {
+          str = replaceMethodCallString(fragmentClassName, str);
+        }
+        noteMethodChanges(str);
+        this.wsEval.call(this.workspaceObj, str);
+      }
+      if (typeof this.onTextSaved === 'function') this.onTextSaved(this);
+    }
+    if (k == 'd') {
+      // DO IT
+      let range = this.evalSelectionRange();
+      this.wsEval.call(this.workspaceObj, this.string.slice(range[0], range[1]));
+    }
+    if (k == 'p') {
+      // PRINT IT
+      let range = this.evalSelectionRange();
+      let start = range[0];
+      let end = range[1]; // exclusive
+      let evalThing = this.wsEval.call(this.workspaceObj, this.string.slice(start, end));
+      if (_evalJustFailed) return;
+      let ins = ' ==> ' + this.printitString(evalThing);
+      if (hasTranscriptConsoleTargets())
+        _routeConsoleToTranscripts('', this.printitString(evalThing));
+      // Save undo state so ctrl-Z can restore both string and selection.
+      this.$printitUndo = {
+        prefix: this.string.slice(0, end),
+        suffix: this.string.slice(end),
+        selA: start,
+        selB: end,
+      };
+      this.string = this.$printitUndo.prefix + ins + this.$printitUndo.suffix;
+      let bottomY = this.compose();
+      this.extent.y = bottomY - this.topLeft.y;
+      // Select the inserted result so Delete can clear it; $printitUndo still
+      // restores the former expression selection on ctrl-Z.
+      this.$selStart = this.charSpecForIndex(end);
+      this.$selStop = this.charSpecForIndex(end + ins.length);
+      this.clearTyping();
+    }
+    evt.preventDefault();
+    evt.stopPropagation();
+  }
+  handleSelectWord() {
+    // A chance to notice null selections for selectWord
+    //  console.log('handling select word at ' + this.$selStart.strIx);
+    // debugger;
+    this.ensureSelectionSpecs();
+    let pair = this.selectWord(this.string, this.$selStart.strIx);
+    this.setSelectionRange(pair);
+  }
+  noteReplacement(str) {
+    // Copied logic of paste() to save state
+    this.ensureSelectionSpecs();
+    if (this.$duringTyping) {
+      this.$stringPutIn += str;
+      return;
+    }
+    // New edit makes any prior printit undo irrelevant.
+    this.$printitUndo = null;
+    let startStrix = this.$selStart.strIx;
+    let stopStrix = this.$selStop.strIx;
+    this.$stringTakenOut = this.string.slice(startStrix, stopStrix);
+    this.$stringPutIn = str.slice(0);
+    this.$duringTyping = true;
+  }
+  paste(str) {
+    // Paste the string over the current selection
+    this.noteReplacement(str); // copied logic to save state
+    let before = this.string.slice(0, this.$selStart.strIx);
+    let after = this.string.slice(this.$selStop.strIx, this.string.length);
+    this.string = before + str + after;
+    let bottomY = this.compose();
+    this.extent.y = bottomY - this.topLeft.y;
+    this.$selStart = this.$selStop = this.charSpecForIndex(this.$selStart.strIx + str.length);
+  }
+  printitString(obj) {
+    if (obj === undefined) return 'undefined';
+    if (obj === null) return 'null';
+    if (obj.toString && obj.toString !== Object.prototype.toString) return obj.toString();
+    return '' + obj;
+  }
+  redoReplacement(str) {
+    // The selection is at the end of last replacement.  We simply have to
+    // find the next occurrence of $stringTakenOut, extend the selection
+    // from there to the end of $stringTakenOut, and call paste ($stringPutIn)
+    this.ensureSelectionSpecs();
+    if (this.$stringTakenOut == null || this.$stringPutIn == null) return;
+    let nextIx = this.string.indexOf(this.$stringTakenOut, this.$selStart.strIx);
+    if (nextIx < 0) return;
+    this.$selStart = this.charSpecForIndex(nextIx);
+    this.$selStop = this.charSpecForIndex(nextIx + this.$stringTakenOut.length);
+    this.$duringTyping = false; // so we don't grow $stringPutIn
+    this.paste(this.$stringPutIn);
+  }
+  render(ctx) {
+    ctx.save();
+    this.boxPath(ctx);
+    if (this.boxColor) {
+      ctx.fillStyle = this.boxColor.fillStyle;
+      ctx.fill();
+    }
+    if (this.borderWidth > 0 && this.borderColor) {
+      ctx.strokeStyle = this.borderColor.fillStyle;
+      ctx.lineWidth = this.borderWidth;
+      ctx.stroke();
+    }
+    ctx.clip(); // clip to this rectangle
+    // -- turn dropshadows off for the text part of this render
+    ctx.shadowColor = 'transparent'; //
+    ctx.shadowBlur = 0; //
+    ctx.shadowOffsetX = 0; //
+    ctx.shadowOffsetY = 0; //
+    ctx.fillStyle = this.textColor.fillStyle;
+    ctx.font = this.font;
+    ctx.textBaseline = 'hanging';
+    let lineY = this.topLeft.y + this.hang;
+    let nLines = this.lines.length;
+    if (this.verticallyCenterSingleLine && nLines === 1) {
+      let nudge = this.verticalNudge != null ? this.verticalNudge : 0;
+      lineY = this.topLeft.y + Math.max(0, (this.extent.y - this.lineHeight) / 2) + nudge;
+    }
+    for (let lineNo = 0; lineNo < nLines; lineNo++) {
+      ctx.fillStyle = this.selectionColor.fillStyle;
+      // *** move this all to a helper function renderSelection()
+      let selY = lineY - 2; // selection looks better a bit higher
+      if (
+        !this.disableSelectionRendering &&
+        !this.noMenuLineHighlight &&
+        lineNo == this.$selectedLineIndex - 1
+      ) {
+        // line selection for lists and menus
+        ctx.fillRect(this.topLeft.x, selY, this.extent.x, this.lineHeight);
+      }
+      if (!this.disableSelectionRendering && !this.noMenuLineHighlight && this.$selStart != null) {
+        // character selection for editing - egad...
+        let spec1 = this.$selStart;
+        let spec2 = this.$selStop;
+        // Flip stop and start if selection was drawn backwards
+        if (
+          spec1.lineNo > spec2.lineNo ||
+          (spec1.lineNo == spec2.lineNo && spec1.charX > spec2.charX)
+        ) {
+          spec1 = this.$selStop;
+          spec2 = this.$selStart;
+        }
+        if (spec1.charX < 1) spec1.charX = 1; // Selection was overwriting border??
+        if (spec2.charX < 1) spec2.charX = 1;
+        if (lineNo == spec1.lineNo) {
+          if (lineNo == spec2.lineNo) {
+            // starts and ends on this line
+            let hairline = spec2.charX - spec1.charX == 0 ? 2 : 0; // show null selection
+            ctx.fillRect(
+              spec1.charX + this.topLeft.x,
+              selY,
+              spec2.charX - spec1.charX + hairline,
+              this.lineHeight,
+            );
+          } else {
+            // starts here but continues
+            ctx.fillRect(
+              spec1.charX + this.topLeft.x,
+              selY,
+              this.extent.x - spec1.charX,
+              this.lineHeight,
+            );
+          }
+        } else {
+          if (lineNo > spec1.lineNo) {
+            if (lineNo == spec2.lineNo) {
+              // starts above and ends on this line
+              ctx.fillRect(this.topLeft.x, selY, spec2.charX, this.lineHeight);
+            } else {
+              if (lineNo < spec2.lineNo) {
+                // starts above and continues
+                ctx.fillRect(this.topLeft.x, selY, this.extent.x, this.lineHeight);
+              }
+            }
+          }
+        }
+      }
+      ctx.fillStyle = this.textColor.fillStyle;
+      let padL = this.inset != null ? this.inset.x : 2;
+      let textX = this.topLeft.x + padL;
+      if (this.centerGlyph && this.lines[lineNo] && this.lines[lineNo].string) {
+        let mctx = this.getTextContext(this.font);
+        let tw = mctx.measureText(this.lines[lineNo].string).width;
+        textX = this.topLeft.x + (this.extent.x - tw) / 2;
+      }
+      ctx.fillText(this.lines[lineNo].string, textX, lineY);
+      lineY += this.lineHeight;
+    }
+    if (this._unsavedInnerBorder) {
+      let borderColor = Color.red;
+      let morph = this.morph || null;
+      let world = morph && morph.world ? morph.world() : null;
+      let hand = world && world.handForID ? world.handForID(this.editorID) : null;
+      let handColor = hand && hand.handColor ? hand.handColor() : null;
+      if (handColor && handColor.fillStyle) borderColor = handColor;
+      ctx.strokeStyle = borderColor.fillStyle;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(
+        this.topLeft.x + 1,
+        this.topLeft.y + 1,
+        Math.max(0, this.extent.x - 2),
+        Math.max(0, this.extent.y - 2),
+      );
+    }
+    ctx.restore();
+  }
+  renderOn(ctx) {
+    // console.log('rendering Shape', this.shapeType);
+    this.render(ctx);
+  }
+  selectedTextString() {
+    if (this.$selectedLineIndex > 0) return this.lines[this.$selectedLineIndex - 1].string;
+    if (this.$selStart != null) return this.string.slice(this.$selStart.strIx, this.$selStop.strIx);
+    return null;
+  }
+  selectLineAt(p) {
+    // Special case: numeric 0 clears the selection
+    if (p === 0) return (this.$selectedLineIndex = 0);
+    if (!this.includesPt(p)) return (this.$selectedLineIndex = 0);
+    // Note line index is 1...N; 0 means no selection
+    this.$selectedLineIndex = Math.floor((p.y - (this.topLeft.y + this.hang)) / this.lineHeight + 1);
+  }
+  selectSearchString(str) {
+    // Private method for use in search browsers
+    let ix = this.string.toLowerCase().indexOf(str.toLowerCase());
+    if (ix < 0) return;
+    this.setSelectionRange([ix, ix + str.length - 1]);
+  }
+  selectWord(str, i1) {
+    // Selection caret before char i1
+    if (!str) return i1;
+    // Dan's super bracket matching feature
+    if (i1 == 0 || i1 == str.length) return [0, str.length - 1]; // select entire string
+    let rightBrackets = '*)}]>\'"`';
+    let leftBrackets = '*({[<\'"`';
+    function isWhiteSpace(c) {
+      return c === '\t' || c === ' ';
+    }
+    function isAlpha(s) {
+      let regEx = /^[a-zA-Z0-9\-]+$/;
+      return (s || '').match(regEx);
+    }
+    function periodWithDigit(c, prev) {
+      // return true iff c is a period and prev is a digit
+      if (c != '.') return false;
+      return '0123456789'.indexOf(prev) >= 0;
+    }
+    function matchBrackets(str, chin, chout, start, dir) {
+      let i = start;
+      let depth = 1;
+      while (dir < 0 ? i - 1 >= 0 : i + 1 < str.length) {
+        i += dir;
+        if (str[i] == chin && chin != chout) depth++;
+        if (str[i] == chout) depth--;
+        if (depth == 0) return i;
+      }
+      return i;
+    }
+    function findLine(str, start, dir, endChar) {
+      // start points to a CR or LF (== endChar)
+      let i = start;
+      while (dir < 0 ? i - 1 >= 0 : i + 1 < str.length) {
+        i += dir;
+        if (str[i] == endChar) return dir > 0 ? [start, i] : [i + 1, start];
+      }
+      return dir > 0 ? [start + 1, str.length - 1] : [0, start];
+    }
+    let i2 = i1 - 1;
+    if (i1 > 0) {
+      // look left for open backets
+      if (str[i1 - 1] == '\n' || str[i1 - 1] == '\r') {
+        return findLine(str, i1, -1, str[i1]);
+      }
+      let i = leftBrackets.indexOf(str[i1 - 1]);
+      if (str[i1 - 1] == '*' && (i1 - 2 < 0 || str[i1 - 2] != '/')) i = -1; // spl check for /*
+      if (i >= 0) {
+        let i2 = matchBrackets(str, leftBrackets[i], rightBrackets[i], i1 - 1, 1);
+        return [i1, i2 - 1];
+      }
+    }
+    if (i1 < str.length) {
+      // look right for close brackets
+      if (str[i1] == '\n' || str[i1] == '\r') return findLine(str, i1, -1, str[i1]);
+      let i = rightBrackets.indexOf(str[i1]);
+      if (str[i1] == '*' && (i1 + 1 >= str.length || str[i1 + 1] != '/')) i = -1; // spl check for */
+      if (i >= 0) {
+        i1 = matchBrackets(str, rightBrackets[i], leftBrackets[i], i1, -1);
+        return [i1 + 1, i2];
+      }
+    }
+    // is a '//' left of me?
+    if (str[i1 - 1] === '/' && str[i1 - 2] === '/') {
+      while (i2 + 1 < str.length && str[i2 + 1] !== '\n' && str[i2 + 1] !== '\r') {
+        i2++;
+      }
+      return [i1, i2];
+    }
+    // inside of whitespaces?
+    let myI1 = i1;
+    let myI2 = i2;
+    while (myI1 - 1 >= 0 && isWhiteSpace(str[myI1 - 1])) myI1--;
+    while (myI2 < str.length && isWhiteSpace(str[myI2 + 1])) myI2++;
+    if (myI2 - myI1 >= 1) return [myI1, myI2];
+    let prev = i1 < str.length ? str[i1] : '';
+    while (i1 - 1 >= 0 && (isAlpha(str[i1 - 1]) || periodWithDigit(str[i1 - 1], prev))) {
+      prev = str[i1 - 1];
+      i1--;
+    }
+    while (i2 + 1 < str.length && (isAlpha(str[i2 + 1]) || periodWithDigit(str[i2 + 1], prev))) {
+      prev = str[i2 + 1];
+      i2++;
+    }
+    return [i1, i2];
+  }
+  setBounds(newBounds) {
+    super.setBounds(newBounds);
+    let savedMenuLine = null;
+    if (this.$selectedLineIndex > 0 && this.lines && this.lines.length >= this.$selectedLineIndex) {
+      savedMenuLine = dropNewline(this.lines[this.$selectedLineIndex - 1].string);
+    }
+    let bottomY = this.compose();
+    this.extent.y = bottomY - this.topLeft.y;
+    if (savedMenuLine) this.setSelectedTextString(savedMenuLine);
+  }
+  setEvalContext(obj) {
+    // if not null, this context will be used by do-it and print-it
+    this.evalContext = obj;
+  }
+  setLocalStorageKey(key) {
+    // Back door for localStoarage access
+    this.localStorageKey = key;
+  }
+  setNoBreak(ifSo) {
+    // Call with true to suppress line breaks
+    this.noBreak = ifSo;
+  }
+  setNullSelection() {
+    this.$selectedLineIndex = 0; // means no selection (for menus, lists, etc)
+    // Prefer a real charSpec so empty panes still get full lineheight for caret/selection.
+    let spec =
+      this.lines && this.lines.length > 0
+        ? this.charSpecForIndex(0)
+        : new TextCharSpec(0, this.topLeft.y + this.hang, this.inset ? this.inset.x : 0, 0);
+    this.$selStart = this.$selStop = spec;
+    // Must not equal caret index 0 or the first click at doc start looks like a repeat click and runs selectWord.
+    this.$priorNullSelection = -1;
+  }
+  ensureSelectionSpecs() {
+    // Selection is per-user ($-state) and lost on reload; restore a null selection on demand.
+    if (this.$selStart == null || this.$selStop == null) this.setNullSelection();
+  }
+  setSelectedTextString(str) {
+    let idx = 0;
+    this.lines.forEach((line, index) => {
+      if (dropNewline(line.string) == str) idx = index;
+    });
+    return (this.$selectedLineIndex = idx + 1);
+  }
+  setSelectionRange(pair) {
+    this.$selStart = this.charSpecForIndex(pair[0]);
+    this.$selStop = this.charSpecForIndex(pair[1] + 1);
+    // console.log('setSelectionRange() = ' + pair)
+    this.$priorNullSelection = -1;
+  }
+  setText(str) {
+    let s = str != null ? String(str) : '';
+    // Doc strings are Text objects, replaced wholesale on assignment — skip the
+    // write when nothing changed.
+    if (this.string !== s) this.string = s;
+    let bottomY = this.compose();
+    this.extent.y = bottomY - this.topLeft.y;
+    this.setNullSelection();
+  }
+  setWorkspaceObj(wsObj) {
+    // Arrange it so that evals in this text will have access to wsObj)
+    this.workspaceObj = wsObj;
+  }
+  shiftExtendSelectionToPointer(p) {
+    /** Shift-click: extend selection from the end farthest from pointer; empty selection anchors at index (right side). */
+    let clickSpec = this.charSpecForPt(p);
+    let ci = clickSpec.strIx;
+    if (!this.$selStart || !this.$selStop) {
+      this.startSelectionAt(p);
+      return;
+    }
+    let a = Math.min(this.$selStart.strIx, this.$selStop.strIx);
+    let b = Math.max(this.$selStart.strIx, this.$selStop.strIx);
+    if (a === b) {
+      this.$shiftAnchorIx = a;
+      this.$selStart = this.charSpecForIndex(Math.min(a, ci));
+      this.$selStop = this.charSpecForIndex(Math.max(a, ci));
+      return;
+    }
+    let distA = Math.abs(ci - a);
+    let distB = Math.abs(ci - b);
+    let farIx;
+    if (distA < distB) farIx = b;
+    else if (distB < distA) farIx = a;
+    else farIx = b;
+    this.$shiftAnchorIx = farIx;
+    this.$selStart = this.charSpecForIndex(Math.min(farIx, ci));
+    this.$selStop = this.charSpecForIndex(Math.max(farIx, ci));
+  }
+  startSelectionAt(p) {
+    this.$selectedLineIndex = 0; // list/menu line mode must not override char selection in editors
+    let spec = this.charSpecForPt(p);
+    this.$selStart = this.$selStop = spec;
+    this.$shiftAnchorIx = null;
+    // console.log("After startSelectionAt" + spec.toString());
+  }
+  textDrawOriginX(lineNo) {
+    let padL = this.inset != null ? this.inset.x : 2;
+    if (this.centerGlyph && this.lines && this.lines[lineNo] && this.lines[lineNo].string) {
+      let mctx = this.getTextContext(this.font);
+      if (!mctx) return padL;
+      let tw = mctx.measureText(this.lines[lineNo].string).width;
+      return Math.max(0, (this.extent.x - tw) / 2);
+    }
+    return padL;
+  }
+  undoReplacement() {
+    if (this.$printitUndo) {
+      let u = this.$printitUndo;
+      this.$printitUndo = null;
+      this.string = u.prefix + u.suffix;
+      let bottomY = this.compose();
+      this.extent.y = bottomY - this.topLeft.y;
+      this.setSelectionRange([u.selA, u.selB - 1]);
+      this.clearTyping();
+      return;
+    }
+    // Recreate selection range
+    this.ensureSelectionSpecs();
+    if (this.$stringPutIn == null || this.$stringTakenOut == null) return;
+    this.$selStart = this.charSpecForIndex(this.$selStop.strIx - this.$stringPutIn.length);
+    this.paste(this.$stringTakenOut);
+    this.$selStart = this.charSpecForIndex(this.$selStop.strIx - this.$stringTakenOut.length);
+    this.clearTyping();
+  }
+  wsEval(str) {
+    _lastEvalSource = str;
+    let label = 'evaluate: ' + truncateString(str, 80);
+    if (this.evalContext)
+      return evaluateWithErrorRecovery(() => this.evalContext.evalInMe(str), label);
+    return evaluateWithErrorRecovery(() => eval(str), label);
+  }
+  xValuesForLine(lineNo) {
+    // NOTE:  this should receive a line (this.lines.at(lineNo)), insteaad of lineNo
+    const canvas = document.querySelector('canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.font = this.font;
+    let xVals = [0.0];
+    if (lineNo > this.lines.length - 1) return xVals;
+    let txt = this.lines[lineNo].string;
+    //let s = 'x-values for line ' + lineNo + ': ';
+    for (let i = 0; i < txt.length; i++) {
+      let metrics = ctx.measureText(txt.slice(0, i + 1));
+      //s += ', ' + metrics.width.toFixed(1);
+      xVals.push(metrics.width);
+    }
+    //console.log(s);
+    return xVals;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +---------+
+// |  Morph  |
+// +---------+
+// Base morph: tree, transforms, drag/drop, focus, stepping.
+
+function paneMenuIsFrontmostForPanel(world, panelMorph) {
+  /** True when the world's front morph is a selection pane menu owned by a scroll pane in `panelMorph`. */
+  if (!world || !panelMorph || !world.frontmostSubmorph) return false;
+  let front = world.frontmostSubmorph();
+  if (!front || front.className !== 'MenuMorph' || !front.isFleetingMenu) return false;
+  let pane = front._paneMenuOwnerScrollPane;
+  if (!pane) return false;
+  let m = pane;
+  while (m && m !== world) {
+    if (m === panelMorph) return true;
+    m = m.owner;
+  }
+  return false;
+}
+function keyboardFocusBelongsToScrollPane(world, scrollPane) {
+  /** True when `world.$keyboardFocus` (per-user) is the content morph (or a submorph of it) for `scrollPane`. */
+  let f = world && world.$keyboardFocus;
+  if (!f || !scrollPane || !scrollPane.contentPane) return false;
+  let want = scrollPane.contentPane;
+  let x = f;
+  while (x) {
+    if (x === want) return true;
+    x = x.owner;
+  }
+  return false;
+}
+function textPaneWithKeyboardFocus(world) {
+  /** TextPane on the owner chain of `world.$keyboardFocus` (per-user), if any. */
+  let f = world && world.$keyboardFocus;
+  if (!f) return null;
+  let m = f;
+  while (m && m !== world) {
+    if (m.instanceOf && m.instanceOf(TextPane)) return m;
+    m = m.owner;
+  }
+  return null;
+}
+function shouldShowOnScreenKeyboardForWorld(world) {
+  /** True when OSK should track keyboard focus in a TextPane. */
+  if (!world || !$useOnScreenKbd) return false;
+  let pane = textPaneWithKeyboardFocus(world);
+  if (!pane) return false;
+  return keyboardFocusBelongsToScrollPane(world, pane);
+}
+function morphIsUnderOnScreenKeyboard(morph) {
+  /** True if `morph` is the OSK or a submorph of it (clicks must not clear keyboardFocus). */
+  let kb = $onScreenKeyboardMorph;
+  if (!kb || !morph || !kb.world()) return false;
+  let x = morph;
+  while (x) {
+    if (x === kb) return true;
+    x = x.owner;
+  }
+  return false;
+}
+function clearKeyboardFocusUnlessTypingOrOsk(morph) {
+  /** Clear world keyboardFocus unless `morph` is a TextMorph or inside the OSK. Only TextMorph sets focus. Call after pointer hits this morph but no submorph consumed the event (so editable text is not underneath). */
+  let world = morph.world();
+  if (!world) return;
+  if (morph.className === 'TextMorph') return;
+  if (morphIsUnderOnScreenKeyboard(morph)) return;
+  world.setKeyboardFocus(null);
+}
+//  Morph
+// -------
+// Scene-graph node: submorphs, transform, hit-testing, drag/drop.
+class Morph {
+  constructor(bounds, shape) {
+    // If shape is omitted it will be a Rectangle
+    // If bounds is omitted, it will be taken from the shape
+    if (traceMe) console.log('log ', 1);
+    this.owner = null; //another morph (or null in the case of a root Morph)
+    this.shape = shape ? shape : new Shape('Rectangle', bounds, Color.green, 1, Color.black);
+    this.shape.morph = this;
+    //console.log('shape = ', this.shape.toString());
+    // Copies, not live views: getBounds()/morphOrigin alias the shape's own
+    // points, and shape.setBounds below now updates those points in place —
+    // without the copy, _bounds would track the shape's local coords forever.
+    this._bounds = this.shape.getBounds().copy(); //a Rectangle in owner coordinates; see the `bounds` getter
+    this.origin = this.shape.morphOrigin.copy();
+    this._transform = this.nullTransformation(); // persistent transform (trans/rot/scale); see the `transform` getter
+    this._transform.translateBy(this.origin);
+    this.shape.setBounds(this.shape.getBounds().translatedBy(this.origin.negated()));
+    this.submorphs = []; // membership only; stacking comes from each child's zIndex (see drawList)
+    this.zIndex = 0; // stacking position among my siblings; reassigned by addMorph*/promote
+    this.$steppingSpecs = [];
+    this.hasChanged = true; //some call on changed() says we need to rerender
+    if (traceMe) console.log('log ', 2);
+  }
+  get transform() {
+    /**
+     * The transform to use for rendering, hit-testing, and mutation. During a
+     * direct-manipulation interaction (drag, halo rotate/scale, ...) this is
+     * $transform, a PER-USER ephemeral copy, so per-frame mutations never touch the
+     * Automerge document; the copy is promoted into the persistent _transform once,
+     * on pointer-up. See {@link Morph#beginEphemeralTransform} and
+     * {@link Morph#commitEphemeralTransform}.
+     */
+    return this.$transform != null ? this.$transform : this._transform;
+  }
+  set transform(tfm) {
+    // Mid-interaction, a wholesale assignment replaces the ephemeral view (commit
+    // then persists its values); otherwise it lands on the persistent slot.
+    if (this.$transform != null) this.$transform = tfm;
+    else this._transform = tfm;
+  }
+  get bounds() {
+    /** Cached bounding rect in owner coordinates; same ephemeral scheme as {@link Morph#transform}. */
+    return this.$bounds != null ? this.$bounds : this._bounds;
+  }
+  set bounds(b) {
+    // setBounds/syncBoundsFromGeometry assign wholesale, per frame during a halo
+    // Scale drag — mid-interaction that must replace the ephemeral view.
+    if (this.$bounds != null) this.$bounds = b;
+    else this._bounds = b;
+  }
+  beginEphemeralTransform() {
+    /**
+     * Start of a direct-manipulation interaction: install ephemeral copies of the
+     * current transform AND cached bounds for the {@link Morph#transform} and
+     * {@link Morph#bounds} getters to answer, so the interaction's per-frame
+     * mutations stay out of the shared document. No-op when an interaction is
+     * already in progress. Points are copied too — in-place point mutation must
+     * never leak into the persistent objects.
+     */
+    // Adopt any remote-streamed overlay: this interaction owns it now. Dropping the
+    // lease keeps the overlay-sweep from clearing $transform mid-drag (leases can
+    // outlive their deadline waiting for a commit to sync — see ephSweepOverlays)
+    // and makes the local-wins guard ignore remote messages until we commit.
+    if (window._ephOverlays != null && this.$id != null) delete window._ephOverlays[this.$id];
+    if (this.$transform != null) return;
+    let t = this.transform;
+    let eph = new SimpleTransform(
+      t.translation.copy(),
+      t.rotation || 0,
+      t.scale ? t.scale.copy() : pt(1, 1),
+    );
+    this.$transform = eph;
+    // A morph from a pre-getter document carries own `transform`/`bounds` data
+    // properties that shadow the prototype getters, so reads would never see the
+    // ephemeral copies. Leave such a morph on its old direct-mutation path
+    // (commit is then a no-op too).
+    if (this.transform !== eph) {
+      this.$transform = null;
+      return;
+    }
+    let b = this.bounds;
+    if (b != null) {
+      let ephB = new Rectangle(b.topLeft.copy(), b.extent.copy());
+      this.$bounds = ephB;
+      if (this.bounds !== ephB) this.$bounds = null;
+    }
+  }
+  commitEphemeralTransform() {
+    /**
+     * End of an interaction: copy the ephemeral transform's and bounds' values back
+     * into the persistent objects, then drop the copies. Mutates in place — no new
+     * document objects (doc entries are immortal, so promoting a copy would orphan
+     * the old one on every drag), and aliases other code holds stay valid. Unchanged
+     * fields cost nothing: same-value writes are elided at the storage layer, so a
+     * plain click is op-free.
+     */
+    let eph = this.$transform;
+    if (eph != null) {
+      this.$transform = null;
+      let t = this.transform;
+      t.translation.x = eph.translation.x;
+      t.translation.y = eph.translation.y;
+      t.rotation = eph.rotation;
+      if (t.scale) {
+        t.scale.x = eph.scale.x;
+        t.scale.y = eph.scale.y;
+      } else {
+        t.scale = eph.scale.copy();
+      }
+    }
+    let ephB = this.$bounds;
+    if (ephB != null) {
+      this.$bounds = null;
+      let b = this.bounds;
+      if (b != null) {
+        b.topLeft.x = ephB.topLeft.x;
+        b.topLeft.y = ephB.topLeft.y;
+        b.extent.x = ephB.extent.x;
+        b.extent.y = ephB.extent.y;
+      } else {
+        this._bounds = ephB;
+      }
+    }
+  }
+  //  Pointer-drag protocol
+  //  ---------------------
+  //  ONE state machine for every pointer-driven manipulation (plain drags,
+  //  shift-drag copies, panel title-bar drags, halo handles). A client's pointer
+  //  handlers call begin/continue/end; the protocol owns the bookkeeping that used
+  //  to be re-implemented at every site: $hitPoint/$didDrag/$dragActorID, pointer
+  //  focus, and the ephemeral-transform lifecycle (begin on press, one commit on
+  //  release — so per-frame moves never touch the shared document).
+  //
+  //  Hooks for subclasses:
+  //    dragMovedBy(delta, p, evt) — per-move behavior; default moves dragTarget().
+  //    dragEnded(p, evt, wasDrag) — release behavior; default drops on the morph
+  //                                 under the pointer. Clients with multi-modal
+  //                                 release flows (e.g. PanelMorph chrome buttons)
+  //                                 skip dragEnded and call finishPointerDrag()
+  //                                 from their own cleanup instead.
+  //    The drag target defaults to the receiver; pass another morph to
+  //    beginPointerDrag when the focus holder manipulates something else
+  //    (a HaloHandle manipulating the halo's target).
+  beginPointerDrag(p, evt, dragTargetIfAny) {
+    this.$hitPoint = p;
+    this.$didDrag = false;
+    this.$dragActorID = evt.actorID;
+    this.$dragTarget = dragTargetIfAny != null && dragTargetIfAny !== this ? dragTargetIfAny : null;
+    this.dragTarget().beginEphemeralTransform();
+    this.world().setPointerFocus(this);
+    return true;
+  }
+  continuePointerDrag(p, evt) {
+    if (!this.$hitPoint) return false;
+    let delta = p.subPt(this.$hitPoint);
+    // Update $hitPoint before the hook: some hooks re-anchor it (collapsed-bar snap).
+    this.$hitPoint = p;
+    if (delta.x !== 0 || delta.y !== 0) this.$didDrag = true;
+    this.dragMovedBy(delta, p, evt);
+    // Registered on first real move (not on press), so plain clicks never stream.
+    if (this.$didDrag) ephStreamRegister(this.dragTarget());
+    return true;
+  }
+  endPointerDrag(p, evt) {
+    let wasDrag = !!this.$didDrag;
+    this.dragEnded(p, evt, wasDrag);
+    this.finishPointerDrag();
+    return true;
+  }
+  finishPointerDrag() {
+    /** Commit the drag target's ephemeral state and clear all drag bookkeeping.
+     * Safe to call when no drag is active (the commit is a no-op then). */
+    let target = this.dragTarget();
+    this.$dragTarget = null;
+    this.$hitPoint = null;
+    this.$didDrag = false;
+    this.$dragActorID = null;
+    this.$pickUpOnDrag = false;
+    this.world().setPointerFocus(null);
+    target.commitEphemeralTransform();
+    // After the commit, so the final broadcast carries the committed values.
+    ephStreamEnd(target);
+  }
+  dragTarget() {
+    return this.$dragTarget != null ? this.$dragTarget : this;
+  }
+  dragMovedBy(delta, p, evt) {
+    this.dragTarget().moveBy(delta);
+  }
+  dragEnded(p, evt, wasDrag) {
+    if (!wasDrag) return;
+    // p is in owner coords; convert to world for drop target selection.
+    let worldDropPt = this.owner ? this.owner.globalize(p) : p;
+    // Keep the same local point under the cursor as at grab/drag (not bounds topLeft).
+    let anchorLocal = this.relativize(p);
+    this.dropOnTopMorphAt(worldDropPt, anchorLocal);
+  }
+  acceptsDroppingMorphs() {
+    return true;
+  }
+  addMorph(morph) {
+    return this.addMorphFront(morph);
+  }
+  addMorphBack(morph) {
+    if (morph.owner) morph.owner.removeMorph(morph);
+    if (this.submorphs == null) this.submorphs = [];
+    let bottom = this.bottomZIndexInBand(morph.zBand ? morph.zBand() : 0);
+    morph.zIndex = bottom == null ? 0 : bottom - 1;
+    this.submorphs.push(morph);
+    morph.owner = this;
+    morph.changed();
+    this.zOrderChanged();
+    this.layoutChanged();
+    return morph;
+  }
+  addMorphFront(morph) {
+    if (morph.owner) morph.owner.removeMorph(morph);
+    if (this.submorphs == null) this.submorphs = [];
+    let top = this.topZIndexInBand(morph.zBand ? morph.zBand() : 0);
+    morph.zIndex = top == null ? 0 : top + 1;
+    this.submorphs.push(morph);
+    morph.owner = this;
+    morph.changed();
+    this.zOrderChanged();
+    this.layoutChanged();
+    return morph;
+  }
+  addEphemeralMorph(morph) {
+    /**
+     * Attach `morph` as a PER-USER (ephemeral) submorph: rendered and hit-tested like
+     * any submorph, but never stored in the Automerge document and never seen by other
+     * users. Halos and their handles live here. Starts frontmost within its zBand and
+     * from then on interleaves with persistent siblings by zIndex like any other morph.
+     * Note it is the attachment EDGE that is ephemeral: `morph`'s own subtree (regular
+     * submorphs, shape, etc.) stays ephemeral automatically because it is only
+     * reachable through this $-edge. Meant for freshly created per-user morphs and for
+     * reparenting morphs that are already ephemeral (drags preserve edge kind — see
+     * reparentToOwnerPreservingWorldAnchor). Attaching an already-persistent morph here
+     * would orphan it on reload (its owner back-pointer would survive but this list
+     * would not); use bePersistent for the opposite promotion.
+     */
+    if (morph.owner) morph.owner.removeMorph(morph);
+    let top = this.topZIndexInBand(morph.zBand ? morph.zBand() : 0);
+    morph.zIndex = top == null ? 0 : top + 1;
+    this.ephemeralSubmorphs().push(morph);
+    morph.owner = this;
+    morph.changed();
+    this.zOrderChanged();
+    this.layoutChanged();
+    return morph;
+  }
+  ephemeralSubmorphs() {
+    /** This morph's per-user submorph list; lazily created (after a reload, persistent morphs come back without one). */
+    if (!this.$submorphs) this.$submorphs = [];
+    return this.$submorphs;
+  }
+  isEphemeralSubmorph() {
+    /** True when my attachment EDGE is per-user: I am in my owner's $submorphs. */
+    return !!(this.owner && this.owner.$submorphs && this.owner.$submorphs.includes(this));
+  }
+  canBePersisted() {
+    /**
+     * True when persisting my attachment edge (see bePersistent) would truly persist
+     * me: my own edge is ephemeral and every ancestor edge up to the world is
+     * persistent. A morph inside an ephemeral panel fails this — its whole subtree
+     * hangs off a $-edge higher up, so flipping its own edge would change nothing.
+     */
+    if (!this.isEphemeralSubmorph()) return false;
+    let m = this.owner;
+    while (m && m.owner) {
+      if (m.isEphemeralSubmorph()) return false;
+      m = m.owner;
+    }
+    return m != null && (m.className === 'WorldMorph' || (m.instanceOf && m.instanceOf(WorldMorph)));
+  }
+  bePersistent() {
+    /**
+     * Promote my attachment edge from per-user to shared: move me from my owner's
+     * $submorphs to its submorphs. Same owner, same transform, same zIndex, so I
+     * stay put on screen (and in the stacking order); entering the persistent list
+     * is what promotes me (and my subtree, zIndex included) into the Automerge
+     * document, making me visible to other users.
+     */
+    if (!this.isEphemeralSubmorph()) return;
+    let o = this.owner;
+    deleteFromArray(o.$submorphs, this);
+    if (o.submorphs == null) o.submorphs = [];
+    o.submorphs.push(this);
+    o.zOrderChanged();
+  }
+  zBand() {
+    /**
+     * Coarse stacking layer, compared before zIndex: 0 = ordinary morphs
+     * (persistent and ephemeral interleave freely here), 1 = per-user
+     * always-on-top UI ($alwaysOnTop: halos, halo handles, line handles, the
+     * on-screen keyboard), 2 = fleeting menus and confirm dialogs, which must
+     * never be buried (see promote). zIndex only competes within a band.
+     */
+    if (this.isFleetingMenu) return 2;
+    if (this.$alwaysOnTop) return 1;
+    return 0;
+  }
+  drawList() {
+    /**
+     * My submorphs — persistent AND ephemeral — in DRAW order (backmost first).
+     * Order is (zBand, zIndex, $id): bands keep overlays and fleeting menus on
+     * top, zIndex interleaves persistent and per-user morphs freely within a
+     * band, and $id breaks zIndex ties deterministically (doc-resident morphs
+     * have the same $id on every replica, so ties render identically everywhere).
+     * Cached in $drawList (per-user, plain array — iterating it costs no document
+     * reads); every mutation that can affect stacking invalidates the cache via
+     * zOrderChanged, and repairSubmorphOwnership invalidates after every batch of
+     * remote changes (a remote promote is just a zIndex register write, invisible
+     * to the lists). Treat the result as read-only — it IS the cache.
+     */
+    let cached = this.$drawList;
+    if (cached) return cached;
+    let entries = [];
+    let collect = (m) => {
+      if (m == null) return; // dangling ref from an unrepaired merge; skip
+      entries.push({
+        m,
+        band: m.zBand ? m.zBand() : 0,
+        z: m.zIndex != null ? m.zIndex : 0,
+        id: '' + m.$id,
+      });
+    };
+    if (this.submorphs) this.submorphs.forEach(collect);
+    if (this.$submorphs) this.$submorphs.forEach(collect);
+    entries.sort(
+      (a, b) => a.band - b.band || a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+    // Fast path: no ephemeral children and the persistent list happens to sit in
+    // draw order already (true for every leaf and for most owners — migration
+    // assigns zIndex in list order, and reordering only drifts on promotes).
+    // Cache the doc list ITSELF: iterating it per frame goes through the
+    // runtime's materialized read-cache, which ad-hoc per-user arrays never hit,
+    // so rendering leaves costs the same as before zIndex existed.
+    let subs = this.submorphs;
+    if (subs && (this.$submorphs == null || this.$submorphs.length === 0)) {
+      let inListOrder = entries.length === subs.length;
+      for (let i = 0; inListOrder && i < entries.length; i++) {
+        if (entries.at(i).m !== subs.at(i)) inListOrder = false;
+      }
+      if (inListOrder) {
+        this.$drawList = subs;
+        return subs;
+      }
+    }
+    let list = entries.map((e) => e.m);
+    this.$drawList = list;
+    return list;
+  }
+  zOrderChanged() {
+    /** Invalidate my cached draw order; call after any add/remove of a submorph or change to a child's zIndex. */
+    this.$drawList = null;
+    this.changed();
+  }
+  topZIndexInBand(band) {
+    /** Highest zIndex among my children (both lists) in `band`, or null when the band is empty. */
+    let top = null;
+    let scan = (m) => {
+      if (m == null || (m.zBand ? m.zBand() : 0) !== band) return;
+      let z = m.zIndex != null ? m.zIndex : 0;
+      if (top == null || z > top) top = z;
+    };
+    if (this.submorphs) this.submorphs.forEach(scan);
+    if (this.$submorphs) this.$submorphs.forEach(scan);
+    return top;
+  }
+  bottomZIndexInBand(band) {
+    /** Lowest zIndex among my children (both lists) in `band`, or null when the band is empty. */
+    let bottom = null;
+    let scan = (m) => {
+      if (m == null || (m.zBand ? m.zBand() : 0) !== band) return;
+      let z = m.zIndex != null ? m.zIndex : 0;
+      if (bottom == null || z < bottom) bottom = z;
+    };
+    if (this.submorphs) this.submorphs.forEach(scan);
+    if (this.$submorphs) this.$submorphs.forEach(scan);
+    return bottom;
+  }
+  frontmostInBand(band) {
+    /** My frontmost child in `band` (per draw order), or null. */
+    let list = this.drawList();
+    for (let i = list.length - 1; i >= 0; i--) {
+      let m = list.at(i);
+      if ((m.zBand ? m.zBand() : 0) === band) return m;
+    }
+    return null;
+  }
+  frontmostSubmorph() {
+    /** My frontmost child across all bands, or null. */
+    let list = this.drawList();
+    return list.length > 0 ? list.at(-1) : null;
+  }
+  allSubmorphs() {
+    /** Persistent + ephemeral submorphs in DRAW order (backmost first), as a fresh array. */
+    return this.drawList().slice();
+  }
+  allSubmorphsTopFirst() {
+    /** Persistent + ephemeral submorphs in HIT-TEST order (frontmost first — the exact reverse of draw order), as a fresh array. */
+    return this.drawList().toReversed();
+  }
+  find(aFunction) {
+    /**
+     * First direct submorph for which aFunction(morph) is true, else null.
+     * Tests frontmost first (same order as {@link allSubmorphsTopFirst}),
+     * persistent and ephemeral submorphs interleaved by zIndex.
+     */
+    if (typeof aFunction !== 'function') return null;
+    let list = this.allSubmorphsTopFirst();
+    for (let i = 0; i < list.length; i++) {
+      if (aFunction(list[i])) return list[i];
+    }
+    return null;
+  }
+  findA(className) {
+    /** First direct submorph whose className equals className (frontmost first). */
+    let name = '' + className;
+    return this.find((m) => m && m.className === name);
+  }
+  eachSubmorph(fn) {
+    /**
+     * Iterate my submorphs (persistent + ephemeral) in DRAW order — backmost
+     * first. Runs on every morph every frame (see renderOn), so the warm case
+     * reads the $drawList cache directly instead of paying a drawList() call.
+     */
+    let list = this.$drawList;
+    if (list == null) list = this.drawList();
+    list.forEach(fn);
+  }
+  toString() {
+    return 'a ' + this.className + ' (' + this.shape.toString() + ')';
+  }
+  beTopMorph() {
+    // Promote my top-level ancestor to the front of its zBand in the world.
+    // promote() is a no-op (and op-free) when it is already frontmost there,
+    // and bands keep fleeting menus / halos above it regardless.
+    let worldMorph = this.world();
+    let m = this;
+    while (m.owner && m.owner !== worldMorph) m = m.owner;
+    if (m.owner !== worldMorph) return;
+    worldMorph.promote(m);
+  }
+  boundsInOwnerAfterTransform() {
+    /** Axis-aligned footprint in owner space; applies scale and rotation like {@link Morph#renderOn}. */
+    let local = this.localContentBounds();
+    let sx = this.transform.scale.x || 1;
+    let sy = this.transform.scale.y || 1;
+    let rot = this.transform.rotation || 0;
+    let b;
+    if (Math.abs(rot) < 1e-10 && Math.abs(sx - 1) < 1e-10 && Math.abs(sy - 1) < 1e-10) {
+      b = local.translatedBy(this.transform.translation);
+    } else {
+      let corners = [local.topLeft, local.topRight(), local.bottomRight(), local.bottomLeft()];
+      let pts = corners.map((c) => this.transform.transformPt(c));
+      b = unionPts(pts);
+    }
+    let scrollY = this.$scrollOffsetY;
+    return scrollY ? b.translatedBy(pt(0, scrollY)) : b;
+  }
+  boundsInWorld() {
+    /** Axis-aligned bounds of this morph in world coordinates. Maps the shape's
+     * corners through the full transform chain — including this morph's own
+     * rotation/scale, which getBounds ignores — so halos etc. frame the morph
+     * where it is rendered. */
+    if (this.owner == null) return this.getBounds();
+    let local = this.shape.getBounds();
+    let corners = [local.topLeft, local.topRight(), local.bottomRight(), local.bottomLeft()];
+    return unionPts(corners.map((c) => this.globalize(c)));
+  }
+  bringTopLevelPanelToFrontIfNeeded(p) {
+    // If this morph is inside a buried top-level PanelMorph, bring that panel
+    // to front and consume the click (caller should return true).
+    let world = this.world();
+    let topLevel = this;
+    while (topLevel.owner && topLevel.owner !== world) topLevel = topLevel.owner;
+    if (topLevel.className != 'PanelMorph' || topLevel.owner !== world) return false;
+    // Simpler/stronger policy: if the panel is not frontmost, first click only
+    // raises it; second click can act on inner controls. Frontmost within the
+    // panel's zBand: persistent and ephemeral siblings interleave by zIndex, and
+    // fleeting menus / halos above it don't count as burying it.
+    if (world.frontmostInBand(topLevel.zBand ? topLevel.zBand() : 0) !== topLevel) {
+      // A pane menu sitting above this panel must not eat the first text click.
+      if (paneMenuIsFrontmostForPanel && paneMenuIsFrontmostForPanel(world, topLevel)) return false;
+      topLevel.beTopMorph();
+      return true;
+    }
+    return false;
+  }
+  changed() {
+    // Means we have to redraw due to altered content
+    this.hasChanged = true;
+  }
+  clippedBounds() {
+    /** Visible bounds for halos etc.; includes transform scale/rotation. Clipped when inside a {@link ScrollPane}. */
+    let b = this.boundsInOwnerAfterTransform().copy();
+    if (this.owner && this.owner.instanceOf && this.owner.instanceOf(ScrollPane)) {
+      b = b.intersection(this.owner.shape.getBounds());
+    }
+    return b;
+  }
+  clippedBoundsInWorld() {
+    /** {@link clippedBounds} in world coordinates, intersecting every ancestor {@link ScrollPane} viewport. */
+    let b = this.boundsInWorld();
+    let o = this.owner;
+    while (o) {
+      if (o.instanceOf && o.instanceOf(ScrollPane)) {
+        b = b.intersection(o.boundsInWorld());
+      }
+      o = o.owner;
+    }
+    return b;
+  }
+  dragFrom(p, evt) {
+    return this.beginPointerDrag(p, evt);
+  }
+  dropOnTopMorphAt(worldDropPt, anchorLocal) {
+    // Reparent under worldDropPt while preserving world position of a local anchor.
+    // anchorLocal: point in this morph's local coords to keep fixed (e.g. relativize(grab)).
+    // If omitted, uses shape bounds topLeft (halo grab/copy, etc.).
+    let world = this.world();
+    if (!world) return;
+    // Find deepest accepting owner at drop point (front-most path), not just world children.
+    let dropped = this;
+    // Mid-drag the morph sits in the world's list of its original kind, so this reads
+    // the status it had when picked up.
+    let droppedIsEphemeral = this.isEphemeralSubmorph();
+    let walk = (ownerMorph, worldPt) => {
+      let candidates = ownerMorph.allSubmorphsTopFirst();
+      for (let i = 0; i < candidates.length; i++) {
+        let sub = candidates[i];
+        if (sub === dropped) continue;
+        if (
+          sub.className == 'HaloMorph' ||
+          sub.className == 'HaloHandle' ||
+          sub.className == 'HandMorph' ||
+          sub.className == 'LineVertexHandle' ||
+          sub.className == 'LineMidpointHandle'
+        )
+          continue;
+        // A persistent morph must not land in the per-user layer (its subtree would
+        // only be reachable through a $-edge, i.e. lost on reload): ephemeral
+        // candidates don't accept it, so the drop falls through to what's behind.
+        if (
+          !droppedIsEphemeral &&
+          ownerMorph.$submorphs &&
+          ownerMorph.$submorphs.includes(sub)
+        )
+          continue;
+        let pInOwner = sub.owner ? sub.owner.localize(worldPt) : worldPt;
+        if (!sub.includesPt(pInOwner)) continue;
+        if (!sub.acceptsDroppingMorphs()) continue;
+        let inner = walk(sub, worldPt);
+        return inner != null ? inner : sub;
+      }
+      return null;
+    };
+    let deepest = walk(world, worldDropPt);
+    let newOwner = deepest != null ? deepest : world;
+    let anc = newOwner;
+    while (anc) {
+      if (anc === dropped) {
+        newOwner = world;
+        break;
+      }
+      anc = anc.owner;
+    }
+    this.reparentToOwnerPreservingWorldAnchor(newOwner, anchorLocal);
+  }
+  evalInMe(str) {
+    // Eval in me, as for use in the debugger / TextBox workspace
+    return eval(str);
+  }
+  forEverySubmorph(fn) {
+    // Exhaustively call fn on every submorph, persistent and ephemeral, recursively
+    this.eachSubmorph((sub) => {
+      fn.call(this, sub);
+      sub.forEverySubmorph(fn);
+    });
+  }
+  fullBounds() {
+    // Includes this morph's shape and all descendant submorph shapes.
+    // Return value is in owner coordinates with this morph's full transform
+    // applied (the axis-aligned footprint when rotated/scaled), so hit tests
+    // against it match what's rendered.
+    return this.boundsInOwnerAfterTransform();
+  }
+  getBounds() {
+    // NOTE: does not include submorph stickouts; use {@link fullBounds} or {@link boundsInOwnerAfterTransform}.
+    let b = this.shape.getBounds().translatedBy(this.transform.translation);
+    let scrollY = this.$scrollOffsetY;
+    return scrollY ? b.translatedBy(pt(0, scrollY)) : b;
+  }
+  globalize(p) {
+    // local coordinates -> world
+    if (this.owner == null) return p;
+    let q = this.transform.transformPt(p);
+    let scrollY = this.$scrollOffsetY;
+    if (scrollY) q = pt(q.x, q.y + scrollY);
+    return this.owner.globalize(q);
+  }
+  hasSubmorphs() {
+    if (this.submorphs != null && this.submorphs.length > 0) return true;
+    return this.$submorphs != null && this.$submorphs.length > 0;
+  }
+  inaHand() {
+    if (this.owner == null) return false;
+    if (this.owner.isaHand()) return true;
+    return this.owner.inaHand();
+  }
+  includesPt(p) {
+    // p is in owner (or world for root children) coordinates; convert to local
+    return this.shape.includesPt(this.relativize(p));
+  }
+  inspect() {
+    // Lively.submorphs.first().inspect()
+    let p = new InspectorPanel(rect(500, 100, 300, 300), this);
+    Lively.addEphemeralMorph(p);
+    p.startStepping('showSelectedValue', false, 500);
+    return p;
+  }
+  isaHand() {
+    return false;
+  }
+  isInWorld() {
+    /** True while this morph is attached to the world, including riding in a hand.
+     * remove()/removeMorph leave the owner back-pointer set (see remove), so walk
+     * the chain checking real membership in each owner's submorph/hand lists. */
+    let m = this;
+    while (m.owner != null) {
+      let o = m.owner;
+      let attached =
+        (o.submorphs != null && o.submorphs.includes(m)) ||
+        (o.$submorphs != null && o.$submorphs.includes(m)) ||
+        (o.hands != null && o.hands.includes(m));
+      if (!attached) return false;
+      m = o;
+    }
+    return m.className === 'WorldMorph';
+  }
+  isStepping(methodName) {
+    return this.world().isSteppingMorph(this, methodName);
+  }
+  layoutChanged(submorph) {
+    // ** code goes here
+  }
+  localContentBounds() {
+    /** Shape + submorph stickouts in morph-local coords (before this morph's transform). */
+    let b = this.shape.getBounds().copy();
+    this.eachSubmorph((sub) => {
+      b = b.union(sub.fullBounds());
+    });
+    return b;
+  }
+  localize(pt) {
+    // world coordinates -> local
+    if (this.owner == null) return this.transform.invertPt(pt);
+    return this.relativize(this.owner.localize(pt));
+  }
+  morphCopy() {
+    let copy = new Morph(this.bounds, this.shape.copy());
+    copy.owner = this.owner;
+    copy.transform = this.transform.copy(); // may not need to copy
+    if (this.zIndex != null) copy.zIndex = this.zIndex; // keeps submorph stacking on recursive copies
+    this.restartSteppingOnCopy(copy);
+    copy.submorphs = this.submorphs.map((m) => {
+      let sub = m.morphCopy();
+      sub.owner = copy; // not this.owner — repairSubmorphOwnership trusts the back-pointer
+      return sub;
+    });
+    return copy;
+  }
+  morphMenu() {
+    /** Optional halo menu: `{ items: string[], onSelect(item, morph) }` or null. */
+    return null;
+  }
+  moveBy(delta) {
+    // In place, like commitEphemeralTransform: replacing translation allocated
+    // a fresh doc Point per call outside interactions (steppers, programmatic
+    // moves) and orphaned the old one.
+    this.transform.translation.moveBy(delta);
+    if (this.bounds) this.bounds.moveBy(delta);
+  }
+  myOwningHand() {
+    let m = this.owner;
+    while (m) {
+      if (m.className === 'HandMorph') return m;
+      m = m.owner;
+    }
+    return null;
+  }
+  nullTransformation() {
+    return new SimpleTransform(pt(0, 0), 0, pt(1, 1));
+  }
+  onKeyDown(evt) {
+    // Mainly called by subclass.call()
+    return true; // no op
+  }
+  onKeyUp(evt) {
+    // Default: no-op; WorldMorph and focused morphs may override.
+    return true;
+  }
+  onPointerDown(p, evt) {
+    // p is in owner (or world for root) coordinates
+    // Use fullBounds so protruding submorphs ("stickouts") are still hittable.
+    if (!this.fullBounds().includesPt(p)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    let localP = this.relativize(p);
+    if (effectiveMetaKey(evt)) {
+      consumeSoftMetaKey();
+      let maybeHit = this.world().hitMorphAt(p);
+      if (maybeHit) maybeHit.showHalo();
+      return false;
+    }
+    let eventConsumed = false;
+    this.eachSubmorph((sub) => {
+      // localP is in this morph's local coords, i.e. owner coords for submorphs
+      // (draw order: frontmost submorphs are visited last, so they win the dispatch)
+      if (sub.fullBounds().includesPt(localP)) eventConsumed = sub.onPointerDown(localP, evt);
+    });
+    if (eventConsumed) return true;
+    clearKeyboardFocusUnlessTypingOrOsk(this);
+    this.beTopMorph();
+    if (effectiveShiftKey(evt)) {
+      // shift drag means copy: the copy takes over as the pointer-focused dragee.
+      // The copy keeps the original's edge kind — copying an ephemeral morph
+      // yields an ephemeral copy, never a silently-promoted persistent one.
+      let copy = this.morphCopy();
+      if (this.isEphemeralSubmorph()) this.world().addEphemeralMorph(copy);
+      else this.world().addMorph(copy);
+      return copy.beginPointerDrag(p, evt);
+    }
+    // For nested morphs, plain drag should pick up to world on first real move.
+    this.$pickUpOnDrag = this.owner != null && this.owner !== this.world();
+    return this.beginPointerDrag(p, evt);
+  }
+  onPointerMove(p, evt) {
+    // p is in owner coordinates
+    let localP = this.relativize(p);
+    // If any submorph responds, then we're done
+    let eventConsumed = false;
+    this.eachSubmorph((sub) => {
+      // localP is in this morph's local coords, i.e. owner coords for submorphs
+      if (sub.includesPt(localP)) eventConsumed = sub.onPointerMove(localP, evt);
+    });
+    if (eventConsumed) return true;
+    if (!this.$hitPoint) return false;
+    if (this.$pickUpOnDrag && this.owner != null && this.owner !== this.world()) {
+      let delta = p.subPt(this.$hitPoint);
+      if (delta.x !== 0 || delta.y !== 0) {
+        let oldOwner = this.owner;
+        let worldPrev = oldOwner.globalize(this.$hitPoint);
+        let worldNow = oldOwner.globalize(p);
+        let deltaWorld = worldNow.subPt(worldPrev);
+        let anchorLocal = this.relativize(this.$hitPoint);
+        this.reparentToOwnerPreservingWorldAnchor(this.world(), anchorLocal);
+        this.moveBy(deltaWorld);
+        this.$hitPoint = worldNow;
+        this.$pickUpOnDrag = false;
+        this.$didDrag = true;
+        return true;
+      }
+    }
+    return this.continuePointerDrag(p, evt);
+  }
+  onPointerUp(p, evt) {
+    // p is in owner coordinates
+    let localP = this.relativize(p);
+    // If any submorph responds true, then we're done
+    let eventConsumed = false;
+    this.eachSubmorph((sub) => {
+      // localP is in this morph's local coords, i.e. owner coords for submorphs
+      if (sub.includesPt(localP)) eventConsumed = sub.onPointerUp(localP, evt);
+    });
+    if (eventConsumed) return true;
+    return this.endPointerDrag(p, evt);
+  }
+  onTextBoundsChanged() {
+    // to be noticeable by text containers
+    if (this.owner != null) this.owner.onTextBoundsChanged();
+  }
+  position() {
+    return this.getBounds().topLeft;
+  }
+  promote(submorph) {
+    /**
+     * Raise `submorph` to frontmost within its zBand: one zIndex register write,
+     * never a list splice. Registers converge under concurrent edits (LWW), so a
+     * promote merged with a concurrent reparent or promote on another replica
+     * can no longer duplicate list entries (see repairSubmorphOwnership for the
+     * legacy splice-vs-splice damage this used to cause). Bands keep fleeting
+     * menus above ordinary morphs so confirms are not buried by beTopMorph.
+     * Already-frontmost is a no-op, keeping every pointer-down op-free.
+     */
+    let held =
+      (this.submorphs && this.submorphs.includes(submorph)) ||
+      (this.$submorphs && this.$submorphs.includes(submorph));
+    if (!held) return;
+    let band = submorph.zBand ? submorph.zBand() : 0;
+    if (this.frontmostInBand(band) === submorph) return;
+    let top = this.topZIndexInBand(band);
+    submorph.zIndex = top == null ? 0 : top + 1;
+    this.zOrderChanged();
+  }
+  relativize(p) {
+    // owner coordinates -> local
+    // $scrollOffsetY is this user's scroll offset (see ScrollPane); undo it before the shared transform.
+    let scrollY = this.$scrollOffsetY;
+    return this.transform.invertPt(scrollY ? pt(p.x, p.y - scrollY) : p);
+  }
+  remove() {
+    this.stopStepping();
+    this.owner.removeMorph(this);
+    // this.owner = null;      // Not strictly necess and may be causing
+    //               a problem of morphs losing the chain to this.world()
+  }
+  removeMorph(submorph) {
+    deleteFromArray(this.submorphs, submorph);
+    if (this.$submorphs) deleteFromArray(this.$submorphs, submorph);
+    this.zOrderChanged();
+  }
+  renderMeOn(ctx) {
+    if (!this.hasChanged) return;
+    ctx.beginPath();
+    this.shape.renderOn(ctx);
+    ctx.closePath();
+  }
+  renderOn(ctx) {
+    this.renderMeOn(ctx);
+    this.eachSubmorph((each) => {
+      ctx.save();
+      let pf = this.world().$pointerFocus;
+      let inHand = each.inaHand();
+      let haloGrabOrCopyShadow =
+        pf &&
+        pf.className === 'HaloHandle' &&
+        ['Grab', 'Copy'].includes(pf.handleName) &&
+        pf.target === each;
+      if (inHand || (pf === each && each.shape.shapeType != 'TextBox') || haloGrabOrCopyShadow) {
+        let owningHand = each.myOwningHand ? each.myOwningHand() : null;
+        let world = this.world ? this.world() : null;
+        let focusActorID = each.$dragActorID != null ? each.$dragActorID : $actorID;
+        let focusHand =
+          !owningHand && world && world.handForID ? world.handForID(focusActorID) : null;
+        let handForShadow = owningHand || focusHand;
+        let handColor = handForShadow && handForShadow.handColor ? handForShadow.handColor() : null;
+        if (handColor && handColor.r != null && handColor.g != null && handColor.b != null) {
+          let rr = Math.floor(handColor.r * 255.999);
+          let gg = Math.floor(handColor.g * 255.999);
+          let bb = Math.floor(handColor.b * 255.999);
+          ctx.shadowColor = 'rgba(' + rr + ',' + gg + ',' + bb + ',0.45)';
+        } else {
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+        }
+        ctx.shadowBlur = 5;
+        ctx.shadowOffsetX = 5;
+        ctx.shadowOffsetY = 5;
+      }
+      // ctx.transform(each.getTransform);
+      const tfm = each.transform;
+      let scrollY = each.$scrollOffsetY;
+      ctx.translate(tfm.translation.x, tfm.translation.y + (scrollY ? scrollY : 0));
+      ctx.rotate(tfm.rotation);
+      ctx.scale(tfm.scale.x, tfm.scale.y);
+      each.renderOn(ctx);
+      ctx.restore();
+    });
+  }
+  repairSubmorphOwnership() {
+    /**
+     * Heal the scene graph after a batch of external (remote-replica) changes
+     * merges in; called from the frame loop (see maybeRepairAfterMerge in initUI)
+     * once per batch, plus once on boot. Three jobs:
+     *
+     * 1. Invalidate the cached draw order ($drawList) unconditionally — a remote
+     *    promote is just a zIndex register write, invisible to the lists, so any
+     *    external batch may have reordered my children.
+     * 2. Deduplicate the persistent list. Automerge lists merge remove+reinsert
+     *    patterns additively: two replicas concurrently splicing the same morph
+     *    (e.g. a reparent racing another reparent — promotes no longer splice)
+     *    leave its ref in both/twice, so it renders twice. The owner back-pointer
+     *    is a register that converges to one value, so treat it as the truth:
+     *    drop entries whose morph belongs to someone else, and collapse repeats.
+     *    Also heals documents corrupted by pre-zIndex sessions, whose promotes
+     *    DID splice on every pointer-down. Only the persistent list needs this —
+     *    $submorphs is per-user and never merged.
+     * 3. Migrate zIndex: any child without one (a pre-zIndex document, or a morph
+     *    created by a replica running old code) gets slotted above the current
+     *    max, in list order — for a wholly unmigrated document this preserves the
+     *    legacy list-position stacking exactly. Replicas booting the same old
+     *    document concurrently compute identical values, so the writes converge.
+     */
+    this.$drawList = null;
+    let subs = this.submorphs;
+    if (subs && subs.length > 0) {
+      let stale = null;
+      for (let i = 0; i < subs.length; i++) {
+        let s = subs.at(i);
+        // Dangling ref, foreign-owned entry, or repeat of an earlier entry.
+        if (s == null || s.owner !== this || subs.indexOf(s) < i) {
+          if (stale == null) stale = [];
+          stale.push(i);
+        }
+      }
+      if (stale != null) {
+        for (let i = stale.length - 1; i >= 0; i--) subs.splice(stale.at(i), 1);
+        this.changed();
+      }
+      let maxZ = null;
+      let missing = null;
+      for (let i = 0; i < subs.length; i++) {
+        let s = subs.at(i);
+        if (s.zIndex == null) {
+          if (missing == null) missing = [];
+          missing.push(s);
+        } else if (maxZ == null || s.zIndex > maxZ) {
+          maxZ = s.zIndex;
+        }
+      }
+      if (missing != null) {
+        let z = maxZ == null ? 0 : maxZ + 1;
+        missing.forEach((s) => (s.zIndex = z++));
+        this.changed();
+      }
+    }
+    this.eachSubmorph((sub) => sub.repairSubmorphOwnership());
+  }
+  reparentToOwnerPreservingWorldAnchor(newOwner, anchorLocal, ephemeralEdge) {
+    /**
+     * Reparent under newOwner while keeping anchorLocal at same world point.
+     * The attachment edge keeps its kind — an ephemeral submorph stays in
+     * $submorphs lists, a persistent one in submorphs lists — so a drag never
+     * silently promotes an ephemeral morph into the document. Pass ephemeralEdge
+     * to force a kind (e.g. a fresh morphCopy is in no list yet, so it should
+     * inherit its original's kind explicitly).
+     */
+    if (!newOwner) return;
+    let wantEphemeral = ephemeralEdge != null ? !!ephemeralEdge : this.isEphemeralSubmorph();
+    // morphCopy() sets owner without addMorph; only skip if this morph is actually in
+    // newOwner's tree, attached by the right kind of edge.
+    let targetList = wantEphemeral ? newOwner.$submorphs : newOwner.submorphs;
+    if (this.owner === newOwner && targetList && targetList.indexOf(this) >= 0) return;
+    let p = anchorLocal == null ? this.shape.getBounds().topLeft : anchorLocal;
+    let anchorWorld = this.globalize(p);
+    // both removers take this morph out of the previous owner's lists
+    if (wantEphemeral) newOwner.addEphemeralMorph(this);
+    else newOwner.addMorph(this);
+    let ownerPt = newOwner.localize(anchorWorld);
+    let rotScale = this.transform.transformPt(p).subPt(this.transform.translation);
+    this.transform.translation.setToPt(ownerPt.subPt(rotScale));
+    this.syncBoundsFromGeometry();
+    this.changed();
+  }
+  restartSteppingOnCopy(copy, specHook) {
+    copy.$steppingSpecs = (this.$steppingSpecs || []).map((spec) => spec.copyForMorph(copy));
+    copy.$steppingSpecs.forEach((spec) => {
+      if (!this.isStepping(spec.methodName)) return;
+      if (specHook && specHook(spec, copy)) return;
+      copy.startStepping(spec.methodName, spec.arg, spec.stepPeriod, spec.nextStepTime);
+    });
+  }
+  restyle() {
+    if (!this.shape) return;
+    let world = this.world();
+    if (!world) return;
+    let anchor = this.clippedBoundsInWorld ? this.clippedBoundsInWorld() : this.getBounds();
+    let r = anchor.topRight().addPt(pt(12, 0)).extent(pt(280, 340));
+    world.addEphemeralMorph(new StylePanel(r, this));
+  }
+  rotateBy(angle) {
+    this.setRotation(this.transform.rotation + angle);
+  }
+  setRotation(rot) {
+    // Rotate about the center of the morph's shape: adjust the translation so
+    // the shape center stays at the same point in owner coordinates. (The
+    // transform itself always rotates about the morph's local origin.)
+    let c = this.shape.getBounds().center(); // local coords
+    let before = this.transform.transformPt(c);
+    this.transform.rotation = rot;
+    let after = this.transform.transformPt(c);
+    let delta = before.subPt(after);
+    this.transform.translation.moveBy(delta);
+    // Update the cached bounds in place, like moveBy (replacing this.bounds
+    // would orphan a rect another same-frame mutation may have written to).
+    if (this.bounds) this.bounds.moveBy(delta);
+    this.changed();
+  }
+  scaleBy(scale) {
+    const scalePt = typeof scale === 'number' ? pt(scale, scale) : scale;
+    let s = this.transform.scale;
+    s.setToPt(s.scaleBy(scalePt));
+  }
+  setBorderColor(color) {
+    this.shape.setBorderColor(color);
+  }
+  setBorderWidth(width) {
+    this.shape.setBorderWidth(width);
+  }
+  setBounds(rect) {
+    // In-place updates keep the doc's translation/bounds objects stable across
+    // relayouts (a collapse/expand cycle was ~8.6k ops when every setBounds
+    // allocated fresh Points/Rectangles into the doc).
+    let t = this.transform;
+    if (t.translation) t.translation.setToPt(rect.topLeft);
+    else t.translation = rect.topLeft.copy();
+    this.shape.setBounds(rect.movedBy(rect.topLeft.negated()));
+    let b = this.bounds;
+    if (b != null) b.setToRect(rect);
+    else this.bounds = rect.copy();
+  }
+  setColor(color) {
+    this.shape.setColor(color);
+  }
+  setPaneBoundsIn(newBounds) {
+    Morph.prototype.setBounds.call(this, newBounds);
+    // submorphs other than panes simply set bounds
+  }
+  setStyles(fillColor, borderWidth, borderColor) {
+    this.shape.setStyles(fillColor, borderWidth, borderColor);
+  }
+  showHalo() {
+    this.world().removeExistingHalos();
+    // Per-user UI: halos never enter the Automerge document.
+    this.world().addEphemeralMorph(new HaloMorph(this));
+  }
+  showMorphMenuAt(worldPt, optsIfAny) {
+    /** Show {@link morphMenu} at a world point; returns false when there is no menu. */
+    this.menuSpec = this.morphMenu();
+    if (!this.menuSpec || !this.menuSpec.items || this.menuSpec.items.length === 0) return false;
+    let world = this.world();
+    if (!world) return false;
+    let opts = optsIfAny || {};
+    let items = this.menuSpec.items;
+    this.menu = new MenuMorph(
+      rect(worldPt.x, worldPt.y, 165, Math.max(48, 24 + items.length * 18)),
+      items,
+      (item) => {
+        if (isMenuSeparator(item)) return;
+        if (this.menuSpec.onSelect) this.menuSpec.onSelect(item, this);
+        this.menu.remove();
+      },
+    );
+    this.menu.isFleetingMenu = !!opts.fleeting;
+    world.addMorph(this.menu);
+    return true;
+  }
+  startStepping(method, argIfAny, msTime, nextStepTimeIfAny) {
+    // Replace any existing step with the same method name on this morph
+    this.stopStepping(method);
+    let spec = new StepSpec(this, method, argIfAny, msTime, nextStepTimeIfAny);
+    if (!this.$steppingSpecs) this.$steppingSpecs = [];
+    this.$steppingSpecs.push(spec);
+    this.world().startSteppingSpec(spec);
+  }
+  stopStepping(methodName) {
+    if (!this.$steppingSpecs) this.$steppingSpecs = [];
+    if (methodName) {
+      deleteFromArrayPred(this.$steppingSpecs, (spec) => spec.methodName == methodName);
+    } else {
+      clearArray(this.$steppingSpecs);
+    }
+    this.world().stopSteppingMorph(this, methodName);
+  }
+  subBounds(paneSpec) {
+    // returns a subrectangle of bounds for, eg, subPanes
+    // Submorphs need bounds in this morph's local coords so use shape.getBounds()
+    return this.shape.getBounds().scaleRect(paneSpec);
+  }
+  syncBoundsFromGeometry() {
+    // Sync cached this.bounds with shape + translation (setBounds/moveBy already keep it; reparent paths did not).
+    // Update in place, like setRotation: replacing this.bounds would orphan a rect
+    // that a same-frame in-place mutation (e.g. Morph.moveBy) already wrote a fresh
+    // point into, baking a dangling ref into the document.
+    let b = this.getBounds();
+    if (this.bounds) this.bounds.setToRect(b);
+    else this.bounds = b.copy();
+  }
+  testTransform(whenDone) {
+    // Spin a bit, then reset and optionally run next. Driven by stepping (not
+    // a raw timer) so the heap writes in setRotation happen inside the frame
+    // loop's runtime.change transaction.
+    this.$testTransformStepsLeft = 20; // ~500ms at 25ms/step
+    this.$testTransformWhenDone = whenDone;
+    this.startStepping('testTransformStep', null, 25);
+  }
+  testTransformStep() {
+    this.rotateBy(Math.PI / 10);
+    this.$testTransformStepsLeft -= 1;
+    if (this.$testTransformStepsLeft > 0) return;
+    this.stopStepping('testTransformStep');
+    this.setRotation(0);
+    let whenDone = this.$testTransformWhenDone;
+    this.$testTransformWhenDone = null;
+    if (whenDone) whenDone();
+  }
+  topMorph() {
+    // Note this gets used also to find the
+    // root morph -- which could be a hand
+    if (this.owner.owner == null) return this;
+    return this.owner.topMorph();
+  }
+  translateBy(pt) {
+    this.transform.translation.moveBy(pt);
+  }
+  translation() {
+    return this.transform.translation;
+  }
+  verifyMorphs(level) {
+    // Lively.verifyMorphs()
+    // Essentially prints the scene graph
+    if (!level) level = 0;
+    let str =
+      '\n' +
+      '  '.repeat(level) +
+      this.toString() +
+      ' [' +
+      this.localize(pt(100, 100)).toString() +
+      ']';
+    this.submorphs.forEach((morph) => {
+      if (!morph.owner)
+        str += '\n' + '  '.repeat(level + 1) + '*** owner failure in this ' + morph.className + ':';
+      str += morph.verifyMorphs(level + 1, str);
+    });
+    return str;
+  }
+  world() {
+    // Note this gets used also to find the
+    // root morph -- which could be a hand
+    if (this.owner == null) return this;
+    return this.owner.world();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +--------------------+
+// |  Images and Lines  |
+// +--------------------+
+// Bitmap/emoji morphs and editable polylines with handles.
+
+//  ImageMorph
+// ------------
+// Morph wrapping ImageShape; collision from opaque pixels.
+class ImageMorph extends Morph {
+  constructor(imageOrSize) {
+    let shape =
+      imageOrSize && imageOrSize.instanceOf && imageOrSize.instanceOf(ImageShape)
+        ? imageOrSize
+        : new ImageShape(imageOrSize);
+    let b = shape.getBounds();
+    super(b, shape);
+  }
+  collisionBounds() {
+    /**
+     * Tight axis-aligned bounds in owner space for collision: uses {@link ImageShape#_contentBoundsLocal}
+     * when set (emoji glyph from alpha scan), else one-time alpha scan on a canvas image, else {@link Rectangle#insetBy}(10)
+     * on shape bounds; always applies {@link SimpleTransform#transformPt} to corners so scale and rotation match rendering.
+     */
+    if (!this.shape) return this.getBounds().insetBy(10);
+    let sb = this.shape._contentBoundsLocal;
+    if (!sb && isHtmlCanvasLike(this.shape.$image) && !this.shape._alphaBoundsTried) {
+      this.shape._alphaBoundsTried = true;
+      this.shape.setContentBoundsFromTightCanvas(this.shape.$image);
+      sb = this.shape._contentBoundsLocal;
+    }
+    if (!sb) sb = this.shape.getBounds().insetBy(10);
+    let corners = [sb.topLeft, sb.topRight(), sb.bottomRight(), sb.bottomLeft()];
+    let tfm = this.transform;
+    let ownerPts = corners.map((c) => tfm.transformPt(c));
+    return unionPts(ownerPts);
+  }
+  demo() {
+    // Demo: ladybug emoji drawn directly (no canvas bake — see EmojiMorph).
+    let morph = new EmojiMorph('LADYBUG', 64);
+    morph.transform.translation = pt(280, 120);
+    Lively.addMorph(morph);
+    return morph;
+  }
+  morphCopy() {
+    let copy = new ImageMorph(this.shape.copy());
+    copy.owner = this.owner;
+    copy.transform = this.transform.copy();
+    if (this.zIndex != null) copy.zIndex = this.zIndex;
+    this.restartSteppingOnCopy(copy);
+    copy.submorphs = this.submorphs.map((m) => {
+      let sub = m.morphCopy();
+      sub.owner = copy; // not this.owner — repairSubmorphOwnership trusts the back-pointer
+      return sub;
+    });
+    return copy;
+  }
+  moveTo(pos) {
+    this.transform.translation.setToPt(pos);
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    if (effectiveMetaKey(evt)) {
+      let maybeHit = this.world().hitMorphAt(p);
+      if (maybeHit) maybeHit.showHalo();
+      return false;
+    }
+    // Let generic Morph logic manage $hitPoint, $dragActorID, and pointerFocus.
+    this.$dragStartAngle = this.transform.rotation;
+    return super.onPointerDown(p, evt);
+  }
+  dragMovedBy(delta, p, evt) {
+    super.dragMovedBy(delta, p, evt);
+    // Rotate to face drag direction (only when pointer has moved enough to reduce jitter)
+    if (Math.sqrt(delta.x * delta.x + delta.y * delta.y) > 2 && (delta.x !== 0 || delta.y !== 0)) {
+      this.transform.rotation = Math.atan2(delta.y, delta.x) + Math.PI / 2;
+    }
+  }
+  setHeading(angleDegrees) {
+    this.transform.rotation = (angleDegrees / 180) * Math.PI;
+  }
+  syncRotationToVelocity() {
+    /** Match {@link ImageMorph#dragMovedBy} drag convention: sprite “forward” aligns with velocity. */
+    let v = this.$velocity || this.velocity;
+    if (!v) return;
+    let vx = v.x;
+    let vy = v.y;
+    if (vx === 0 && vy === 0) return;
+    this.transform.rotation = Math.atan2(vy, vx) + Math.PI / 2;
+  }
+  bouncerStep() {
+    /**
+     * Step for {@link WorldMorph#makeBouncer}. Uses $-local pen/velocity; only
+     * moveTo/setRotation touch the shared document when the bug is persistent.
+     */
+    let world = this.world();
+    let pen = this.$pen;
+    let vel = this.$velocity;
+    if (!world || !pen || !vel) return;
+
+    let prevBounds = this.collisionBounds();
+    pen.location = pen.location.addPt(vel);
+    this.moveTo(pen.location);
+
+    let worldBounds = world.getBounds();
+    let bounds = this.collisionBounds();
+    let nudge = (dx, dy) => {
+      pen.location = pen.location.addPt(pt(dx, dy));
+      this.moveTo(pen.location);
+    };
+    let bounceX = () => {
+      this.$velocity = this.$velocity.flipX();
+      nudge(Math.sign(this.$velocity.x), 0);
+    };
+    let bounceY = () => {
+      this.$velocity = this.$velocity.flipY();
+      nudge(0, Math.sign(this.$velocity.y));
+    };
+
+    if (bounds.topLeft.y < worldBounds.topLeft.y && this.$velocity.y < 0) bounceY();
+    if (bounds.bottomRight().y > worldBounds.bottomRight().y && this.$velocity.y > 0) bounceY();
+    if (bounds.topLeft.x < worldBounds.topLeft.x && this.$velocity.x < 0) bounceX();
+    if (bounds.bottomRight().x > worldBounds.bottomRight().x && this.$velocity.x > 0) bounceX();
+
+    bounds = this.collisionBounds();
+    let subs = world.submorphs || [];
+    for (let i = 0; i < subs.length; i++) {
+      let other = subs.at ? subs.at(i) : subs[i];
+      if (other === this) continue;
+      let otherBounds = other.getBounds();
+      if (!bounds.overlapsRect(otherBounds)) continue;
+      if (prevBounds.overlapsRect(otherBounds)) continue;
+      let axis = bounds.overlapBounceAxis(otherBounds, this.$velocity);
+      if (axis === 'x') bounceX();
+      else if (axis === 'y') bounceY();
+      break;
+    }
+    this.syncRotationToVelocity();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  EmojiMorph
+// ------------
+// Named emoji or short literal painted with fillText each frame. No canvas raster —
+// HTMLCanvas bitmaps cannot live in the Automerge document, and `instanceof
+// window.HTMLCanvasElement` is unsafe under the LM window proxy (bound ctor).
+class EmojiMorph extends ImageMorph {
+  constructor(emojiName, sizePx) {
+    const size = Math.max(8, Math.floor(sizePx != null ? sizePx : 32));
+    super({ width: size, height: size });
+    this._emojiName = emojiName;
+    this._emojiSize = size;
+    this._emojiChar = EmojiMorph.prototype.resolveChar(emojiName);
+  }
+  morphCopy() {
+    let copy = new EmojiMorph(this._emojiName, this._emojiSize);
+    copy.owner = this.owner;
+    copy.transform = this.transform.copy();
+    if (this.zIndex != null) copy.zIndex = this.zIndex;
+    this.restartSteppingOnCopy(copy);
+    copy.submorphs = this.submorphs.map((m) => {
+      let sub = m.morphCopy();
+      sub.owner = copy; // not this.owner — repairSubmorphOwnership trusts the back-pointer
+      return sub;
+    });
+    return copy;
+  }
+  renderMeOn(ctx) {
+    let b = this.shape.getBounds();
+    let size = this._emojiSize != null ? this._emojiSize : Math.min(b.width(), b.height());
+    let ch = this._emojiChar || EmojiMorph.prototype.resolveChar(this._emojiName);
+    ctx.save();
+    // Color-emoji fonts first; generic sans-serif is a last-ditch fallback.
+    ctx.font = size + 'px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ch, b.center().x, b.center().y);
+    ctx.restore();
+  }
+  resolveChar(name) {
+    if (name == null || name === '') return '\u{1F41E}';
+    let s = ('' + name).trim();
+    let key = s.toUpperCase().replace(/\s+/g, ' ');
+    if (this.emojiByName[key]) return this.emojiByName[key];
+    if (s.length <= 8 && /\p{Extended_Pictographic}/u.test(s)) return s;
+    return '\u{1F41E}';
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+EmojiMorph.prototype.emojiByName = {
+  'LADY BEETLE': '\u{1F41E}',
+  LADYBUG: '\u{1F41E}',
+  BUTTERFLY: '\u{1F98B}',
+  SNAIL: '\u{1F40C}',
+  BEE: '\u{1F41D}',
+  BUG: '\u{1F41B}',
+  FOX: '\u{1F98A}',
+  'FOX FACE': '\u{1F98A}',
+};
+
+//  LineMorph
+// -----------
+// Interactive polyline: hover handles, vertex drag/merge.
+class LineMorph extends Morph {
+  constructor(vertices, opts = {}) {
+    let verts = vertices.map((v) => pt(v.x, v.y));
+    let worldBounds = PolyLine.boundsForVertices(
+      verts,
+      opts.borderWidth != null ? opts.borderWidth : 2,
+    );
+    let origin = worldBounds.topLeft.copy();
+    let localVerts = verts.map((v) => v.subPt(origin));
+    let pl = new PolyLine(localVerts, opts.borderWidth ?? 2, opts.borderColor ?? Color.black);
+    pl.curved = opts.beCurved === true;
+    pl.closed = opts.beClosed === true;
+    pl.arrowheads = LineMorph.prototype.normalizeArrowheads(opts.arrowheads);
+    super(null, pl);
+    this.transform.translation = origin;
+    this.bounds = worldBounds.copy();
+    this.arrowheads = pl.arrowheads;
+    this.handleRadius = opts.handleRadius != null ? opts.handleRadius : 5;
+    this.$vertexHandles = [];
+    this.$midpointHandles = [];
+    this.$vertexDragActive = false;
+    this.$dragVertexIndex = null;
+    this.$mergeNeighborIx = null;
+  }
+  adjacentOverlapVertex(dragIx) {
+    /** Neighboring vertex index if drag handle overlaps it (circles touch), else null. */
+    let verts = this.shape.vertices;
+    if (dragIx == null || dragIx < 0 || dragIx >= verts.length) return null;
+    let lim = 2 * this.handleRadius * 0.98;
+    if (dragIx > 0 && verts[dragIx].dist(verts[dragIx - 1]) < lim) return dragIx - 1;
+    if (dragIx < verts.length - 1 && verts[dragIx].dist(verts[dragIx + 1]) < lim) return dragIx + 1;
+    return null;
+  }
+  beClosed(on) {
+    /** Connect last vertex back to first. `line.beClosed(true)` or read `line.beClosed()`. */
+    if (arguments.length === 0) return !!this.shape.closed;
+    this.shape.closed = !!on;
+    this.changed();
+    let world = this.world();
+    if (world && world.changed) world.changed();
+    this.syncShapeFromVertices();
+    return this;
+  }
+  beCurved(on) {
+    /** Smooth Bézier vs straight segments. `line.beCurved(true)` or read `line.beCurved()`. */
+    if (arguments.length === 0) return !!this.shape.curved;
+    this.shape.curved = !!on;
+    this.changed();
+    let world = this.world();
+    if (world && world.changed) world.changed();
+    return this;
+  }
+  beginEphemeralTransform() {
+    /**
+     * Vertex geometry joins the ephemeral scheme: a reshape (vertex/midpoint
+     * handle drag) must stay out of the shared document until the one commit on
+     * pointer-up, exactly like transform/bounds. See {@link PolyLine}'s vertices
+     * getter and {@link LineMorph#commitEphemeralTransform}.
+     */
+    super.beginEphemeralTransform();
+    if (this.$transform == null) return; // legacy/shadowed morph: stay on the direct path
+    let sh = this.shape;
+    if (sh == null || sh.$vertices != null) return; // no shape, or adopted remote overlay
+    let eph = sh.vertices.map((v) => v.copy());
+    sh.$vertices = eph;
+    // A shape from a pre-getter document carries an own `vertices` data property
+    // that shadows the prototype accessors; leave it on its old direct-mutation
+    // path (the commit skips it too — see the _vertices check there).
+    if (sh.vertices !== eph) sh.$vertices = null;
+  }
+  clearAllHandles() {
+    this.clearVertexHandles();
+    this.clearMidpointHandles();
+  }
+  clearMidpointHandles() {
+    (this.$midpointHandles || []).forEach((h) => h.remove());
+    this.$midpointHandles = [];
+  }
+  clearVertexHandles() {
+    (this.$vertexHandles || []).forEach((h) => h.remove());
+    this.$vertexHandles = [];
+  }
+  commitEphemeralTransform() {
+    /**
+     * End of an interaction: promote the ephemeral vertices into the persistent
+     * (document) list, then let the base class commit transform/bounds. Value
+     * writes only — same-value writes are elided at the storage layer, so a
+     * whole-line drag (which never edits vertices) or a reshape that ends where
+     * it started costs no vertex ops; count changes (midpoint insert, merge)
+     * push/splice.
+     */
+    let sh = this.shape;
+    let eph = sh != null ? sh.$vertices : null;
+    if (eph != null) {
+      sh.$vertices = null;
+      // _vertices == null means a pre-getter shape whose own `vertices` property
+      // shadows the accessors: it was never ephemeral (begin backs out), so any
+      // $vertices here came from a remote overlay — drop it, never commit it.
+      if (sh._vertices != null) {
+        let verts = sh._vertices;
+        let n = Math.min(verts.length, eph.length);
+        for (let i = 0; i < n; i++) verts[i].setToPt(eph[i]);
+        for (let i = verts.length; i < eph.length; i++) verts.push(eph[i]);
+        if (verts.length > eph.length) verts.splice(eph.length, verts.length - eph.length);
+        sh.recomputeBounds();
+      } else {
+        eph = null;
+      }
+    }
+    super.commitEphemeralTransform();
+    // After the base commit so the persistent bounds pick up the final geometry.
+    if (eph != null) this.syncBoundsFromGeometry();
+  }
+  ensureMidpointHandles() {
+    let mids = this.segmentMidpoints();
+    let r = Math.max(3, this.handleRadius - 1);
+    if (this.$midpointHandles && this.$midpointHandles.length === mids.length) {
+      this.layoutMidpointHandles();
+      return;
+    }
+    this.clearMidpointHandles();
+    // Per-user hover UI: handles attach via the ephemeral layer, never the document.
+    this.$midpointHandles = mids.map((m) => {
+      let h = new LineMidpointHandle(this, m.segmentIndex, r);
+      this.addEphemeralMorph(h);
+      h.positionAt(m.pt);
+      return h;
+    });
+  }
+  ensureVertexHandles() {
+    let verts = this.shape.vertices;
+    let r = this.handleRadius;
+    let needRebuild =
+      !this.$vertexHandles ||
+      this.$vertexHandles.length !== verts.length ||
+      this.$vertexHandles.some((h) => h.owner !== this);
+    if (!needRebuild) {
+      this.layoutVertexHandles();
+      return;
+    }
+    this.clearVertexHandles();
+    // Per-user hover UI: handles attach via the ephemeral layer, never the document.
+    this.$vertexHandles = verts.map((v, i) => {
+      let h = new LineVertexHandle(this, i, r);
+      this.addEphemeralMorph(h);
+      h.positionAtVertex(v);
+      return h;
+    });
+  }
+  hoverHitBounds() {
+    let verts = this.shape.vertices;
+    if (!verts || verts.length < 1) return this.shape.getBounds().expandBy(10);
+    let pad = 10 + (this.handleRadius != null ? this.handleRadius : 5);
+    return unionPts(verts).expandBy(pad);
+  }
+  insertVertexOnSegment(segmentIndex, p) {
+    // NB: don't name the parameter `pt` — it would shadow the global pt() below.
+    let verts = this.shape.vertices;
+    let ix = segmentIndex + 1;
+    verts.splice(ix, 0, pt(p.x, p.y));
+    this.syncShapeFromVertices();
+    return ix;
+  }
+  isLineHandle(m) {
+    return this.isVertexHandle(m) || this.isMidpointHandle(m);
+  }
+  isMidpointHandle(m) {
+    return m && m.className === 'LineMidpointHandle' && m.lineMorph === this;
+  }
+  isVertexHandle(m) {
+    return m && m.className === 'LineVertexHandle' && m.lineMorph === this;
+  }
+  layoutMidpointHandles() {
+    let mids = this.segmentMidpoints();
+    if (!this.$midpointHandles || this.$midpointHandles.length !== mids.length) return;
+    mids.forEach((m, i) => this.$midpointHandles[i].positionAt(m.pt));
+  }
+  layoutVertexHandles() {
+    let verts = this.shape.vertices;
+    if (!this.$vertexHandles || this.$vertexHandles.length !== verts.length) return;
+    verts.forEach((v, i) => this.$vertexHandles[i].positionAtVertex(v));
+  }
+  mergeDraggedVertexWithNeighbor() {
+    let dragIx = this.$dragVertexIndex;
+    let neighbor = this.$mergeNeighborIx;
+    if (dragIx == null || neighbor == null) return;
+    let verts = this.shape.vertices;
+    if (verts.length < 3) return;
+    let removeIx = dragIx;
+    if (neighbor > dragIx) removeIx = neighbor;
+    verts.splice(removeIx, 1);
+    this.$dragVertexIndex = null;
+    this.$mergeNeighborIx = null;
+    this.syncShapeFromVertices();
+  }
+  morphCopy() {
+    let worldVerts = this.shape.vertices.map((v) => this.globalize(v));
+    let copy = new LineMorph(worldVerts, {
+      borderWidth: this.shape.borderWidth,
+      borderColor: this.shape.borderColor,
+      arrowheads: this.arrowheads,
+      beCurved: this.shape.curved,
+      beClosed: this.shape.closed,
+      handleRadius: this.handleRadius,
+    });
+    copy.owner = this.owner;
+    if (this.zIndex != null) copy.zIndex = this.zIndex;
+    this.restartSteppingOnCopy(copy);
+    return copy;
+  }
+  morphMenu() {
+    return {
+      items: ['be curved', 'be closed', '---------', '------->', '<-------', '<----->'],
+      onSelect: function (item, line) {
+        if (item === 'be curved') line.beCurved(!line.beCurved());
+        if (item === 'be closed') line.beClosed(!line.beClosed());
+        if (item === '---------') line.setArrowheads('none');
+        if (item === '------->') line.setArrowheads('end');
+        if (item === '<-------') line.setArrowheads('start');
+        if (item === '<----->') line.setArrowheads('both');
+      },
+    };
+  }
+  moveBy(delta) {
+    super.moveBy(delta);
+    this.syncBoundsFromGeometry();
+  }
+  normalizeArrowheads(spec) {
+    /** @returns {'none'|'start'|'end'|'both'} */
+    if (spec === '---------' || spec === '--------' || spec === '------') return 'none';
+    if (spec === '------->' || spec === '------>' || spec === '---->') return 'end';
+    if (spec === '<-------' || spec === '<------' || spec === '<----') return 'start';
+    if (spec === '<----->' || spec === '<------->' || spec === '<--->') return 'both';
+    if (spec === true || spec === 'end') return 'end';
+    if (spec === false || spec === 'none' || spec == null) return 'none';
+    if (spec === 'start' || spec === 'both') return spec;
+    return 'none';
+  }
+  onPointerDown(p, evt) {
+    if (!this.fullBounds().includesPt(p)) return false;
+    let localP = this.relativize(p);
+    let onHandle = this.submorphs.some((sub) => sub.includesPt(localP));
+    if (!onHandle && !this.shape.includesPt(localP)) return false;
+    return super.onPointerDown(p, evt);
+  }
+  refreshMergeHighlight() {
+    let dragIx = this.$dragVertexIndex;
+    let neighbor = this.adjacentOverlapVertex(dragIx);
+    this.$mergeNeighborIx = neighbor;
+    (this.$vertexHandles || []).forEach((h, i) => {
+      let on = neighbor != null && (i === dragIx || i === neighbor);
+      if (h.setMergeHighlight) h.setMergeHighlight(on);
+    });
+  }
+  remove() {
+    this.clearAllHandles();
+    return super.remove();
+  }
+  segmentMidpoints() {
+    let verts = this.shape.vertices;
+    let mids = [];
+    for (let i = 0; i < verts.length - 1; i++) {
+      mids.push({
+        segmentIndex: i,
+        pt: verts[i].addPt(verts[i + 1]).scaleBy(0.5),
+      });
+    }
+    if (this.shape.closed && verts.length >= 3) {
+      let i = verts.length - 1;
+      mids.push({
+        segmentIndex: i,
+        pt: verts[i].addPt(verts[0]).scaleBy(0.5),
+      });
+    }
+    return mids;
+  }
+  setArrowheads(spec) {
+    let ah = LineMorph.prototype.normalizeArrowheads(spec);
+    this.shape.arrowheads = ah;
+    this.arrowheads = ah;
+    this.changed();
+    let world = this.world();
+    if (world && world.changed) world.changed();
+    return this;
+  }
+  syncGeometryFromVertices() {
+    /** Refresh shape/morph bounds from current vertices (hover region, hit testing). */
+    let sh = this.shape;
+    if (sh.$vertices != null) {
+      // Mid-reshape: the shape's document rect stays frozen (like the halo Scale
+      // preview) and only the morph's ephemeral bounds track the geometry, so
+      // per-frame moves make no document writes. The real shape bounds are
+      // recomputed once, in the commit.
+      let b = sh
+        .boundsForVertices(sh.vertices, sh.borderWidth)
+        .translatedBy(this.transform.translation);
+      if (this.bounds != null) this.bounds.setToRect(b);
+      else this.bounds = b;
+      return;
+    }
+    sh.recomputeBounds();
+    this.syncBoundsFromGeometry();
+  }
+  syncShapeFromVertices() {
+    this.syncGeometryFromVertices();
+    let n = this.shape.vertices.length;
+    if (!this.$vertexHandles || this.$vertexHandles.length !== n) this.ensureVertexHandles();
+    else this.layoutVertexHandles();
+    if (!this.$vertexDragActive) {
+      let nm = this.segmentMidpoints().length;
+      if (!this.$midpointHandles || this.$midpointHandles.length !== nm)
+        this.ensureMidpointHandles();
+      else this.layoutMidpointHandles();
+    }
+    this.changed();
+  }
+  updateHoverHandles(worldP) {
+    /**
+     * Show handles while the pointer is over the line (or mid-reshape), hide them
+     * when it leaves. Driven by the local user's pointer moves (see
+     * {@link WorldMorph#updateHoverUI}); handles are per-user ephemeral submorphs.
+     */
+    if (this.$vertexDragActive) {
+      this.ensureVertexHandles();
+      this.clearMidpointHandles();
+      return;
+    }
+    let world = this.world();
+    if (!world) return;
+    let pf = world.$pointerFocus;
+    if (pf && this.isLineHandle(pf)) {
+      this.ensureVertexHandles();
+      if (!this.isMidpointHandle(pf)) this.ensureMidpointHandles();
+      return;
+    }
+    if (!worldP) {
+      this.clearAllHandles();
+      return;
+    }
+    let localP = this.localize(worldP);
+    // Handles poke past the stroke's hit tolerance: keep them alive while the
+    // pointer is on one, or its far rim would vanish before it can be clicked.
+    let onHandle =
+      (this.$vertexHandles || []).some((h) => h.includesPt(localP)) ||
+      (this.$midpointHandles || []).some((h) => h.includesPt(localP));
+    if (!onHandle && !this.shape.includesPt(localP)) {
+      this.clearAllHandles();
+      return;
+    }
+    this.ensureVertexHandles();
+    this.ensureMidpointHandles();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  LineVertexHandle
+// ------------------
+// White disk on a vertex; drag to move or merge.
+class LineVertexHandle extends Morph {
+  constructor(lineMorph, vertexIndex, radius) {
+    const handleRadius = radius != null ? radius : 5;
+    let ell = new Ellipse(pt(0, 0), handleRadius);
+    ell.setColor(Color.white);
+    ell.setBorderWidth(1);
+    ell.setBorderColor(Color.gray);
+    super(null, ell);
+    this.lineMorph = lineMorph;
+    this.vertexIndex = vertexIndex;
+    this.handleRadius = handleRadius;
+    this.$alwaysOnTop = true; // hover UI: draw above the line's other submorphs (see zBand)
+  }
+  acceptsDroppingMorphs() {
+    return false;
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    let lm = this.lineMorph;
+    lm.$vertexDragActive = true;
+    lm.$dragVertexIndex = this.vertexIndex;
+    lm.$mergeNeighborIx = null;
+    lm.clearMidpointHandles();
+    // Shared drag protocol with the line as drag target: per-move reshapes land
+    // on ephemeral vertices/bounds (streamed live to peers), one document commit
+    // on pointer-up — same as plain morph drags.
+    return this.beginPointerDrag(p, evt, lm);
+  }
+  onPointerMove(p, evt) {
+    return this.continuePointerDrag(p, evt);
+  }
+  dragMovedBy(delta, p, evt) {
+    let lm = this.lineMorph;
+    let verts = lm.shape.vertices; // the ephemeral list during the drag
+    let i = lm.$dragVertexIndex != null ? lm.$dragVertexIndex : this.vertexIndex;
+    if (i < 0 || i >= verts.length) return;
+    verts[i] = pt(p.x, p.y);
+    lm.syncGeometryFromVertices();
+    lm.layoutVertexHandles();
+    lm.refreshMergeHighlight();
+    lm.changed();
+  }
+  dragEnded(p, evt, wasDrag) {
+    // Merge before finishPointerDrag's commit, so the whole reshape (including
+    // the removed vertex) lands in the document as a single write.
+    let lm = this.lineMorph;
+    if (lm.$mergeNeighborIx != null) lm.mergeDraggedVertexWithNeighbor();
+  }
+  onPointerUp(p, evt) {
+    let lm = this.lineMorph;
+    // endPointerDrag: merge (dragEnded), commit, then the end-of-stream message —
+    // which reads vertices while $vertexDragActive is still set, so clear after.
+    this.endPointerDrag(p, evt);
+    lm.$vertexDragActive = false;
+    lm.$dragVertexIndex = null;
+    lm.$mergeNeighborIx = null;
+    lm.syncShapeFromVertices();
+    return true;
+  }
+  positionAtVertex(v) {
+    this.setBounds(v.boundsWithRadius(this.handleRadius));
+  }
+  setMergeHighlight(on) {
+    if (on) {
+      this.shape.setColor(Color.orange);
+      this.shape.setBorderColor(Color.orange);
+    } else {
+      this.shape.setColor(Color.white);
+      this.shape.setBorderColor(Color.gray);
+    }
+    this.changed();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  LineMidpointHandle
+// --------------------
+// Green disk on a segment; click inserts a vertex.
+class LineMidpointHandle extends Morph {
+  constructor(lineMorph, segmentIndex, radius) {
+    const handleRadius = radius != null ? radius : 4;
+    let ell = new Ellipse(pt(0, 0), handleRadius);
+    ell.setColor(Color.green.lighter());
+    ell.setBorderWidth(1);
+    ell.setBorderColor(Color.gray);
+    super(null, ell);
+    this.lineMorph = lineMorph;
+    this.segmentIndex = segmentIndex;
+    this.handleRadius = handleRadius;
+    this.$dragVertexIndex = null;
+    this.$alwaysOnTop = true; // hover UI: draw above the line's other submorphs (see zBand)
+  }
+  acceptsDroppingMorphs() {
+    return false;
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    let lm = this.lineMorph;
+    lm.$vertexDragActive = true;
+    // Begin the shared drag protocol BEFORE inserting: the new vertex then lands
+    // on the ephemeral list, so even the insert reaches the document only via the
+    // one commit on pointer-up.
+    this.beginPointerDrag(p, evt, lm);
+    let newIx = lm.insertVertexOnSegment(this.segmentIndex, p);
+    lm.$dragVertexIndex = newIx;
+    lm.$mergeNeighborIx = null;
+    this.$dragVertexIndex = newIx;
+    lm.ensureVertexHandles();
+    lm.clearMidpointHandles();
+    return true;
+  }
+  onPointerMove(p, evt) {
+    if (this.$dragVertexIndex == null) return false;
+    return this.continuePointerDrag(p, evt);
+  }
+  dragMovedBy(delta, p, evt) {
+    let lm = this.lineMorph;
+    let verts = lm.shape.vertices; // the ephemeral list during the drag
+    let i = lm.$dragVertexIndex;
+    if (i == null || i < 0 || i >= verts.length) return;
+    verts[i] = pt(p.x, p.y);
+    lm.syncGeometryFromVertices();
+    lm.layoutVertexHandles();
+    lm.refreshMergeHighlight();
+    lm.changed();
+  }
+  dragEnded(p, evt, wasDrag) {
+    // Merge before finishPointerDrag's commit — see LineVertexHandle.dragEnded.
+    let lm = this.lineMorph;
+    if (lm.$mergeNeighborIx != null) lm.mergeDraggedVertexWithNeighbor();
+  }
+  onPointerUp(p, evt) {
+    let lm = this.lineMorph;
+    // Commit + end-of-stream first; $vertexDragActive must still be set for the
+    // final broadcast (see LineVertexHandle.onPointerUp).
+    this.endPointerDrag(p, evt);
+    this.$dragVertexIndex = null;
+    lm.$vertexDragActive = false;
+    lm.$dragVertexIndex = null;
+    lm.$mergeNeighborIx = null;
+    lm.syncShapeFromVertices();
+    return true;
+  }
+  positionAt(v) {
+    this.setBounds(v.boundsWithRadius(this.handleRadius));
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +------------------+
+// |  Text UI Morphs  |
+// +------------------+
+// TextMorph editors, buttons, and keyboard key caps.
+
+function latestPasteBufferItem() {
+  if (!pasteBufferItems || pasteBufferItems.length === 0) return 'nothing to paste';
+  return pasteBufferItems[pasteBufferItems.length - 1];
+}
+function copyTextToOSClipboard(text) {
+  /**
+   * Push text to the system pasteboard. Uses execCommand('copy') synchronously
+   * (needs a real user-gesture turn — see sync keydown/menu pointerup in initUI),
+   * and also nudges navigator.clipboard.writeText when available.
+   */
+  let txt = text == null ? '' : '' + text;
+  copyTextToOSClipboardExecCommand(txt);
+  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      navigator.clipboard.writeText(txt).catch(() => {});
+    } catch (err) {
+      /* ignore */
+    }
+  }
+}
+function copyTextToOSClipboardExecCommand(text) {
+  try {
+    let doc = typeof document !== 'undefined' ? document : null;
+    if (!doc || !doc.body) return;
+    let ta = doc.createElement('textarea');
+    ta.value = '' + text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    doc.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    doc.execCommand('copy');
+    doc.body.removeChild(ta);
+  } catch (err) {
+    console.log('OS clipboard copy failed: ' + err);
+  }
+}
+function addPasteBufferItem(item) {
+  if (!pasteBufferItems || !Array.isArray(pasteBufferItems))
+    pasteBufferItems = ['nothing to paste'];
+  let txt = item == null ? '' : '' + item;
+  pasteBufferItems.push(txt);
+  while (pasteBufferItems.length > 4) pasteBufferItems.shift();
+  copyPasteBuffer = txt; // compatibility for any older callers
+}
+function showPasteHistoryMenu(pane, textBox) {
+  let world = pane && pane.world ? pane.world() : null;
+  if (!world || !textBox) return;
+  let history =
+    pasteBufferItems && pasteBufferItems.length ? pasteBufferItems.slice() : ['nothing to paste'];
+  let entries = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    let raw = history[i];
+    let preview = ('' + raw).replace(/\n/g, '↩');
+    if (preview.length === 0) preview = '(empty)';
+    if (preview.length > 72) preview = preview.slice(0, 72) + '…';
+    entries.push({ label: history.length - i + '. ' + preview, text: '' + raw });
+  }
+  let anchor =
+    getPointerLocation() ||
+    (pane.globalize ? pane.globalize(pane.shape.getBounds().topLeft) : pt(8, 8));
+  let menu = null;
+  menu = new MenuMorph(
+    rect(anchor.x, anchor.y, 320, Math.max(48, 24 + entries.length * 18)),
+    entries.map((e) => e.label),
+    function (label) {
+      if (menu) menu.remove();
+      let hit = entries.find((e) => e.label === label);
+      if (!hit) return;
+      let priorScrollPos = pane.getScrollPosition ? pane.getScrollPosition() : null;
+      let oldH = textBox.extent.y;
+      textBox.paste(hit.text);
+      let newH = textBox.extent.y;
+      if (pane.onTextBoundsChanged && newH !== oldH) pane.onTextBoundsChanged(priorScrollPos);
+    },
+  );
+  world.addEphemeralMorph(menu);
+}
+//  TextMorph
+// -----------
+// Morph whose shape is a TextBox; pane keyboard focus target.
+class TextMorph extends Morph {
+  constructor(bounds, str) {
+    super(
+      bounds,
+      new TextBox(
+        bounds,
+        str,
+        '\n',
+        16,
+        '14px sans-serif',
+        Color.black,
+        Color.veryLightGray,
+        Color.green.lighter(),
+      ),
+    );
+  }
+  dragFrom(p, evt) {
+    this.textDragHack = true;
+    return super.dragFrom(p, evt);
+  }
+  onKeyDown(evt) {
+    let priorScrollPos = null;
+    if (this.owner && this.owner.getScrollPosition) priorScrollPos = this.owner.getScrollPosition();
+    let oldH = this.shape.extent.y;
+    let wasDirty = !!(
+      this.owner &&
+      typeof this.owner.hasUnsavedChanges == 'function' &&
+      this.owner.hasUnsavedChanges()
+    );
+    this.shape.acceptKeyboardInput(evt);
+    let nowDirty = !!(
+      this.owner &&
+      typeof this.owner.hasUnsavedChanges == 'function' &&
+      this.owner.hasUnsavedChanges()
+    );
+    if (!wasDirty && nowDirty && this.shape.editorID == null) this.shape.editorID = evt.actorID;
+    if (!nowDirty) this.shape.editorID = null;
+    if (this.shape.extent.y != oldH) this.owner.onTextBoundsChanged(priorScrollPos);
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    this.$hitPoint = p;
+    this.$dragActorID = evt.actorID;
+    let localP = this.relativize(p);
+    if (effectiveShiftKey(evt)) this.shape.shiftExtendSelectionToPointer(localP);
+    else this.shape.startSelectionAt(localP);
+    this.world().setKeyboardFocus(this);
+    this.world().setPointerFocus(this);
+    return true;
+  }
+  onPointerMove(p, evt) {
+    // event handling should go to the shape (text); while morph ops to morph(super)...
+    // *** If event focus is working right, we should be able to drop pointer events
+    //     here, and just let them be handled in superclass Morph
+    if (!this.includesPt(p)) return false;
+    // Shift-drag extends selection range; it should not switch to morph-drag behavior.
+    if (effectiveShiftKey(evt)) {
+      if (this.$hitPoint) this.shape.extendSelectionTo(this.relativize(p));
+      return true;
+    }
+    if (this.$hitPoint) this.shape.extendSelectionTo(this.relativize(p));
+    return true;
+  }
+  onPointerUp(p, evt) {
+    // event handling should go to the shape (text); while morph ops to morph(super)...
+    if (!this.includesPt(p)) {
+      // Release pointer focus even when mouse-up happens outside pane bounds.
+      this.$dragActorID = null;
+      this.$hitPoint = null;
+      this.world().setPointerFocus(null);
+      return true;
+    }
+    this.shape.finSelection(); // A chance to notice selectWord click
+    this.$dragActorID = null;
+    this.$hitPoint = null;
+    this.world().setPointerFocus(null);
+    return true;
+  }
+  renderOn(ctx) {
+    let dirty = false;
+    if (
+      this.owner &&
+      this.owner.className == 'TextPane' &&
+      typeof this.owner.hasUnsavedChanges == 'function' &&
+      this.owner.hasUnsavedChanges()
+    )
+      dirty = true;
+    this.shape._unsavedInnerBorder = dirty;
+    if (!dirty) this.shape.editorID = null;
+    super.renderOn(ctx);
+  }
+  setText(str) {
+    this.shape.setText(str); // *** should probably adjust bounds due to recompose
+  }
+  setWorkspaceObj(wsObj) {
+    // Arrange it so that evals in this text will have access to wsObj)
+    this.shape.setWorkspaceObj(wsObj);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  SimpleButtonMorph
+// -------------------
+// TextMorph styled as a labeled button.
+class SimpleButtonMorph extends TextMorph {
+  constructor(bounds, label) {
+    super(bounds, label == null ? ' ' : label);
+    this.shape.boxColor = Color.lightGray;
+    this.shape.borderWidth = 1;
+    this.shape.borderColor = Color.gray;
+    this.shape.noMenuLineHighlight = true;
+    this.shape.disableSelectionRendering = true;
+    this.shape.$selStart = null;
+    this.shape.$selStop = null;
+    this.shape.inset = pt(0, 0);
+    this.shape.hang = 0;
+    this.shape.composeBottomPad = 0;
+    this.shape.centerGlyph = true;
+    this.shape.verticallyCenterSingleLine = true;
+    this.shape.verticalNudge = 8;
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    this.$hitPoint = p;
+    this.$dragActorID = evt.actorID;
+    this.world().setPointerFocus(this);
+    return true;
+  }
+  onPointerMove(p, evt) {
+    return false;
+  }
+  onPointerUp(p, evt) {
+    this.$dragActorID = null;
+    this.$hitPoint = null;
+    return true;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  KbdKeyMorph
+// -------------
+// On-screen keyboard key cap.
+class KbdKeyMorph extends SimpleButtonMorph {
+  constructor(bounds, label, keySpec, keyboardMorph) {
+    super(bounds, label);
+    this.keySpec = keySpec;
+    this.keyboardMorph = keyboardMorph;
+    this._kbdKeyBaseBoxColor =
+      this.shape && this.shape.boxColor ? this.shape.boxColor.copy() : Color.lightGray.copy();
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    this.$hitPoint = p;
+    this.$dragActorID = evt.actorID;
+    if (this.keyboardMorph) this.keyboardMorph.handleVirtualKey(this.keySpec, evt);
+    this.world().setPointerFocus(this);
+    return true;
+  }
+  onPointerMove(p, evt) {
+    return !!this.$hitPoint;
+  }
+  onPointerUp(p, evt) {
+    this.$dragActorID = null;
+    this.$hitPoint = null;
+    if (this.world() && this.world().$pointerFocus === this) this.world().setPointerFocus(null);
+    return true;
+  }
+  refreshModifierHighlight() {
+    let spec = this.keySpec;
+    let base = this._kbdKeyBaseBoxColor || Color.lightGray;
+    let active = false;
+    if (spec && spec.type === 'shift') active = isShiftKeyPressed();
+    else if (spec && spec.type === 'caps_unused') active = isLockKeyPressed();
+    else if (spec && spec.type === 'meta_toggle') active = $metaKeyPressedFlag;
+    this.shape.boxColor = active ? padModifierHighlightOn(base) : base;
+    this.changed();
+  }
+  setKeyLabel(label) {
+    this.setText(label);
+    this.shape.$selStart = null;
+    this.shape.$selStop = null;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +-------------------+
+// |  Menus and Lists  |
+// +-------------------+
+// ListMorph, MenuMorph, and pane/world menu helpers.
+
+function isMenuSeparator(item) {
+  return item === menuSeparator;
+}
+function menuSeparatorDisplay() {
+  return '———';
+}
+/**
+ * Build a menu entry with its label beside its action — easier to read and to
+ * edit live (findItem / addItemBefore / removeItem) than a string list + switch.
+ * Prefer: menuItem('Open Transcript', () => { Transcript = openTranscript(); })
+ * Also accepted by MenuMorph: ['label', action] tuples.
+ *
+ * Note: MenuMorph expands these into plain string labels in itemList plus a
+ * parallel menuActions table.
+ */
+function menuItem(label, action) {
+  return { label: '' + label, action: action };
+}
+function isMenuItemSpec(item) {
+  return (
+    item != null &&
+    typeof item === 'object' &&
+    !Array.isArray(item) &&
+    item !== menuSeparator &&
+    item.label != null
+  );
+}
+function menuItemLabel(item) {
+  /** Display / match string for any menu list entry (spec, tuple, string, separator). */
+  if (isMenuSeparator(item)) return menuSeparatorDisplay();
+  if (typeof item === 'string') return item;
+  if (isMenuItemSpec(item)) return '' + item.label;
+  if (Array.isArray(item) && item.length > 0) return '' + item[0];
+  return '' + item;
+}
+function menuItemAction(item) {
+  if (isMenuItemSpec(item) && typeof item.action === 'function') return item.action;
+  if (Array.isArray(item) && typeof item[1] === 'function') return item[1];
+  return null;
+}
+function expandMenuItemEntry(item) {
+  /** Split a constructor/edit entry into { label, action } for install into MenuMorph. */
+  if (isMenuSeparator(item)) return { label: menuSeparator, action: null };
+  if (typeof item === 'string') return { label: item, action: null };
+  if (Array.isArray(item))
+    return {
+      label: '' + item[0],
+      action: typeof item[1] === 'function' ? item[1] : null,
+    };
+  if (isMenuItemSpec(item))
+    return {
+      label: '' + item.label,
+      action: typeof item.action === 'function' ? item.action : null,
+    };
+  return { label: '' + item, action: null };
+}
+function menuItemFrom(labelOrItem, actionIfAny) {
+  /**
+   * Coerce addItem / addItemBefore arguments into a list entry.
+   * menuItemFrom('Hi', fn) | menuItemFrom(menuItem(...)) | menuItemFrom(['Hi', fn]) | menuItemFrom(fn)
+   */
+  if (actionIfAny !== undefined) return menuItem('' + labelOrItem, actionIfAny);
+  if (isMenuSeparator(labelOrItem) || typeof labelOrItem === 'string') return labelOrItem;
+  if (isMenuItemSpec(labelOrItem)) return labelOrItem;
+  if (Array.isArray(labelOrItem)) return menuItem('' + labelOrItem[0], labelOrItem[1]);
+  if (typeof labelOrItem === 'function') {
+    let n = labelOrItem.name;
+    return menuItem(n && n !== '' ? n : 'item', labelOrItem);
+  }
+  return labelOrItem;
+}
+function methodSelectorPaneMenuSpec(panel) {
+  /** Pane menu for method-selector list panes (browser message list, method-list panel, …). */
+  return {
+    items: [
+      'spawn this method to its own window',
+      'export this method to the OS paste buffer',
+      menuSeparator,
+      'delete this method',
+    ],
+    onSelect: (item, pane) => {
+      if (isMenuSeparator(item)) return;
+      if (item == 'spawn this method to its own window') panel.spawnMethodCopyToWindow();
+      if (item == 'export this method to the OS paste buffer') panel.exportMethodCopyToOSPaste();
+      if (item == 'delete this method') panel.promptDeleteThisMethod();
+    },
+  };
+}
+function classSelectorPaneMenuSpec(panel) {
+  /** Pane menu for class-selector list pane (browser class list). */
+  return {
+    items: [
+      'spawn this class to its own window',
+      'export this class to the OS paste buffer',
+      menuSeparator,
+      'delete this class',
+    ],
+    onSelect: (item, pane) => {
+      if (isMenuSeparator(item)) return;
+      if (item == 'spawn this class to its own window') panel.spawnThisClassToWindow();
+      if (item == 'export this class to the OS paste buffer') panel.exportThisClassToOSPaste();
+      if (item == 'delete this class') panel.promptDeleteThisClass();
+    },
+  };
+}
+function menuToggleLabel(caption, on) {
+  /** Brackets only — handlers match with `item.endsWith(caption)`. */
+  return (on ? '[X] ' : '[ ] ') + caption;
+}
+function menuItemCaption(item) {
+  /** Strip `[X] ` / `[ ] ` prefix; also accepts a bare caption or truncated display line. */
+  let s = menuItemLabel(item);
+  if (s.startsWith('[X] ')) return s.slice(4);
+  if (s.startsWith('[ ] ')) return s.slice(4);
+  return s;
+}
+function refreshWorldMenuItems(menuMorph) {
+  /** Refresh toggle labels in place; keep menuActions aligned by index. */
+  let list = menuMorph.itemList || [];
+  for (let i = 0; i < list.length; i++) {
+    let cap = menuItemCaption(list[i]);
+    if (cap === longClickForHalosLabel || cap.endsWith(longClickForHalosLabel))
+      list[i] = menuToggleLabel(longClickForHalosLabel, $longClickForHalos);
+    else if (cap === onScreenKeyboardLabel || cap.endsWith(onScreenKeyboardLabel))
+      list[i] = menuToggleLabel(onScreenKeyboardLabel, $useOnScreenKbd);
+  }
+  // Relayout labels only — do not reinstall (would drop menuActions).
+  if (menuMorph.relayoutItemList) menuMorph.relayoutItemList();
+  else ListMorph.prototype.setList.call(menuMorph, list);
+}
+//  ListMorph
+// -----------
+// Vertical list of strings; line selection.
+class ListMorph extends Morph {
+  constructor(initialBounds, list, actionFn) {
+    super(
+      initialBounds,
+      new TextBox(
+        initialBounds,
+        'text',
+        ' ',
+        16,
+        '14px sans-serif',
+        Color.black,
+        Color.veryLightGray,
+        Color.green.lighter(),
+      ),
+    );
+    this.shape.setNoBreak(true);
+    this.setList(list);
+    this.setSelectFn(actionFn);
+  }
+  onPointerDown(p, evt) {
+    // p is in owner coordinates; includesPt(p) uses relativize(p) for shape hit test
+    if (!this.includesPt(p)) return false;
+    clearKeyboardFocusUnlessTypingOrOsk(this);
+    this.$hitPoint = p;
+    this.$dragActorID = evt.actorID;
+    this.shape.selectLineAt(this.relativize(p));
+    this.world().setPointerFocus(this);
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    return true;
+  }
+  onPointerMove(p, evt) {
+    if (!this.includesPt(p)) return false;
+    if (this.$hitPoint) this.shape.selectLineAt(this.relativize(p));
+    return true;
+  }
+  onPointerUp(p, evt) {
+    if (!this.includesPt(p)) {
+      // Release pointer focus even when mouse-up happens outside pane bounds.
+      this.$dragActorID = null;
+      this.$hitPoint = null;
+      this.world().setPointerFocus(null);
+      return true;
+    }
+    this.$dragActorID = null;
+    this.$hitPoint = null;
+    let selectionIndex = this.shape.$selectedLineIndex;
+    this.world().setPointerFocus(null);
+    if (selectionIndex > 0) {
+      let rawItem = this.itemList ? this.itemList[selectionIndex - 1] : null;
+      if (this.actionFn && !isMenuSeparator(rawItem))
+        this.actionFn.call(this, rawItem, evt.shiftKey);
+    }
+    // Retain visible selection after choice (e.g. in ListPanes / class browser)
+    return true;
+  }
+  setList(list) {
+    this.itemList = list || [];
+    let lim = menuItemMaxChars != null ? menuItemMaxChars : 15;
+    if (this.className === 'MenuMorph') lim = Math.max(lim, 48);
+    this.displayItems = this.itemList.map((item) =>
+      isMenuSeparator(item) ? menuSeparatorDisplay() : truncateString(menuItemLabel(item), lim),
+    );
+    let itemText = '';
+    this.displayItems.forEach((item) => (itemText += item + '\n'));
+    this.shape.setText(itemText);
+    let ctx = this.shape.getTextContext(this.shape.font);
+    let inListPane = this.owner && this.owner.className === 'ListPane';
+    if (ctx && !inListPane) {
+      let maxW = 0;
+      this.displayItems.forEach((item) => {
+        maxW = Math.max(maxW, ctx.measureText(item).width);
+      });
+      let insetX = this.shape.inset ? this.shape.inset.x : 2;
+      let isPaneSelMenu = this.className === 'MenuMorph' && this._paneMenuOwnerScrollPane;
+      let minMenuW = isPaneSelMenu
+        ? paneSelectionMenuMinWidth != null
+          ? paneSelectionMenuMinWidth
+          : 48
+        : 96;
+      let targetW = Math.max(minMenuW, Math.ceil(maxW + insetX * 2 + 14));
+      if (isPaneSelMenu && paneSelectionMenuNarrowBy) {
+        targetW = Math.max(minMenuW, targetW - paneSelectionMenuNarrowBy);
+      }
+      let b = this.getBounds();
+      if (Math.abs(targetW - b.width()) > 0.5)
+        this.setBounds(rect(b.topLeft.x, b.topLeft.y, targetW, b.height()));
+    }
+  }
+  setSelectFn(actionFn) {
+    this.actionFn = actionFn;
+  }
+  setSelectionString(str, suppressAction) {
+    let idx = -1;
+    if (this.itemList) {
+      idx = this.itemList.findIndex(
+        (item) => item === str || menuItemLabel(item) === str,
+      );
+    }
+    if (idx < 0 && this.displayItems) idx = this.displayItems.findIndex((item) => item === str);
+    let probe = idx >= 0 && this.displayItems ? this.displayItems[idx] : str;
+    let selectionIndex = this.shape.setSelectedTextString(probe);
+    if (selectionIndex > 0 && !suppressAction) {
+      let rawItem = this.itemList ? this.itemList[selectionIndex - 1] : null;
+      if (!isMenuSeparator(rawItem)) this.actionFn.call(this, rawItem);
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  MenuMorph
+// -----------
+// Fleeting or persistent menu built on ListMorph.
+// Source may use menuItem(label, action) / [label, action] so name and code stay
+// together; at install time labels become plain strings in itemList and actions
+// live in menuActions.
+class MenuMorph extends ListMorph {
+  constructor(initialBounds, list, actionFn) {
+    super(initialBounds, [], null);
+    // $-prefixed: must hold functions; Automerge cannot store them on itemList entries.
+    this.$legacyActionFn = actionFn || null;
+    this.menuActions = [];
+    this.setSelectFn(function (item, shiftKey) {
+      if (isMenuSeparator(item)) return;
+      let idx = this.shape && this.shape.$selectedLineIndex > 0 ? this.shape.$selectedLineIndex - 1 : -1;
+      if (idx < 0 && this.itemList) idx = this.itemList.indexOf(item);
+      let act = this.menuActions && idx >= 0 ? this.menuActions[idx] : null;
+      if (typeof act === 'function') {
+        act.call(this, item, shiftKey);
+        return;
+      }
+      if (this.$legacyActionFn) this.$legacyActionFn.call(this, item, shiftKey);
+    });
+    this.setList(list);
+  }
+  setList(list) {
+    /** Replace all items. Accepts strings, separators, menuItem specs, or [label, action]. */
+    let labels = [];
+    let actions = [];
+    (list || []).forEach((item) => {
+      let e = expandMenuItemEntry(item);
+      labels.push(e.label);
+      actions.push(e.action);
+    });
+    this.menuActions = actions;
+    super.setList(labels);
+  }
+  relayoutItemList() {
+    /** Refresh text/width/height from current string itemList without touching menuActions. */
+    let n = (this.itemList || []).length;
+    let b = this.getBounds();
+    let h = Math.max(24, 24 + n * 20);
+    if (Math.abs(b.height() - h) > 0.5)
+      this.setBounds(rect(b.topLeft.x, b.topLeft.y, b.width(), h));
+    ListMorph.prototype.setList.call(this, this.itemList || []);
+    return this;
+  }
+  findItem(s) {
+    /**
+     * Index of the first item whose label includes s (case-insensitive), or -1.
+     * Separators are skipped. Example: wm.findItem('todo') → index of "ToDo List".
+     */
+    let needle = ('' + (s != null ? s : '')).toLowerCase();
+    if (!needle) return -1;
+    let list = this.itemList || [];
+    for (let i = 0; i < list.length; i++) {
+      if (isMenuSeparator(list[i])) continue;
+      if (menuItemLabel(list[i]).toLowerCase().indexOf(needle) >= 0) return i;
+    }
+    return -1;
+  }
+  resolveItemIndex(indexOrNeedle) {
+    if (typeof indexOrNeedle === 'number') return indexOrNeedle;
+    return this.findItem(indexOrNeedle);
+  }
+  ensureActionList() {
+    if (!this.menuActions) this.menuActions = [];
+    while (this.menuActions.length < (this.itemList || []).length) this.menuActions.push(null);
+    if (this.menuActions.length > (this.itemList || []).length)
+      this.menuActions.length = (this.itemList || []).length;
+    return this.menuActions;
+  }
+  addItem(labelOrItem, actionIfAny) {
+    /** Append an item. addItem('Hi', fn) or addItem(menuItem('Hi', fn)). */
+    if (!this.itemList) this.itemList = [];
+    if (!this.menuActions) this.menuActions = [];
+    let e = expandMenuItemEntry(menuItemFrom(labelOrItem, actionIfAny));
+    this.itemList.push(e.label);
+    this.menuActions.push(e.action);
+    return this.relayoutItemList();
+  }
+  addItemBefore(before, labelOrItem, actionIfAny) {
+    /**
+     * Insert before a label needle or index.
+     *   wm.addItemBefore('transcript', 'Quick Brown Fox', () => openQBF())
+     *   wm.addItemBefore('transcript', menuItem('Quick Brown Fox', () => openQBF()))
+     */
+    if (!this.itemList) this.itemList = [];
+    this.ensureActionList();
+    let idx = this.resolveItemIndex(before);
+    if (idx < 0) idx = this.itemList.length;
+    let e = expandMenuItemEntry(menuItemFrom(labelOrItem, actionIfAny));
+    this.itemList.splice(idx, 0, e.label);
+    this.menuActions.splice(idx, 0, e.action);
+    return this.relayoutItemList();
+  }
+  addItemAfter(after, labelOrItem, actionIfAny) {
+    /** Insert after a label needle or index; appends if not found. */
+    if (!this.itemList) this.itemList = [];
+    this.ensureActionList();
+    let idx = this.resolveItemIndex(after);
+    if (idx < 0) idx = this.itemList.length - 1;
+    let e = expandMenuItemEntry(menuItemFrom(labelOrItem, actionIfAny));
+    this.itemList.splice(idx + 1, 0, e.label);
+    this.menuActions.splice(idx + 1, 0, e.action);
+    return this.relayoutItemList();
+  }
+  removeItem(indexOrNeedle) {
+    /**
+     * Remove by index or label needle. Returns the removed label, or null.
+     *   wm.removeItem('todo')
+     *   wm.removeItem(wm.findItem('todo'))
+     */
+    if (!this.itemList) return null;
+    let idx = this.resolveItemIndex(indexOrNeedle);
+    if (idx < 0 || idx >= this.itemList.length) return null;
+    let removed = this.itemList.splice(idx, 1)[0];
+    this.ensureActionList();
+    if (idx < this.menuActions.length) this.menuActions.splice(idx, 1);
+    this.relayoutItemList();
+    return removed;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +---------+
+// |  Panes  |
+// +---------+
+// Scroll panes, text editors, transcripts, sliders, hue picker.
+
+function isScrollPaneMorph(m) {
+  /** ScrollPane or a subclass (instanceOf is unavailable in the LM class system). */
+  if (!m) return false;
+  if (m.instanceOf && typeof ScrollPane !== 'undefined' && m.instanceOf(ScrollPane)) return true;
+  let n = m.className;
+  return (
+    n === 'ScrollPane' ||
+    n === 'TextPane' ||
+    n === 'ListPane' ||
+    n === 'TranscriptTextPane'
+  );
+}
+function scrollPaneAtWorldPt(world, worldPt) {
+  /** Innermost scroll pane under `worldPt`, if any. */
+  if (!world || !worldPt) return null;
+  let m =
+    world.topMorphAtExcludingHaloUI
+      ? world.topMorphAtExcludingHaloUI(worldPt)
+      : world.topMorphAt
+        ? world.topMorphAt(worldPt)
+        : null;
+  while (m && m !== world) {
+    if (isScrollPaneMorph(m)) return m;
+    m = m.owner;
+  }
+  return null;
+}
+function hitScrollPaneMenuButtonAt(world, worldPt) {
+  /** Scrollbar whose menuButton (if any) contains `worldPt`. */
+  let m = world.topMorphAtExcludingHaloUI(worldPt);
+  while (m && m !== world) {
+    if (m.className === 'SliderMorph' && m.menuButton) {
+      let localP = m.localize(worldPt);
+      if (m.menuButton.includesPt(localP)) return m;
+    }
+    m = m.owner;
+  }
+  return null;
+}
+function fleetingPaneMenuForScrollPane(world, scrollPane) {
+  /** Fleeting pane menu owned by a scroll pane, if any (searches both submorph layers). */
+  if (!world || !scrollPane) return null;
+  return world.find(
+    (sub) =>
+      sub.className === 'MenuMorph' &&
+      sub.isFleetingMenu &&
+      sub._paneMenuOwnerScrollPane === scrollPane,
+  );
+}
+function removeFleetingPaneMenuFor(scrollPane) {
+  let menu = fleetingPaneMenuForScrollPane(scrollPane.world(), scrollPane);
+  if (menu) menu.remove();
+}
+function worldPtHitsMorphOrSubmorphs(world, worldPt, targetMorph) {
+  /** True if `worldPt` hits `targetMorph` or any of its submorphs (world coordinates). */
+  if (!world || !targetMorph || !world.morphsAtPointInDepthOrder) return false;
+  let chain = world.morphsAtPointInDepthOrder(worldPt);
+  for (let i = 0; i < chain.length; i++) {
+    let m = chain[i];
+    let x = m;
+    while (x) {
+      if (x === targetMorph) return true;
+      x = x.owner;
+    }
+  }
+  return false;
+}
+//  ScrollPane
+// ------------
+// Clipped content + vertical scrollbar.
+class ScrollPane extends Morph {
+  constructor(panelBounds, boundsSpec) {
+    super(panelBounds.scaleRect(boundsSpec));
+    this.boundsSpec = boundsSpec;
+    this.setColor(Color.lightGray);
+    this.contentPane = null; // filled in by subclasses
+    this.scrollBar = null; // filled in by subclasses
+    this.paneMenu = null;
+  }
+  _scrollContentTo(scrollPos) {
+    // Scroll state is per-user: it lives in contentPane.$scrollOffsetY (applied by the
+    // Morph coordinate primitives), never in the shared transform.
+    let clipped = Math.max(0, Math.min(1, scrollPos));
+    // Heal legacy documents that scrolled by mutating the shared translation.
+    if (this.contentPane.transform.translation.y !== 0) this.contentPane.transform.translation.y = 0;
+    let ht = this.contentPane.getBounds().height();
+    let slideRoom = ht - this.getBounds().height();
+    if (!slideRoom || slideRoom <= 0) {
+      this.contentPane.$scrollOffsetY = 0;
+      return 0;
+    }
+    this.contentPane.$scrollOffsetY = Math.min(0, -slideRoom * clipped);
+    return clipped;
+  }
+  clippedBounds() {
+    /** Halo frame matches the visible pane, not scrolled-away content. */
+    return this.getBounds().copy();
+  }
+  clippedBoundsInWorld() {
+    return this.boundsInWorld();
+  }
+  fullBounds() {
+    /** Viewport + scrollbar only — not tall scrolled content — so parent hit tests don't bleed into panes above. */
+    let b = this.shape.getBounds().copy();
+    if (this.scrollBar) b = b.union(this.scrollBar.getBounds().copy());
+    return b.translatedBy(this.transform.translation);
+  }
+  getScrollPosition() {
+    let ht = this.contentPane.getBounds().height();
+    let slideRoom = ht - this.getBounds().height();
+    if (!slideRoom || slideRoom <= 0) return 0;
+    // Per-user scroll state; legacy shared-translation scroll counts until healed.
+    let scrollY = (this.contentPane.$scrollOffsetY || 0) + this.contentPane.transform.translation.y;
+    return -scrollY / slideRoom;
+  }
+  contentLineHeight() {
+    let shape = this.contentPane && this.contentPane.shape;
+    let lh = shape && shape.lineHeight;
+    return lh > 0 ? lh : 16;
+  }
+  pageScrollValueDelta() {
+    /** Scrollbar 0..1 delta for one page step: (visibleLines - 1) lines of content. */
+    if (!this.contentPane) return 0.1;
+    let paneH = this.getBounds().height();
+    let contentH = this.contentPane.getBounds().height();
+    let slideRoom = contentH - paneH;
+    if (!slideRoom || slideRoom <= 0) return 0;
+    let lh = this.contentLineHeight();
+    let visibleLines = Math.max(1, Math.floor(paneH / lh));
+    let pageLines = Math.max(1, visibleLines - 1);
+    return Math.min(1, (pageLines * lh) / slideRoom);
+  }
+  scrollByLines(lineCount) {
+    /** Move content by `lineCount` lines (positive = down / toward end). */
+    if (!this.contentPane || !lineCount) return this.getScrollPosition();
+    let paneH = this.getBounds().height();
+    let contentH = this.contentPane.getBounds().height();
+    let slideRoom = contentH - paneH;
+    if (!slideRoom || slideRoom <= 0) return 0;
+    let delta = (lineCount * this.contentLineHeight()) / slideRoom;
+    let clipped = this._scrollContentTo(this.getScrollPosition() + delta);
+    this.syncScrollBar(clipped);
+    return clipped;
+  }
+  installContentAndScrollbar(contentPaneSpec, scrollBarSpec, contentMorph, onTextSaved) {
+    this.contentPaneSpec = contentPaneSpec;
+    this.contentPane = this.addMorph(contentMorph);
+    if (onTextSaved) {
+      let pane = this;
+      this.contentPane.shape.onTextSaved = function () {
+        onTextSaved.call(pane);
+      };
+    }
+    this.scrollBarSpec = scrollBarSpec;
+    this.scrollBar = this.addMorph(
+      new SliderMorph(this.subBounds(scrollBarSpec), (scrollPos) => {
+        this.setScrollPosition(scrollPos);
+      }),
+    );
+    this.scrollBar.setValueTarget(this, 'setScrollPosition');
+    this.setBounds(this.getBounds());
+  }
+  onKeyDown(evt) {
+    // Mainly called by subclass.call()
+    return super.onKeyDown(evt);
+  }
+  onTextContentBoundsChanged(priorScrollPos, quiet) {
+    let paneH = this.getBounds().height();
+    let contentH = this.contentPane.getBounds().height();
+    let slideRoom = Math.max(0, contentH - paneH);
+    if (priorScrollPos != null) {
+      let clipped = this._scrollContentTo(priorScrollPos);
+      this.syncScrollBar(clipped, quiet);
+      return;
+    }
+    if (slideRoom > 0) {
+      let spec = this.contentPane.shape.$selStop || this.contentPane.shape.$selStart;
+      let caretY = spec ? spec.charY + this.contentPane.shape.lineHeight / 2 : null;
+      if (caretY == null) {
+        let clipped = this._scrollContentTo(this.getScrollPosition());
+        this.syncScrollBar(clipped, quiet);
+        return;
+      }
+      let desiredTop = Math.max(0, caretY - paneH / 2);
+      let desiredScroll = Math.max(0, Math.min(1, desiredTop / slideRoom));
+      let clipped = this._scrollContentTo(desiredScroll);
+      this.syncScrollBar(clipped, quiet);
+    } else {
+      let clipped = this._scrollContentTo(0);
+      this.syncScrollBar(clipped, quiet);
+    }
+  }
+  paneMenuAnchorInWorld() {
+    /** World point just to the right of this pane’s top-right (stable when content scrolls). */
+    let r = this.shape.getBounds();
+    return this.globalize(r.topRight().addPt(pt(3, 0)));
+  }
+  renderOn(ctx) {
+    // Context is already in pane-local coords (parent applied our transform); clip to local shape bounds
+    let bnds = this.shape.getBounds();
+    ctx.save();
+    ctx.beginPath(); // path is not saved by save() - must start fresh so clip is only this rect
+    ctx.rect(bnds.topLeft.x, bnds.topLeft.y, bnds.extent.x, bnds.extent.y);
+    ctx.clip();
+    super.renderOn(ctx);
+    ctx.restore();
+  }
+  scrollToTop() {
+    this.setScrollPosition(0);
+    this.scrollBar.setValue(0.0);
+  }
+  setBounds(paneBounds) {
+    let priorScrollPos = null;
+    if (this.contentPane && this.scrollBar) priorScrollPos = this.getScrollPosition();
+    super.setBounds(paneBounds);
+    let scrollW = 15;
+    let contentW = paneBounds.width() - scrollW;
+    let ht = paneBounds.height();
+    // contentPane and scrollBar are children; bounds must be in pane-local coords
+    let contentBounds = rect(0, 0, contentW, ht);
+    this.contentPane.setBounds(contentBounds);
+    let scrollBounds = rect(contentW, 0, scrollW, ht);
+    this.scrollBar.setBounds(scrollBounds);
+    if (priorScrollPos != null) {
+      let clipped = Math.max(0, Math.min(1, priorScrollPos));
+      this.setScrollPosition(clipped);
+      this.scrollBar.setValue(clipped);
+    }
+  }
+  setPaneBoundsIn(panelBounds) {
+    this.setBounds(panelBounds.scaleRect(this.boundsSpec));
+  }
+  setPaneMenu(paneMenuSpec) {
+    // paneMenuSpec = { items: [...], onSelect: function(item, pane) { ... } }
+    this.paneMenu = paneMenuSpec;
+    this.changed();
+  }
+  setScrollPosition(scrollPos) {
+    this._scrollContentTo(scrollPos);
+  }
+  showPaneMenu(ptIfAny, optsIfAny) {
+    if (!this.paneMenu || !this.world()) return false;
+    let spec = this.paneMenu;
+    let items = spec.items || [];
+    if (items.length == 0) return false;
+    let opts = optsIfAny || {};
+    let worldPt = ptIfAny
+      ? ptIfAny
+      : this.paneMenuAnchorInWorld
+        ? this.paneMenuAnchorInWorld()
+        : getPointerLocation() || this.globalize(this.shape.getBounds().topLeft);
+    let thisPane = this;
+    let menu = new MenuMorph(
+      rect(worldPt.x, worldPt.y, 165, Math.max(48, 24 + items.length * 18)),
+      items,
+      function (item) {
+        if (isMenuSeparator(item)) return;
+        if (spec.onSelect) spec.onSelect(item, thisPane);
+        if (menu.staysOpenOnSelect) {
+          menu.shape.selectLineAt(0);
+          menu.changed();
+        } else menu.remove();
+      },
+    );
+    menu.isFleetingMenu = !!opts.fleeting;
+    if (opts.fromSelection) {
+      menu.staysOpenOnSelect = true;
+      menu._paneMenuOwnerScrollPane = thisPane;
+      menu._paneMenuPinWhileInContent = thisPane.contentPane;
+      menu.setList(items);
+    }
+    this.world().addEphemeralMorph(menu);
+    return menu;
+  }
+  showPaneMenuFromMenuButton() {
+    /** Fleeting pane menu from the scrollbar menuButton (opens on pointer-down). */
+    if (!this.paneMenu || !this.world()) return null;
+    let items = this.paneMenu.items || [];
+    if (items.length === 0) return null;
+    let menu = this.showPaneMenu(this.paneMenuAnchorInWorld(), {
+      fleeting: true,
+      fromSelection: true,
+    });
+    if (this.instanceOf && this.instanceOf(TextPane)) syncOnScreenKeyboardWithFocus(this.world());
+    return menu;
+  }
+  syncScrollBar(scrollPos, quiet) {
+    if (!this.scrollBar) return;
+    let clipped =
+      scrollPos == null ? Math.max(0, Math.min(1, this.getScrollPosition())) : scrollPos;
+    if (quiet) this.scrollBar.setValueQuiet(clipped);
+    else this.scrollBar.setValue(clipped);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  ListPane
+// ----------
+// Scrollable list with optional pane menu.
+class ListPane extends ScrollPane {
+  constructor(panelBounds, boundsSpec) {
+    super(panelBounds, boundsSpec);
+    let contentSpec = rect(0, 0, 0.9, 1);
+    super.installContentAndScrollbar(
+      contentSpec,
+      rect(0.9, 0, 0.1, 1),
+      new ListMorph(this.subBounds(contentSpec), [], null),
+    );
+  }
+  onSelect(selectFn) {
+    this.contentPane.setSelectFn(selectFn);
+  }
+  setList(list) {
+    this.contentPane.setList(list);
+    this.scrollToTop();
+  }
+  setSelectionString(str, suppressAction) {
+    this.contentPane.setSelectionString(str, suppressAction);
+    // ** Needs scrollSelectionIntoView
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  TextPane
+// ----------
+// Scrollable TextMorph editor with dirty snapshot.
+class TextPane extends ScrollPane {
+  constructor(panelBounds, boundsSpec) {
+    super(panelBounds, boundsSpec);
+    this._savedTextSnapshot = null;
+    let self = this;
+    let contentSpec = rect(0, 0, 0.95, 1);
+    super.installContentAndScrollbar(
+      contentSpec,
+      rect(0.95, 0, 0.05, 1),
+      new TextMorph(this.subBounds(contentSpec), 'Text pane'),
+      function () {
+        self._savedTextSnapshot = self.contentPane.shape.string;
+        self.contentPane.shape.editorID = null;
+      },
+    );
+    this.setPaneMenu(TextPane.prototype.defaultPaneMenuSpec());
+  }
+  defaultPaneMenuSpec() {
+    return {
+      items: [
+        'cut',
+        'copy',
+        'paste',
+        'paste...',
+        'do it',
+        'printit',
+        'find',
+        'undo',
+        menuSeparator,
+        'save',
+        'cancel',
+      ],
+      onSelect: function (item, pane) {
+        let mor = pane.contentPane;
+        if (!mor || !mor.shape) return;
+        let tb = mor.shape;
+        let world = pane.world();
+        if (world) world.setKeyboardFocus(mor);
+        if (isMenuSeparator(item)) return;
+        if (item == 'paste...') {
+          showPasteHistoryMenu(pane, tb);
+          return;
+        }
+        if (item == 'cancel') {
+          if (pane._savedTextSnapshot != null)
+            pane.setText(pane._savedTextSnapshot, { force: true });
+          return;
+        }
+        let evtStub = { preventDefault: function () {}, stopPropagation: function () {}, key: '' };
+        let keyByItem = {
+          cut: 'x',
+          copy: 'c',
+          paste: 'v',
+          'do it': 'd',
+          printit: 'p',
+          find: 'f',
+          undo: 'z',
+          save: 's',
+        };
+        let k = keyByItem[item];
+        if (!k) return;
+        let priorScrollPos = pane.getScrollPosition ? pane.getScrollPosition() : null;
+        let oldH = tb.extent.y;
+        evtStub.key = k;
+        tb.handleKeyboardShortcuts(evtStub);
+        let newH = tb.extent.y;
+        if (pane.onTextBoundsChanged && newH !== oldH) pane.onTextBoundsChanged(priorScrollPos);
+      },
+    };
+  }
+  hasUnsavedChanges() {
+    if (this._savedTextSnapshot == null) return false;
+    if (!this.contentPane || !this.contentPane.shape) return false;
+    return this.contentPane.shape.string !== this._savedTextSnapshot;
+  }
+  onKeyDown(evt) {
+    if (this.contentPane && this.contentPane.onKeyDown) return this.contentPane.onKeyDown(evt);
+    return super.onKeyDown(evt);
+  }
+  onTextBoundsChanged(priorScrollPos) {
+    this.onTextContentBoundsChanged(priorScrollPos, false);
+  }
+  setLocalStorageKey(key) {
+    this.contentPane.shape.setLocalStorageKey(key);
+  }
+  setText(text, opts) {
+    let force = opts && opts.force;
+    if (!force && this.hasUnsavedChanges()) return false;
+    let normalized = text != null ? String(text) : '';
+    this.contentPane.setText(normalized);
+    this._savedTextSnapshot = normalized;
+    if (this.contentPane && this.contentPane.shape) this.contentPane.shape.editorID = null;
+    this.scrollToTop();
+    return true;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  TranscriptTextPane
+// --------------------
+// Append-only transcript; mirrors console quietly.
+class TranscriptTextPane extends TextPane {
+  constructor(panelBounds, boundsSpec) {
+    // Was ScrollPane.prototype.initialize.call(...) — initialize went away when
+    // ScrollPane moved to class constructors, which made Open console crash.
+    super(panelBounds, boundsSpec);
+    this._savedTextSnapshot = '';
+    this._consoleMirroring = false;
+    this._transcriptReentry = 0;
+    // TextPane seeds content with 'Text pane'; start transcripts empty.
+    if (this.contentPane) {
+      this.contentPane.setText('');
+      this._savedTextSnapshot = '';
+    }
+  }
+  _appendTranscriptLineQuiet(line) {
+    /** Append one line without going through mirrored push / noisy scroll path. */
+    let cur = this.contentPane.shape.string || '';
+    let add = (line == null ? '' : '' + line) + '\n';
+    let next = this._truncateIfNeeded(cur + add);
+    this.contentPane.setText(next);
+    this._savedTextSnapshot = next;
+    this._scrollTranscriptBottomQuiet();
+  }
+  _applyScrollQuiet(scrollPos) {
+    /** Scroll without SliderMorph.setValue (mirror-safe). */
+    let clipped = this._scrollContentTo(scrollPos);
+    this.syncScrollBar(clipped, true);
+  }
+  _disconnectConsoleMirrorHard() {
+    /** Unhook from console routing without guard (used from reentry bail and remove). */
+    let arr = _transcriptConsoleTargets;
+    if (arr) {
+      let ix = arr.indexOf(this);
+      if (ix >= 0) arr.splice(ix, 1);
+    }
+    this._consoleMirroring = false;
+  }
+  _scrollTranscriptBottomQuiet() {
+    /** Scroll content to bottom without noisy scroll path (no console → no mirror re-entry). */
+    let paneH = this.getBounds().height();
+    let contentH = this.contentPane.getBounds().height();
+    let slideRoom = Math.max(0, contentH - paneH);
+    this._applyScrollQuiet(slideRoom > 0 ? 1 : 0);
+  }
+  _truncateIfNeeded(str) {
+    let maxB = TRANSCRIPT_MAX_BEFORE_TRUNC;
+    let keep = TRANSCRIPT_KEEP_LEN;
+    if (str.length <= maxB) return str;
+    return str.slice(str.length - keep);
+  }
+  clear() {
+    this._transcriptReentry++;
+    try {
+      if (this._transcriptReentry >= 3) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_STOPPED);
+        this._disconnectConsoleMirrorHard();
+        return;
+      }
+      if (this._transcriptReentry >= 2) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_RECURSIVE);
+        return;
+      }
+      this.contentPane.setText('');
+      this._savedTextSnapshot = '';
+      this.scrollToTop();
+    } finally {
+      this._transcriptReentry--;
+      if (this._transcriptReentry < 0) this._transcriptReentry = 0;
+    }
+  }
+  push(str) {
+    this._transcriptReentry++;
+    try {
+      if (this._transcriptReentry >= 3) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_STOPPED);
+        this._disconnectConsoleMirrorHard();
+        return;
+      }
+      if (this._transcriptReentry >= 2) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_RECURSIVE);
+        return;
+      }
+      let cur = this.contentPane.shape.string || '';
+      let add = str === undefined || str === null ? '' : '' + str;
+      let next = this._truncateIfNeeded(cur + add);
+      this.contentPane.setText(next);
+      this._savedTextSnapshot = next;
+      this.scrollTranscriptToBottom();
+    } finally {
+      this._transcriptReentry--;
+      if (this._transcriptReentry < 0) this._transcriptReentry = 0;
+    }
+  }
+  onTextBoundsChanged(priorScrollPos) {
+    this.onTextContentBoundsChanged(priorScrollPos, true);
+  }
+  receivesConsoleOutput() {
+    return !!this._consoleMirroring;
+  }
+  remove() {
+    this._disconnectConsoleMirrorHard();
+    return Morph.prototype.remove.call(this);
+  }
+  scrollTranscriptToBottom() {
+    this._scrollTranscriptBottomQuiet();
+  }
+  setConsoleMirror(on) {
+    this._transcriptReentry++;
+    try {
+      if (this._transcriptReentry >= 3) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_STOPPED);
+        this._disconnectConsoleMirrorHard();
+        return;
+      }
+      if (this._transcriptReentry >= 2) {
+        this._appendTranscriptLineQuiet(TRANSCRIPT_MARKER_RECURSIVE);
+        return;
+      }
+      _ensureConsoleMirrorInstalled();
+      let arr = _transcriptConsoleTargets;
+      if (!arr) return;
+      let want = !!on;
+      let ix = arr.indexOf(this);
+      if (want) {
+        if (ix < 0) arr.push(this);
+        this._consoleMirroring = true;
+      } else {
+        if (ix >= 0) arr.splice(ix, 1);
+        this._consoleMirroring = false;
+      }
+    } finally {
+      this._transcriptReentry--;
+      if (this._transcriptReentry < 0) this._transcriptReentry = 0;
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  SliderMorph
+// -------------
+// 0..1 value slider; used in scroll panes and style panel.
+class SliderMorph extends Morph {
+  constructor(initialBounds, valueFn, optsIfAny) {
+    let opts = optsIfAny || {};
+    super(initialBounds);
+    this.setColor(Color.gray);
+    // Value and thumb are per-user ($value / $thumb): each user scrolls independently.
+    this.valExtent = 0.1; // for when showing a range
+    this.showsMenuButton = opts.menuButton !== false; // scrollbars: true; plain sliders: pass false
+    this.menuButtonFraction = this.showsMenuButton ? 0.1 : 0;
+    this.ensureThumb();
+    if (this.showsMenuButton) {
+      this.menuButton = this.addMorph(new Morph(rect(0, 0, 1, 1)));
+      this.menuButton.setColor(Color.blue);
+      this.menuButton.onPointerDown = function () {
+        return false;
+      }; // SliderMorph handles pane menu on pointer-down
+    } else {
+      this.menuButton = null;
+    }
+    this.emitValueFunction = valueFn;
+    this.adjustForNewBounds();
+  }
+  adjustForNewBounds() {
+    this.layoutMenuButton();
+    this.syncThumbToValue();
+  }
+  clipValue(val) {
+    return Math.round(Math.min(1.0, Math.max(0.0, val)) * 1000) / 1000;
+  }
+  ensureThumb() {
+    // Per-user thumb: each replica lazily builds its own (my $-state is lost on reload).
+    if (this.slider) {
+      // Heal legacy documents whose thumb was a shared submorph.
+      this.removeMorph(this.slider);
+      this.slider = null;
+    }
+    if (this.$thumb && this.$thumb.owner === this) return this.$thumb;
+    let thumb = new Morph(rect(0, 0, 10, 10));
+    thumb.onPointerDown = function () {
+      return false;
+    }; // ignore blipper
+    this.$thumb = thumb;
+    this.addEphemeralMorph(thumb);
+    this.styleSlider();
+    return thumb;
+  }
+  getValue() {
+    // By convention, my value ranges from 0.0 to 1.0; per-user, 0 until this user moves it
+    return this.$value == null ? 0 : this.$value;
+  }
+  isVertical() {
+    let bnds = this.shape.getBounds();
+    return bnds.height() > bnds.width();
+  }
+  layoutMenuButton() {
+    if (!this.showsMenuButton || !this.menuButton) return;
+    let bnds = this.shape.getBounds();
+    let frac = this.menuButtonFraction;
+    if (this.isVertical()) {
+      let topH = bnds.height() * frac;
+      this.menuButton.setBounds(rect(0, 0, bnds.width(), topH));
+    } else {
+      let leftW = bnds.width() * frac;
+      this.menuButton.setBounds(rect(0, 0, leftW, bnds.height()));
+    }
+  }
+  onPointerDown(pt, evt) {
+    //	Note: want setMouseFocus to also cache the transform and record the $hitPoint.
+    //	Ideally thereafter only have to say, eg, morph moveTo: evt.hand.adjustedMousePoint
+    if (!this.includesPt(pt)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(pt)) return true;
+    clearKeyboardFocusUnlessTypingOrOsk(this);
+    // pt is in owner coords; convert to my local coords for testing the elevator (slider submorph)
+    let localP = this.relativize(pt);
+    if (this.menuButton && this.menuButton.includesPt(localP)) {
+      let pane = this.owner;
+      let world = this.world();
+      // Duck-type ScrollPane: LM objects have no instanceOf, so the old guard never opened menus.
+      if (pane && pane.paneMenu && pane.showPaneMenuFromMenuButton) {
+        if (fleetingPaneMenuForScrollPane(world, pane)) removeFleetingPaneMenuFor(pane);
+        else {
+          let menu = pane.showPaneMenuFromMenuButton();
+          if (menu && world) {
+            // Open only — do not start a drag-select from the button click point (off-menu).
+            world.setPointerFocus(null);
+          }
+        }
+      }
+      return true;
+    }
+    let track = this.trackBounds();
+    if (!track.includesPt(localP)) return false;
+    let thumb = this.ensureThumb();
+    if (!thumb.includesPt(localP)) {
+      let pane = this.owner;
+      let page =
+        pane && pane.pageScrollValueDelta ? pane.pageScrollValueDelta() : this.valExtent || 0.1;
+      let sliderBR = thumb.getBounds().bottomRight();
+      if (localP.lePt(sliderBR)) this.tweakValue(-page);
+      else this.tweakValue(page);
+      return true;
+    }
+    this.$hitPoint = pt;
+    this.world().setPointerFocus(this);
+    return true;
+  }
+  onPointerMove(pt, evt) {
+    if (!this.$hitPoint) return false;
+    let localP = this.relativize(pt);
+    let track = this.trackBounds();
+    let ext = this.valExtent;
+    let newValue;
+    if (this.isVertical()) {
+      let elevPix = Math.max(ext * track.height(), 6);
+      newValue = (localP.y - track.topLeft.y - elevPix / 2) / (track.height() - elevPix);
+    } else {
+      let elevPix = Math.max(ext * track.width(), 6);
+      newValue = (localP.x - track.topLeft.x - elevPix / 2) / (track.width() - elevPix);
+    }
+    this.$value = this.clipValue(newValue);
+    if (this.valueTarget) this.valueTarget[this.valueMessage](this.$value);
+    else this.emitValueFunction.call(this.owner, this.$value);
+    this.syncThumbToValue();
+    return true;
+  }
+  onPointerUp(pt, evt) {
+    if (!this.includesPt(pt)) {
+      if (this.$hitPoint) {
+        this.$hitPoint = null;
+        this.world().setPointerFocus(null);
+        return true;
+      }
+      return false;
+    }
+    this.$hitPoint = null;
+    this.world().setPointerFocus(null);
+    return true;
+  }
+  setBounds(newBounds) {
+    super.setBounds(newBounds);
+    this.adjustForNewBounds();
+  }
+  setValue(newValue) {
+    this.$value = newValue;
+    this.adjustForNewBounds();
+  }
+  setValueQuiet(newValue) {
+    /** Update value + thumb without console (avoids re-entrancy when transcript mirrors console). */
+    this.$value = newValue;
+    this.syncThumbToValue();
+  }
+  setValueTarget(target, msgName) {
+    this.valueTarget = target;
+    this.valueMessage = msgName;
+  }
+  renderOn(ctx) {
+    if (!this.$thumb) this.syncThumbToValue(); // lazily rebuild this user's thumb (e.g. after reload)
+    super.renderOn(ctx);
+  }
+  styleSlider() {
+    if (this.$thumb) this.$thumb.setColor(Color.green.darker());
+  }
+  syncThumbToValue() {
+    /** Reposition thumb from my per-user value — no console (safe when console is mirrored to Transcript). */
+    let thumb = this.ensureThumb();
+    let bnds = this.shape.getBounds();
+    let track = this.trackBounds();
+    let ext = this.valExtent;
+    let value = this.getValue();
+    let topLeft;
+    let sliderExt;
+    if (this.isVertical()) {
+      let elevPixV = Math.max(ext * track.height(), 6);
+      topLeft = pt(0, track.topLeft.y + (track.height() - elevPixV) * value);
+      sliderExt = pt(track.width(), elevPixV);
+    } else {
+      let elevPixH = Math.max(ext * track.width(), 6);
+      topLeft = pt(track.topLeft.x + (track.width() - elevPixH) * value, track.topLeft.y);
+      sliderExt = pt(elevPixH, track.height());
+    }
+    thumb.setBounds(bnds.topLeft.addPt(topLeft).extent(sliderExt));
+  }
+  test() {
+    // SliderMorph.prototype.test()
+    let readOut = Lively.addMorph(new TextMorph(rect(100, 300, 300, 100), 'slider values'));
+    readOut.setColor(Color.blue);
+    let sliderOpts = { menuButton: false };
+    let sliderV = Lively.addMorph(
+      new SliderMorph(
+        rect(50, 100, 10, 200),
+        (value) => readOut.setText('sliderV = ' + sliderV.getValue().toFixed(2)),
+        sliderOpts,
+      ),
+    );
+    let sliderH = Lively.addMorph(
+      new SliderMorph(
+        rect(100, 50, 200, 10),
+        (value) => readOut.setText('sliderH = ' + sliderH.getValue().toFixed(2)),
+        sliderOpts,
+      ),
+    );
+  }
+  trackBounds() {
+    /** Track area; 10% reserved for pane menu button (top if vertical, left if horizontal). */
+    let bnds = this.shape.getBounds();
+    if (!this.showsMenuButton) return bnds.copy();
+    let frac = this.menuButtonFraction;
+    if (this.isVertical()) {
+      let topH = bnds.height() * frac;
+      return rect(0, topH, bnds.width(), Math.max(0, bnds.height() - topH));
+    }
+    let leftW = bnds.width() * frac;
+    return rect(leftW, 0, Math.max(0, bnds.width() - leftW), bnds.height());
+  }
+  tweakValue(tweak) {
+    this.setValue(this.clipValue(this.getValue() + tweak));
+    if (this.valueTarget) this.valueTarget[this.valueMessage](this.$value);
+    else this.emitValueFunction.call(this.owner, this.$value);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  HuePickerMorph
+// ----------------
+// 2D hue/brightness picker grid.
+class HuePickerMorph extends Morph {
+  constructor(initialBounds, onPickFn) {
+    super(initialBounds, new ImageShape({ width: 64, height: 64 }));
+    this.onPick = onPickFn;
+    this.rebuildPickerImage();
+  }
+  applyPickAt(localP) {
+    let color = this.pickColorAt(localP);
+    if (color && this.onPick) this.onPick(color);
+  }
+  colorAtCell(col, row) {
+    let cols = this.HUE_COLS;
+    let half = this.HALF_ROWS;
+    let h = (col + 0.5) / cols;
+    if (row >= half) {
+      let oldRow = row - half;
+      let v = 1 - (oldRow + 0.5) / half;
+      return hsvToColor(h, 1, v);
+    }
+    let t = half > 1 ? row / (half - 1) : 0;
+    if (t <= 0) return Color.white.copy();
+    return hsvToColor(h, t, 1 - 0.05 * t);
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    this.$hitPoint = p;
+    this.world().setPointerFocus(this);
+    this.applyPickAt(this.relativize(p));
+    return true;
+  }
+  onPointerMove(p, evt) {
+    if (!this.$hitPoint) return false;
+    this.applyPickAt(this.relativize(p));
+    return true;
+  }
+  onPointerUp(p, evt) {
+    this.$hitPoint = null;
+    if (this.world() && this.world().$pointerFocus === this) this.world().setPointerFocus(null);
+    return true;
+  }
+  pickColorAt(localP) {
+    let b = this.shape.getBounds();
+    let cols = this.HUE_COLS;
+    let rows = this.BRIGHTNESS_ROWS;
+    let rel = localP.subPt(b.topLeft);
+    if (rel.x < 0 || rel.y < 0 || rel.x >= b.width() || rel.y >= b.height()) return null;
+    let col = Math.min(cols - 1, Math.max(0, Math.floor((rel.x / b.width()) * cols)));
+    let row = Math.min(rows - 1, Math.max(0, Math.floor((rel.y / b.height()) * rows)));
+    return this.colorAtCell(col, row);
+  }
+  rebuildPickerImage() {
+    if (!this.shape || typeof document === 'undefined') return;
+    let b = this.shape.getBounds();
+    let wdt = Math.max(4, Math.round(b.width()));
+    let hgt = Math.max(4, Math.round(b.height()));
+    let cols = this.HUE_COLS;
+    let rows = this.BRIGHTNESS_ROWS;
+    let canvas = document.createElement('canvas');
+    canvas.width = wdt;
+    canvas.height = hgt;
+    let ctx = canvas.getContext('2d');
+    let cellW = wdt / cols;
+    let cellH = hgt / rows;
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        let c = this.colorAtCell(col, row);
+        ctx.fillStyle = c.fillStyle;
+        ctx.fillRect(col * cellW, row * cellH, cellW, cellH);
+      }
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < rows; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, i * cellH + 0.5);
+      ctx.lineTo(wdt, i * cellH + 0.5);
+      ctx.stroke();
+    }
+    this.shape.setImage(canvas);
+    this.changed();
+  }
+  setBounds(rect) {
+    super.setBounds(rect);
+    this.rebuildPickerImage();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+HuePickerMorph.prototype.HUE_COLS = 50;
+HuePickerMorph.prototype.BRIGHTNESS_ROWS = 20;
+HuePickerMorph.prototype.HALF_ROWS = 10;
+
+//  StylePane
+// -----------
+// Inner lavender pane hosting style controls.
+class StylePane extends Morph {
+  constructor(bounds) {
+    super(bounds, new Shape('Rectangle', bounds, Color.paleLavender, 2, Color.black));
+  }
+  addPaneControl(panelBounds, spec, morph, nudgeIfAny) {
+    morph.boundsSpec = spec;
+    if (nudgeIfAny) morph._stylePanelNudge = nudgeIfAny;
+    morph.setPaneBoundsIn = function (pb) {
+      let r = pb.scaleRect(this.boundsSpec);
+      if (this._stylePanelNudge) r = r.translatedBy(this._stylePanelNudge);
+      Morph.prototype.setPaneBoundsIn.call(this, r);
+      if (this.rebuildPickerImage) this.rebuildPickerImage();
+    };
+    morph.setPaneBoundsIn(panelBounds);
+    this.addMorph(morph);
+    return morph;
+  }
+  makeAlphaCaption(panelBounds, spec) {
+    return this.makeCaption(panelBounds, spec, '\u03B1', { insetX: 0, centerGlyph: true });
+  }
+  makeCaption(panelBounds, spec, text, opts) {
+    opts = opts || {};
+    let m = new TextMorph(rect(0, 0, 10, 10), text);
+    m.shape.boxColor = Color.veryLightGray;
+    m.shape.inset = pt(opts.insetX != null ? opts.insetX : 4, 0);
+    m.shape.hang = 0;
+    m.shape.lineHeight = 18;
+    m.shape.verticallyCenterSingleLine = true;
+    m.shape.verticalNudge = 6;
+    if (opts.centerGlyph) m.shape.centerGlyph = true;
+    if (opts.border) {
+      m.shape.setBorderWidth(1);
+      m.shape.setBorderColor(Color.black);
+    }
+    m.shape.disableSelectionRendering = true;
+    m.shape.noMenuLineHighlight = true;
+    return this.addPaneControl(panelBounds, spec, m, opts.nudge);
+  }
+  makeLabel(panelBounds, spec, text, nudgeIfAny) {
+    return this.makeCaption(panelBounds, spec, text, { border: true, nudge: nudgeIfAny });
+  }
+  makeNoneButton(panelBounds, spec, onPress) {
+    let btn = new SimpleButtonMorph(rect(0, 0, 10, 10), 'None');
+    btn.shape.cornerRadius = 5;
+    btn.shape.boxColor = Color.lightGray;
+    btn.shape.setBorderWidth(1);
+    btn.shape.setBorderColor(Color.darkGray);
+    btn.shape.verticalNudge = 5;
+    btn.onPointerUp = function (p, evt) {
+      if (onPress) onPress();
+      this.$dragActorID = null;
+      this.$hitPoint = null;
+      this.world().setPointerFocus(null);
+      return true;
+    };
+    return this.addPaneControl(panelBounds, spec, btn, pt(0, 1));
+  }
+  paneLayoutBounds() {
+    let b = this.shape.getBounds();
+    let ins = this.CONTROL_INSET;
+    return rect(
+      b.topLeft.x + ins,
+      b.topLeft.y + ins,
+      Math.max(8, b.width() - 2 * ins),
+      Math.max(8, b.height() - 2 * ins),
+    );
+  }
+  setDirtyBorder(dirty) {
+    let want = dirty ? Color.red : Color.black;
+    let cur = this.shape.borderColor;
+    if (cur && colorsEqual(cur, want)) return;
+    this.shape.setBorderColor(want.copy());
+    this.changed();
+  }
+  setPaneBoundsIn(panelBounds) {
+    super.setPaneBoundsIn(panelBounds);
+    let inner = this.paneLayoutBounds();
+    this.submorphs.forEach((m) => {
+      if (m.setPaneBoundsIn) m.setPaneBoundsIn(inner);
+    });
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+StylePane.prototype.CONTROL_INSET = 3;
+
+// +----------+
+// |  Panels  |
+// +----------+
+// Titled windows: browser, inspector, style, method list, transcript.
+
+function fleetingMenuAnchorPt(fallbackPtIfAny) {
+  /**
+   * World point for fleeting menus / confirms: prefer the pointer, nudged right
+   * so the same click that opened the menu does not hit the first item.
+   */
+  let pos = getPointerLocation();
+  if (pos) return pos.addPt(pt(28, 4));
+  return fallbackPtIfAny != null ? fallbackPtIfAny : pt(120, 120);
+}
+function promptConfirmMenu(world, pt, titleLine, yesLine, noLine, onResult) {
+  /** Fleeting yes/no confirm; title line is not selectable. */
+  let menu = new MenuMorph(
+    rect(pt.x, pt.y, Math.max(200, titleLine.length * 7), 112),
+    [titleLine, yesLine, noLine],
+    (item) => {
+      menu.remove();
+      onResult(item === yesLine);
+    },
+  );
+  let bg = Color.yellow;
+  menu.shape.boxColor = bg;
+  menu.shape.fill = bg;
+  menu.isFleetingMenu = true;
+  // isFleetingMenu puts it in the top zBand, so no beTopMorph can bury this dialog.
+  world.addEphemeralMorph(menu);
+  if (world.promote) world.promote(menu);
+}
+function promptOkToCancelEditsMenu(world, pt, onResult) {
+  /** Menu: yes; cancel = discard edits & continue; NO = keep edits (abort). Title line acts like NO. */
+  let titleLine = 'OK to cancel edits?';
+  let okLine = '  yes; cancel';
+  let keepLine = '  NO; keep the changes';
+  let menu = new MenuMorph(rect(pt.x, pt.y, 160, 112), [titleLine, okLine, keepLine], (item) => {
+    menu.remove();
+    onResult(item === okLine);
+  });
+  let bg = Color.yellow;
+  menu.shape.boxColor = bg;
+  menu.shape.fill = bg;
+  menu.isFleetingMenu = true;
+  world.addEphemeralMorph(menu);
+  if (world.promote) world.promote(menu);
+}
+//  PanelTitleBar
+// ---------------
+// Collapse/close/title chrome shared by panels.
+class PanelTitleBar extends Morph {
+  constructor(panel, bounds) {
+    super(bounds);
+    this.panel = panel;
+    let th = this.HEIGHT;
+    let bw = this.BUTTON_WIDTH;
+    let b = this.shape.getBounds();
+    this.collapseBtn = this.addMorph(new SimpleButtonMorph(rect(0, 0, bw, th), '▼'));
+    this.closeBtn = this.addMorph(new SimpleButtonMorph(rect(0, 0, bw, th), 'X'));
+    this.configureChromeButton(this.collapseBtn, this.COLLAPSE_FILL, '▼');
+    this.configureChromeButton(this.closeBtn, this.CLOSE_FILL, 'X');
+    this.titleMorph = this.addMorph(
+      new TextMorph(rect(bw, 0, Math.max(1, b.width() - bw), th), 'A panel'),
+    );
+    let title = this.titleMorph.shape;
+    title.boxColor = Color.lightGray.lighter();
+    title.inset = pt(6, 0);
+    title.hang = 0;
+    title.lineHeight = th;
+    title.verticallyCenterSingleLine = true;
+    title.verticalNudge = 8;
+    title.composeBottomPad = 0;
+    // Title label is chrome, not an editor — never steal drag as text selection.
+    title.disableSelectionRendering = true;
+    title.noMenuLineHighlight = true;
+    title.$selStart = null;
+    title.$selStop = null;
+    this.titleMorph.onPointerDown = function () {
+      return false;
+    };
+    this.titleMorph.onPointerMove = function () {
+      return false;
+    };
+    this.titleMorph.onPointerUp = function () {
+      return false;
+    };
+    this.layout();
+  }
+  collapsedTitleBarWidth() {
+    let bw = this.BUTTON_WIDTH;
+    let s = this.titleMorph.shape;
+    let ctx = s.getTextContext(s.font);
+    let tw = 0;
+    if (ctx && s.string != null) tw = ctx.measureText(s.string).width;
+    let insetL = s.inset ? s.inset.x : 6;
+    let insetR = 6;
+    return Math.max(bw + insetL + tw + insetR, bw + 24);
+  }
+  configureChromeButton(btn, fillColor, expectedLabel) {
+    if (!btn || !btn.shape) return;
+    let s = btn.shape;
+    if (fillColor) {
+      s.boxColor = fillColor;
+      s.selectionColor = fillColor;
+    }
+    s.noMenuLineHighlight = true;
+    s.disableSelectionRendering = true;
+    s.$selectedLineIndex = 0;
+    s.$selStart = null;
+    s.$selStop = null;
+    s.$priorNullSelection = 0;
+    s.composeBottomPad = 0;
+    s.lineHeight = this.HEIGHT;
+    s.setBorderWidth(2);
+    s.setBorderColor(Color.black);
+    if (expectedLabel != null && s.string !== expectedLabel) s.setText(expectedLabel);
+  }
+  hasVisibleCloseBtn() {
+    return !!(this.closeBtn && this.submorphs && this.submorphs.includes(this.closeBtn));
+  }
+  hitInfo(panelLocalP) {
+    if (!this.includesPt(panelLocalP)) return null;
+    let localP = this.relativize(panelLocalP);
+    let onCollapse = this.collapseBtn && this.collapseBtn.includesPt(localP);
+    let onClose = this.hasVisibleCloseBtn() && this.closeBtn.includesPt(localP);
+    return { onCollapse, onClose };
+  }
+  layout() {
+    let b = this.shape.getBounds();
+    let th = this.HEIGHT;
+    let bw = this.BUTTON_WIDTH;
+    let panel = this.panel;
+    this.titleMorph.shape.composeBottomPad = 0;
+    this.configureChromeButton(this.collapseBtn, this.COLLAPSE_FILL, null);
+    this.configureChromeButton(this.closeBtn, this.CLOSE_FILL, 'X');
+    this.collapseBtn.setBounds(rect(b.topLeft.x, b.topLeft.y, bw, th));
+    let hasCloseBtn = this.hasVisibleCloseBtn();
+    if (panel.collapsed) {
+      if (hasCloseBtn) this.removeMorph(this.closeBtn);
+      this.titleMorph.setBounds(
+        rect(b.topLeft.x + bw, b.topLeft.y, Math.max(1, b.width() - bw), th),
+      );
+    } else {
+      if (this.closeBtn && !hasCloseBtn) this.addMorph(this.closeBtn);
+      if (this.closeBtn)
+        this.closeBtn.setBounds(rect(b.topLeft.x + b.width() - bw, b.topLeft.y, bw, th));
+      this.titleMorph.setBounds(
+        rect(b.topLeft.x + bw, b.topLeft.y, Math.max(1, b.width() - 2 * bw), th),
+      );
+    }
+    this.titleMorph.shape.extent.y = th;
+    this.collapseBtn.shape.extent.y = th;
+    if (this.closeBtn && this.closeBtn.shape) this.closeBtn.shape.extent.y = th;
+    if (this.hasVisibleCloseBtn()) {
+      this.removeMorph(this.closeBtn);
+      this.addMorph(this.closeBtn);
+    }
+    this.changed();
+  }
+  onPointerDown(p, evt) {
+    /** Title-bar chrome: drag / collapse / close via the owning panel (not text select). */
+    if (!this.includesPt(p)) return false;
+    let hitInfo = this.hitInfo(p);
+    if (!hitInfo || !this.panel || !this.panel.beginTitleBarPress) return false;
+    // `p` is panel-local (our owner); beginTitleBarPress expects world/owner coords of the panel.
+    let worldP = this.panel.globalize(p);
+    return this.panel.beginTitleBarPress(worldP, evt, hitInfo);
+  }
+  setCollapseGlyph(collapsed) {
+    this.collapseBtn.shape.setText(collapsed ? '▶' : '▼');
+  }
+  setTitle(str) {
+    if (!this.titleMorph || !this.titleMorph.shape || !this.titleMorph.shape.setText) return;
+    this.titleMorph.shape.setText(str);
+    let panel = this.panel;
+    if (panel.collapsed) {
+      let b = panel.getBounds();
+      let nw = this.collapsedTitleBarWidth();
+      panel.setBounds(rect(b.topLeft.x, b.topLeft.y, nw, PanelTitleBar.prototype.HEIGHT));
+    } else {
+      this.layout();
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+PanelTitleBar.prototype.HEIGHT = 24;
+PanelTitleBar.prototype.BUTTON_WIDTH = 28;
+// Shared instances: chrome colors are re-assigned on every layout(), and a stable
+// identity makes those writes same-value no-ops in the doc (fresh Colors per call
+// allocated a new doc object each relayout).
+PanelTitleBar.prototype.COLLAPSE_FILL = Color.green.lighter().lighter();
+PanelTitleBar.prototype.CLOSE_FILL = Color.red.lighter().lighter();
+
+//  PanelMorph
+// ------------
+// Titled panel: collapse, dirty prompts, pane layout.
+class PanelMorph extends Morph {
+  constructor(initialBounds) {
+    super(initialBounds);
+    this.titleBarHeight = PanelTitleBar.prototype.HEIGHT;
+    this.titleButtonWidth = PanelTitleBar.prototype.BUTTON_WIDTH;
+    this.collapsed = false;
+    this._stashedContent = [];
+    this.lastLocationExpanded = null;
+    this.lastLocationCollapsed = null;
+    this.$stickyDragCollapsedBar = false;
+    let b = this.shape.getBounds();
+    this.titleBar = new PanelTitleBar(
+      this,
+      rect(b.topLeft.x, b.topLeft.y, b.width(), this.titleBarHeight),
+    );
+    this.addMorph(this.titleBar);
+    this.collapseBtn = this.titleBar.collapseBtn;
+    this.closeBtn = this.titleBar.closeBtn;
+    this.titleMorph = this.titleBar.titleMorph;
+  }
+  acceptsDroppingMorphs() {
+    return false;
+  }
+  applyCollapsedBarGridSnap() {
+    let snap = this.collapsedBarGridSnap();
+    if (snap.x !== 0 || snap.y !== 0) this.moveBy(snap);
+    return snap;
+  }
+  beginTitleBarPress(p, evt, hitInfo) {
+    this.$closeBtnPressed = !!hitInfo.onClose;
+    this.$collapseBtnPressed = !hitInfo.onClose && !!hitInfo.onCollapse;
+    this.$titleBarDrag = !hitInfo.onClose && !hitInfo.onCollapse;
+    // Shared drag protocol — begun even for chrome presses: a collapse press can
+    // turn into a sticky drag, and a press that never moves commits op-free.
+    return this.beginPointerDrag(p, evt);
+  }
+  boundsForNew(optionalRect) {
+    /** Resolve optional bounds for panel {@link initialize}. */
+    return optionalRect != null ? optionalRect : this.defaultRect();
+  }
+  clearTitleBarPress() {
+    this.$titleBarDrag = false;
+    this.$collapseBtnPressed = false;
+    this.$closeBtnPressed = false;
+    // Commits the ephemeral transform/bounds and clears the shared drag state.
+    this.finishPointerDrag();
+  }
+  collapsedBarGridSnap() {
+    if (!this.collapsed) return pt(0, 0);
+    let tl = this.getBounds().topLeft;
+    return tl.gridBy(4).subPt(tl);
+  }
+  collapsedTitleBarWidth() {
+    return this.titleBar ? this.titleBar.collapsedTitleBarWidth() : this.titleButtonWidth + 24;
+  }
+  contentMorphs() {
+    return this.submorphs.filter((m) => m !== this.titleBar);
+  }
+  defaultRect() {
+    return rect(400, 60, 400, 300);
+  }
+  finishStickyCollapsedTitleBarDrag(p, evt) {
+    /** End first-collapse sticky drag: drop on pointerDown (not pointerUp). */
+    if (!this.$stickyDragCollapsedBar) return false;
+    if (this.$didDrag) {
+      let worldDropPt = this.owner ? this.owner.globalize(p) : p;
+      let anchorLocal = this.relativize(p);
+      this.dropOnTopMorphAt(worldDropPt, anchorLocal);
+    }
+    if (this.collapsed) this.applyCollapsedBarGridSnap();
+    this.savePanelLocation();
+    this.$stickyDragCollapsedBar = false;
+    this.finishPointerDrag();
+    return true;
+  }
+  hasVisibleCloseBtn() {
+    return this.titleBar ? this.titleBar.hasVisibleCloseBtn() : false;
+  }
+  layoutChrome() {
+    let b = this.shape.getBounds();
+    this.titleBar.setBounds(rect(b.topLeft.x, b.topLeft.y, b.width(), this.titleBarHeight));
+    this.titleBar.layout();
+    this.changed();
+  }
+  menuAnchorPt(halfWidthOffset) {
+    let tl = this.topLeftInWorld();
+    let b = this.shape.getBounds();
+    return tl.addPt(pt(Math.max(4, b.width() / 2 - halfWidthOffset), this.titleBarHeight + 16));
+  }
+  onPointerDown(p, evt) {
+    if (!this.includesPt(p)) return false;
+    // first click only raises a buried panel,
+    // except chrome buttons (collapse/delete) should act immediately.
+    // Frontmost check is within the panel's zBand: persistent and ephemeral
+    // siblings interleave by zIndex; fleeting menus/halos above don't bury it.
+    let world = this.world();
+    let frontInBand = world.frontmostInBand ? world.frontmostInBand(this.zBand ? this.zBand() : 0) : null;
+    if (frontInBand !== this) {
+      let localP = this.relativize(p);
+      let hitInfo = this.titleBarHitInfo(localP);
+      let onCollapse = hitInfo && hitInfo.onCollapse;
+      let onClose = hitInfo && hitInfo.onClose;
+      this.beTopMorph();
+      if (!onCollapse && !onClose) {
+        // Same click should reach text/list in content; do not clear keyboard focus here.
+        return super.onPointerDown(p, evt);
+      }
+      // else: continue to handle title bar press immediately
+    }
+    // Title bar (including the title label) always drags / chrome-acts — never text-selects.
+    let localP = this.relativize(p);
+    let hitInfo = this.titleBarHitInfo(localP);
+    if (hitInfo) return this.beginTitleBarPress(p, evt, hitInfo);
+    return super.onPointerDown(p, evt);
+  }
+  onPointerMove(p, evt) {
+    if (!this.$hitPoint) return false;
+    if (
+      (this.$collapseBtnPressed || this.$closeBtnPressed) &&
+      !this.$titleBarDrag &&
+      !this.$stickyDragCollapsedBar
+    ) {
+      this.$hitPoint = p;
+      return true;
+    }
+    if (!this.$titleBarDrag && !this.$stickyDragCollapsedBar) return false;
+    return this.continuePointerDrag(p, evt);
+  }
+  dragMovedBy(delta, p, evt) {
+    this.moveBy(delta);
+    if (this.collapsed) {
+      let snap = this.applyCollapsedBarGridSnap();
+      if (snap.x !== 0 || snap.y !== 0) this.$hitPoint = this.$hitPoint.addPt(snap);
+    }
+  }
+  onPointerUp(p, evt) {
+    if (this.$closeBtnPressed) {
+      if (this.submorphHasUnsavedText(this)) {
+        this.promptOkToCancelEdits((okToCancel) => {
+          this.clearTitleBarPress();
+          if (okToCancel) {
+            this.revertUnsavedEdits();
+            this.remove();
+          }
+        });
+        return true;
+      }
+      this.remove();
+    } else if (this.$collapseBtnPressed) {
+      if (this.submorphHasUnsavedText(this)) {
+        let upP = p;
+        this.promptOkToCancelEdits((okToCancel) => {
+          if (!okToCancel) {
+            this.clearTitleBarPress();
+            return;
+          }
+          this.revertUnsavedEdits();
+          this.toggleCollapse();
+          if (this.$stickyDragCollapsedBar) {
+            this.$hitPoint = upP;
+            this.$didDrag = false;
+            this.$collapseBtnPressed = false;
+            return;
+          }
+          this.clearTitleBarPress();
+        });
+        return true;
+      }
+      this.toggleCollapse();
+      if (this.$stickyDragCollapsedBar) {
+        this.$hitPoint = p;
+        this.$didDrag = false;
+        this.$collapseBtnPressed = false;
+        return true;
+      }
+    } else if (this.$titleBarDrag) {
+      if (this.$didDrag) {
+        let worldDropPt = this.owner ? this.owner.globalize(p) : p;
+        let anchorLocal = this.relativize(p);
+        this.dropOnTopMorphAt(worldDropPt, anchorLocal);
+      }
+      if (this.collapsed) this.applyCollapsedBarGridSnap();
+      this.savePanelLocation();
+    }
+    if (this.$titleBarDrag || this.$collapseBtnPressed || this.$closeBtnPressed) {
+      this.clearTitleBarPress();
+      return true;
+    }
+    return super.onPointerUp(p, evt);
+  }
+  onTextBoundsChanged() {
+    this.setBounds(this.getBounds());
+  }
+  paneLayoutBounds() {
+    let b = this.shape.getBounds();
+    let th = this.titleBarHeight;
+    // Content region in panel-local coords (shape origin is always 0,0 after setBounds)
+    return rect(0, th, b.width(), Math.max(8, b.height() - th));
+  }
+  promptConfirm(titleLine, yesLine, noLine, onResult) {
+    promptConfirmMenu(
+      this.world(),
+      fleetingMenuAnchorPt(this.menuAnchorPt(100)),
+      titleLine,
+      yesLine,
+      noLine,
+      onResult,
+    );
+  }
+  promptOkToCancelEdits(onResult) {
+    promptOkToCancelEditsMenu(this.world(), fleetingMenuAnchorPt(this.menuAnchorPt(150)), onResult);
+  }
+  rectForSpawnedPanel(insetPx, minW, minH) {
+    /** Bounds for a new world-level panel offset from this one (uses world coords; works when nested). */
+    let ins = insetPx != null ? insetPx : 28;
+    let tl = this.topLeftInWorld();
+    let s = this.shape.getBounds();
+    let bw = Math.max(minW != null ? minW : 320, s.width());
+    let bh = Math.max(minH != null ? minH : 220, s.height());
+    return tl.addPt(pt(ins, ins)).extent(pt(bw, bh));
+  }
+  relayoutContentPanes() {
+    if (this.collapsed) return;
+    let cb = this.paneLayoutBounds();
+    this.contentMorphs().forEach((morph) => {
+      if (morph.setPaneBoundsIn) morph.setPaneBoundsIn(cb);
+    });
+  }
+  revertUnsavedEdits() {
+    let walk = (m) => {
+      if (m.className == 'TextPane' && m.hasUnsavedChanges && m._savedTextSnapshot != null)
+        m.setText(m._savedTextSnapshot, { force: true });
+      if (m.className == 'StylePanel' && m.revertStyle) m.revertStyle();
+      (m.submorphs || []).forEach(walk);
+    };
+    walk(this);
+  }
+  savePanelLocation() {
+    // In-place update: this runs on every title-bar drag end, and assigning a
+    // fresh rect copy each time allocates a whole new object graph in the doc
+    // (~200 ops/drag) and orphans the old one.
+    let r = this.getBounds();
+    if (this.collapsed) {
+      if (this.lastLocationCollapsed) this.lastLocationCollapsed.setToRect(r);
+      else this.lastLocationCollapsed = r.copy();
+    } else {
+      if (this.lastLocationExpanded) this.lastLocationExpanded.setToRect(r);
+      else this.lastLocationExpanded = r.copy();
+    }
+  }
+  setBounds(newBounds) {
+    super.setBounds(newBounds);
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  setPanelTitle(str) {
+    if (this.titleBar) this.titleBar.setTitle(str);
+  }
+  submorphHasUnsavedText(m) {
+    if (m.className == 'TextPane' && m.hasUnsavedChanges()) return true;
+    if (m.className == 'StylePanel' && m.hasUnsavedChanges && m.hasUnsavedChanges()) return true;
+    let subs = m.submorphs || [];
+    for (let i = 0; i < subs.length; i++) {
+      if (this.submorphHasUnsavedText(subs[i])) return true;
+    }
+    return false;
+  }
+  titleBarHitInfo(localP) {
+    return this.titleBar ? this.titleBar.hitInfo(localP) : null;
+  }
+  titleBarRect() {
+    return this.titleBar ? this.titleBar.getBounds().copy() : rect(0, 0, 0, 0);
+  }
+  toggleCollapse() {
+    if (this.collapsed) {
+      if (this.lastLocationCollapsed) this.lastLocationCollapsed.setToRect(this.getBounds());
+      else this.lastLocationCollapsed = this.getBounds().copy();
+      this.collapsed = false;
+      this._stashedContent.forEach((m) => this.addMorph(m));
+      clearArray(this._stashedContent);
+      if (this.lastLocationExpanded) this.setBounds(this.lastLocationExpanded.copy());
+      this.titleBar.setCollapseGlyph(false);
+      this.$stickyDragCollapsedBar = false;
+    } else {
+      let hasSavedCollapsedLocation = !!this.lastLocationCollapsed;
+      if (this.lastLocationExpanded) this.lastLocationExpanded.setToRect(this.getBounds());
+      else this.lastLocationExpanded = this.getBounds().copy();
+      this.contentMorphs().forEach((m) => {
+        this._stashedContent.push(m);
+        this.removeMorph(m);
+      });
+      this.collapsed = true;
+      let cw = this.collapsedTitleBarWidth();
+      // (setBounds copies its argument, so aliasing a doc point into cr is fine)
+      let barTopLeft = this.lastLocationCollapsed
+        ? this.lastLocationCollapsed.topLeft
+        : this.lastLocationExpanded.topLeft;
+      super.setBounds(barTopLeft.extent(pt(cw, this.titleBarHeight)));
+      this.titleBar.setCollapseGlyph(true);
+      this.$stickyDragCollapsedBar = !hasSavedCollapsedLocation;
+    }
+    this.layoutChrome();
+  }
+  topLeftInWorld() {
+    /** World-space top-left of this panel's shape (for spawning child windows on the world). */
+    return this.globalize(this.shape.getBounds().topLeft);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  MethodPanel
+// -------------
+// Single TextPane for method source or help.
+class MethodPanel extends PanelMorph {
+  constructor(initialBounds, string, optionalTitle) {
+    /** Single full-height {@link TextPane} for method source or help text. */
+    let text = string;
+    // Hack to read from localStorage...
+    if (optionalTitle && optionalTitle.startsWith('localStorage.'))
+      text = localStorage.getItem(optionalTitle.slice(13));
+    const bounds = initialBounds != null ? initialBounds : rect(400, 60, 400, 300);
+    super(bounds);
+    this.initTextPane(text != null ? text : '', optionalTitle);
+  }
+  initTextPane(string, optionalTitle) {
+    let panelBounds = this.paneLayoutBounds();
+    this.textPane = this.addMorph(new TextPane(panelBounds, rect(0.0, 0.0, 1.0, 1.0)));
+    this.textPane.setText(string);
+    if (optionalTitle.startsWith('localStorage.'))
+      this.textPane.setLocalStorageKey(optionalTitle.slice(13));
+    this.setPanelTitle(optionalTitle ? optionalTitle : 'Text Panel');
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  BrowserPanel
+// --------------
+// Class + method browser with list panes.
+class BrowserPanel extends PanelMorph {
+  constructor(initialBounds) {
+    const bounds = initialBounds != null ? initialBounds : rect(400, 60, 400, 300);
+    super(bounds);
+    this.selectedClass = null;
+    this.selectedMethod = null;
+    this.initClassPane();
+    this.initMessagePane();
+    this.initMethodPane();
+    this.setPanelTitle('System Browser');
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  deleteThisClass() {
+    let className = this.selectedClassName();
+    if (!className) return;
+    if (!deleteClassNamed(className)) return;
+    this.selectedClass = null;
+    this.selectedMethod = null;
+    this.classPane.setList(['globals'].concat(allClassNamesWithStatics()));
+    if (this.messagePane) this.messagePane.setList(['message names']);
+    if (this.methodPane) this.methodPane.setText('Method text', { force: true });
+    this.updateBrowserTitle();
+  }
+  deleteThisMethod() {
+    let spec = this.selectedMethodSpec();
+    if (!spec) return;
+    if (!deleteMethodWithSpec(spec)) return;
+    this.selectedMethod = null;
+    if (this.methodPane) this.methodPane.setText('Method text', { force: true });
+    this.refreshMessageListForSelectedClass();
+    this.updateBrowserTitle();
+  }
+  exportMethodCopyToOSPaste() {
+    let exportText = this.methodCopyText();
+    if (!exportText) return;
+    addPasteBufferItem(exportText);
+    copyTextToOSClipboard(exportText);
+  }
+  exportThisClassToOSPaste() {
+    if (!this.selectedClass) return;
+    let classSelection = this.selectedClass;
+    if (classSelection == 'globals') return;
+    let exportText = exportStringForSelection(classSelection, {
+      includeHeader: true,
+      includeClassDef: true,
+    });
+    if (!exportText) return;
+    addPasteBufferItem(exportText);
+    copyTextToOSClipboard(exportText);
+  }
+  initClassPane() {
+    /** Class list (upper-left) in the system browser. */
+    let panelBounds = this.paneLayoutBounds();
+    this.classPane = this.addMorph(new ListPane(panelBounds, rect(0.0, 0.0, 0.4, 0.4)));
+    this.classPane.setList(['globals'].concat(allClassNames()));
+    this.classPane.setPaneMenu(classSelectorPaneMenuSpec(this));
+    this.classPane.onSelect((classSelection) => {
+      let applyClass = () => {
+        console.log('this.classOrInst = ' + classSelection);
+        this.selectedClass = classSelection;
+        this.selectedMethod = null;
+        this.updateBrowserTitle();
+        this.messagePane.setList(this.messageListForSelection(classSelection));
+      };
+      if (this.methodPane && this.methodPane.hasUnsavedChanges()) {
+        if (this.selectedClass != null && classSelection === this.selectedClass) return;
+        this.promptOkToCancelEdits((okToCancel) => {
+          if (!okToCancel) {
+            if (this.selectedClass != null)
+              this.classPane.setSelectionString(this.selectedClass, true);
+            if (this.selectedMethod != null)
+              this.messagePane.setSelectionString(this.selectedMethod, true);
+            return;
+          }
+          this.methodPane.setText('Method text', { force: true });
+          applyClass();
+        });
+        return;
+      }
+      applyClass();
+    });
+  }
+  initMessagePane() {
+    /** Method name list (upper-right) in the system browser. */
+    let panelBounds = this.paneLayoutBounds();
+    this.messagePane = this.addMorph(new ListPane(panelBounds, rect(0.4, 0.0, 0.6, 0.4)));
+    this.messagePane.setList(['message names']);
+    this.messagePane.setPaneMenu(methodSelectorPaneMenuSpec(this));
+    this.messagePane.onSelect((methodSelection, shiftKey) => {
+      let applyMethod = () => {
+        console.log('this.selectedMethod = ' + methodSelection);
+        this.selectedMethod = methodSelection;
+        this.updateBrowserTitle();
+        let methodString = null;
+        let headerString = '';
+        let cls = this.selectedClassName() ? $global[this.selectedClassName()] : null;
+        if (this.selectedClass == 'globals') {           // Global methods
+          methodString = $global[this.selectedMethod].toString();
+          headerString = this.selectedMethod + ' = ';
+        } else if (this.selectedMethod === 'constructor') {
+          // Class fragment; save installs it via replaceMethod (keeps the prototype).
+          methodString = constructorBodyOf(cls);
+        } else if (/^(get|set) /.test(this.selectedMethod)) { // Accessor halves
+          let fn = accessorForRow(cls, this.selectedMethod);
+          methodString = fn ? fn.toString() : '// missing accessor ' + this.selectedMethod;
+        } else if (this.selectedMethod.endsWith('*')) {  // Class methods
+          let name = this.selectedMethod.slice(0, -1);
+          methodString = cls[name].toString();
+          // Legacy-format statics keep the assignment form; fragments stand alone.
+          if (isLegacyFunctionShow(methodString)) headerString = this.selectedClass + '.' + name + ' = ';
+        } else {                                         // Proto methods
+          methodString = cls.prototype[this.selectedMethod].toString();
+          if (isLegacyFunctionShow(methodString))
+            headerString = this.selectedClass + '.prototype.' + this.selectedMethod + ' = ';
+        }
+        this.methodPane.setText(headerString + methodString, { force: true });
+      };
+      if (this.methodPane && this.methodPane.hasUnsavedChanges()) {
+        if (this.selectedMethod != null && methodSelection === this.selectedMethod) return;
+        this.promptOkToCancelEdits((okToCancel) => {
+          if (!okToCancel) {
+            if (this.selectedMethod != null)
+              this.messagePane.setSelectionString(this.selectedMethod, true);
+            return;
+          }
+          applyMethod();
+        });
+        return;
+      }
+      applyMethod();
+    });
+  }
+  initMethodPane() {
+    /** Editable method source (lower) in the system browser. */
+    let panelBounds = this.paneLayoutBounds();
+    this.methodPane = this.addMorph(new TextPane(panelBounds, rect(0.0, 0.4, 1.0, 0.6)));
+    this.methodPane.setText('Method text');
+    // Class fragments in this pane save via replaceMethod (see the ctrl-S handler);
+    // the globals pane and legacy '<spec> = function ...' text keep plain eval.
+    this.methodPane.contentPane.shape.fragmentSaveClassName = () => this.selectedClassName();
+  }
+  methodCopyText() {
+    if (!this.methodPane || !this.methodPane.contentPane) return null;
+    let text = this.methodPane.contentPane.shape.string;
+    if (!text || text === 'Method text') return null;
+    // Fragments only make sense with their class; copies get the self-contained form.
+    let className = this.selectedClassName();
+    if (className && !looksLikeLegacyMethodText(text))
+      return replaceMethodCallString(className, text);
+    return text;
+  }
+  methodCopyTitle() {
+    if (this.selectedClass && this.selectedMethod)
+      return this.selectedClass + ' ' + this.selectedMethod;
+    return 'Method copy';
+  }
+  promptDeleteThisClass() {
+    let className = this.selectedClassName();
+    if (!className) return;
+    this.promptConfirm('Do you really want to delete ' + className + '?', ' yes', ' NO', (ok) => {
+      if (ok) this.deleteThisClass();
+    });
+  }
+  promptDeleteThisMethod() {
+    let spec = this.selectedMethodSpec();
+    if (!spec) return;
+    this.promptConfirm('Do you really want to delete ' + spec + '?', ' yes', ' NO', (ok) => {
+      if (ok) this.deleteThisMethod();
+    });
+  }
+  messageListForSelection(classSelection) {
+    /** Names shown in the message pane for a class-pane selection. */
+    if (classSelection == 'globals') {
+      // Lowercase-first names only: classes get their own list entries.
+      return Object.getOwnPropertyNames($global)
+        .sort()
+        .filter((msg) => msg[0] == msg[0].toLowerCase());
+    }
+    // Pin constructor at the top; methods, accessor halves ('get foo' / 'set foo'),
+    // and statics (marked with '*') sorted by member name.
+    let cls = $global[classSelection.endsWith('.class') ? classSelection.split('.')[0] : classSelection];
+    let rows = classSelection.endsWith('.class')
+      ? classStaticNames(cls).map((each) => each + '*')
+      : classMemberRows(cls).concat(classStaticNames(cls).map((each) => each + '*'));
+    rows.sort((a, b) => {
+      let ka = memberRowSortKey(a);
+      let kb = memberRowSortKey(b);
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    return classSelection.endsWith('.class') ? rows : ['constructor'].concat(rows);
+  }
+  refreshMessageListForSelectedClass() {
+    if (!this.selectedClass || !this.messagePane) return;
+    this.messagePane.setList(this.messageListForSelection(this.selectedClass));
+  }
+  selectedClassName() {
+    if (!this.selectedClass || this.selectedClass == 'globals') return null;
+    if (this.selectedClass.endsWith('.class')) return this.selectedClass.split('.')[0];
+    return this.selectedClass;
+  }
+  selectedMethodSpec() {
+    if (!this.selectedMethod) return null;
+    if (this.selectedClass == 'globals') return this.selectedMethod;
+    if (this.selectedMethod === 'constructor') return this.selectedClass + '.constructor';
+    if (this.selectedMethod.endsWith('*'))
+      return this.selectedClassName() + '.' + this.selectedMethod.slice(0, -1);
+    if (this.selectedClass && this.selectedClass.endsWith('.class'))
+      return this.selectedClass.split('.')[0] + '.' + this.selectedMethod;
+    if (this.selectedClass) return this.selectedClass + '.prototype.' + this.selectedMethod;
+    return null;
+  }
+  spawnMethodCopyToWindow() {
+    let text = this.methodCopyText();
+    if (!text) return;
+    Lively.addEphemeralMorph(
+      new MethodPanel(this.rectForSpawnedPanel(28, 320, 220), text, this.methodCopyTitle()),
+    );
+  }
+  spawnThisClassToWindow() {
+    if (!this.selectedClass || this.selectedClass == 'globals') return;
+    let text = exportStringForSelection(this.selectedClass, {
+      includeHeader: true,
+      includeClassDef: true,
+    });
+    if (!text) return;
+    Lively.addEphemeralMorph(
+      new MethodPanel(this.rectForSpawnedPanel(28, 320, 220), text, this.selectedClass),
+    );
+  }
+  updateBrowserTitle() {
+    let t = 'System Browser';
+    if (this.selectedClass) t = this.selectedClass;
+    if (this.selectedMethod) t = this.selectedClass + ' ' + this.selectedMethod;
+    this.setPanelTitle(t);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  StylePanel
+// ------------
+// Live style editor (fill, stroke, width) for a morph.
+class StylePanel extends PanelMorph {
+  constructor(initialBounds, target) {
+    const bounds = initialBounds != null ? initialBounds : rect(400, 80, 280, 340);
+    const styleSnapshot = copyStyleSnapshot(styleSnapshotFromMorph(target));
+    super(bounds);
+    this.target = target;
+    this._styleSnapshot = styleSnapshot;
+    this.styleState = copyStyleSnapshot(styleSnapshot);
+    this.initControls();
+    let title = target && target.className ? target.className : 'Morph';
+    this.setPanelTitle('Style: ' + title);
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  applyStyleToTarget() {
+    if (!this.target || !this.target.shape) return;
+    applyStyleSnapshotToMorph(this.target, this.styleState);
+  }
+  defaultRect() {
+    return rect(400, 80, 280, 340);
+  }
+  ensureLineWidthForColor() {
+    if (this.styleState.borderColor && this.styleState.borderWidth === 0)
+      this.styleState.borderWidth = morphDefaultLineWidth(this.target);
+  }
+  hasUnsavedChanges() {
+    if (!this._styleSnapshot || !this.styleState) return false;
+    return !styleSnapshotsEqual(this.styleState, this._styleSnapshot);
+  }
+  initControls() {
+    let outer = super.paneLayoutBounds();
+    this.stylePane = new StylePane(outer);
+    this.stylePane.stylePanel = this;
+    this.addMorph(this.stylePane);
+    let pane = this.stylePane;
+    let panelBounds = pane.paneLayoutBounds();
+    let panel = this;
+    let alphaW = 0.06;
+    let alphaX = 1 - alphaW;
+    let pickerW = alphaX - 0.01;
+    let capH = 0.07;
+    let pickH = 0.28;
+    pane.makeLabel(panelBounds, rect(0, 0, 0.12, capH), 'Fill');
+    pane.makeNoneButton(panelBounds, rect(0.14, 0, 0.14, capH), () => {
+      panel.styleState.fillColor = null;
+      panel.previewStyleEdit();
+    });
+    pane.makeAlphaCaption(panelBounds, rect(alphaX, 0, alphaW, capH));
+    this.fillPicker = pane.addPaneControl(
+      panelBounds,
+      rect(0, capH, pickerW, pickH),
+      new HuePickerMorph(rect(0, 0, 64, 64), (color) => {
+        panel.styleState.fillColor = color.copy();
+        panel.previewStyleEdit();
+      }),
+    );
+    this.fillAlphaSlider = pane.addPaneControl(
+      panelBounds,
+      rect(alphaX, capH, alphaW, pickH),
+      new SliderMorph(
+        rect(0, 0, 10, 40),
+        (val) => {
+          panel.styleState.fillAlpha = val;
+          panel.previewStyleEdit();
+        },
+        { menuButton: false },
+      ),
+    );
+    pane.makeLabel(panelBounds, rect(0, 0.37, 0.12, capH), 'Line');
+    pane.makeNoneButton(panelBounds, rect(0.14, 0.37, 0.14, capH), () => {
+      panel.styleState.borderColor = null;
+      panel.styleState.borderWidth = 0;
+      panel.previewStyleEdit();
+      panel.syncSlidersFromState();
+    });
+    pane.makeAlphaCaption(panelBounds, rect(alphaX, 0.37, alphaW, capH));
+    this.linePicker = pane.addPaneControl(
+      panelBounds,
+      rect(0, 0.44, pickerW, pickH),
+      new HuePickerMorph(rect(0, 0, 64, 64), (color) => {
+        panel.styleState.borderColor = color.copy();
+        panel.ensureLineWidthForColor();
+        panel.previewStyleEdit();
+        panel.syncSlidersFromState();
+      }),
+    );
+    this.lineAlphaSlider = pane.addPaneControl(
+      panelBounds,
+      rect(alphaX, 0.44, alphaW, pickH),
+      new SliderMorph(
+        rect(0, 0, 10, 40),
+        (val) => {
+          panel.styleState.borderAlpha = val;
+          panel.previewStyleEdit();
+        },
+        { menuButton: false },
+      ),
+    );
+    this.lineWidthLabel = pane.makeLabel(
+      panelBounds,
+      rect(0, 0.76, 0.55, 0.07),
+      lineWidthCaptionText(panel.styleState.borderWidth),
+      pt(0, -3),
+    );
+    this.widthSlider = pane.addPaneControl(
+      panelBounds,
+      rect(0, 0.83, 1, 0.035),
+      new SliderMorph(
+        rect(0, 0, 80, 10),
+        (val) => {
+          panel.styleState.borderWidth = roundLineWidth(val * 20);
+          if (panel.styleState.borderWidth > 0 && !panel.styleState.borderColor)
+            panel.styleState.borderColor = Color.black.copy();
+          panel.previewStyleEdit();
+          panel.updateLineWidthCaption();
+        },
+        { menuButton: false },
+      ),
+    );
+    this.revertBtn = pane.addPaneControl(
+      panelBounds,
+      rect(0.1, 0.9, 0.36, 0.055),
+      new SimpleButtonMorph(rect(0, 0, 10, 10), 'Revert'),
+    );
+    this.titleBar.configureChromeButton(this.revertBtn, Color.orange.lighter(), 'Revert');
+    this.styleActionButton(this.revertBtn);
+    this.revertBtn.onPointerUp = function (p, evt) {
+      panel.revertStyle();
+      this.$dragActorID = null;
+      this.$hitPoint = null;
+      this.world().setPointerFocus(null);
+      return true;
+    };
+    this.saveBtn = pane.addPaneControl(
+      panelBounds,
+      rect(0.54, 0.9, 0.36, 0.055),
+      new SimpleButtonMorph(rect(0, 0, 10, 10), 'Save'),
+    );
+    this.titleBar.configureChromeButton(this.saveBtn, Color.green.lighter().lighter(), 'Save');
+    this.styleActionButton(this.saveBtn);
+    this.saveBtn.onPointerUp = function (p, evt) {
+      panel.saveStyle();
+      this.$dragActorID = null;
+      this.$hitPoint = null;
+      this.world().setPointerFocus(null);
+      return true;
+    };
+    this.syncSlidersFromState();
+    this.refreshDirtyBorder();
+  }
+  noteStyleEdited() {
+    this.refreshDirtyBorder();
+  }
+  previewStyleEdit() {
+    this.applyStyleToTarget();
+    this.noteStyleEdited();
+  }
+  refreshDirtyBorder() {
+    if (this.stylePane) this.stylePane.setDirtyBorder(this.hasUnsavedChanges());
+  }
+  revertStyle() {
+    if (!this._styleSnapshot) return;
+    this.styleState = copyStyleSnapshot(this._styleSnapshot);
+    this.applyStyleToTarget();
+    this.syncSlidersFromState();
+    this.refreshDirtyBorder();
+  }
+  saveStyle() {
+    this._styleSnapshot = copyStyleSnapshot(this.styleState);
+    this.refreshDirtyBorder();
+  }
+  styleActionButton(btn) {
+    let s = btn.shape;
+    s.cornerRadius = 5;
+    s.setBorderWidth(1);
+    s.setBorderColor(Color.darkGray);
+    s.lineHeight = 16;
+    s.verticalNudge = 4;
+  }
+  syncSlidersFromState() {
+    if (this.fillAlphaSlider) this.fillAlphaSlider.setValueQuiet(this.styleState.fillAlpha);
+    if (this.lineAlphaSlider) this.lineAlphaSlider.setValueQuiet(this.styleState.borderAlpha);
+    if (this.widthSlider)
+      this.widthSlider.setValueQuiet(Math.min(1, this.styleState.borderWidth / 20));
+    this.updateLineWidthCaption();
+  }
+  updateLineWidthCaption() {
+    if (!this.lineWidthLabel) return;
+    this.lineWidthLabel.setText(lineWidthCaptionText(this.styleState.borderWidth));
+    this.lineWidthLabel.changed();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  InspectorPanel
+// ----------------
+// Variable list + print-it pane for one object.
+class InspectorPanel extends PanelMorph {
+  constructor(initialBounds, target) {
+    const bounds = initialBounds != null ? initialBounds : rect(500, 100, 300, 300);
+    super(bounds);
+    this.target = target;
+    this.varValue = null;
+    this.selectedVarName = null;
+    this.initVarsPane();
+    this.initPrintAndEvalPanes();
+    this.setPanelTitle('Inspector ' + this.target.className);
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  defaultRect() {
+    return rect(500, 100, 300, 300);
+  }
+  initPrintAndEvalPanes() {
+    /** Print-it and eval panes (right / bottom) in the inspector. */
+    let panelBounds = this.paneLayoutBounds();
+    this.printPane = this.addMorph(new TextPane(panelBounds, rect(0.3, 0.0, 0.7, 0.6)));
+    this.printPane.setText('Var value toString()');
+    this.evalPane = this.addMorph(new TextPane(panelBounds, rect(0.0, 0.6, 1.0, 0.4)));
+    this.evalPane.setText('Eval here with this bound to this ' + this.target.className);
+    this.evalPane.contentPane.setWorkspaceObj(this.target);
+  }
+  initVarsPane() {
+    /** Instance variable list (left) in the inspector. */
+    let panelBounds = this.paneLayoutBounds();
+    this.varsPane = this.addMorph(new ListPane(panelBounds, rect(0.0, 0.0, 0.3, 0.6)));
+    this.varsPane.setList(Object.getOwnPropertyNames(this.target));
+    this.varsPane.setPaneMenu({
+      items: ['inspect selected value'],
+      onSelect: (item, pane) => {
+        if (item == 'inspect selected value' && this.selectedVarName != null)
+          this.showSelectedValue(true, null);
+      },
+    });
+    this.varsPane.onSelect((varName, shiftKey) => {
+      let applyVar = (printOpts) => {
+        this.selectedVarName = varName;
+        this.showSelectedValue(shiftKey, printOpts);
+      };
+      if (this.printPane && this.printPane.hasUnsavedChanges()) {
+        if (this.selectedVarName != null && varName === this.selectedVarName) return;
+        this.promptOkToCancelEdits((okToCancel) => {
+          if (!okToCancel) {
+            if (this.selectedVarName != null)
+              this.varsPane.setSelectionString(this.selectedVarName, true);
+            return;
+          }
+          applyVar({ force: true });
+        });
+        return;
+      }
+      applyVar(null);
+    });
+  }
+  showSelectedValue(shiftKey, printOpts) {
+    if (!this.selectedVarName) return;
+    this.varValue = this.target[this.selectedVarName];
+    if (shiftKey) {
+      inspect(this.varValue, this.rectForSpawnedPanel(28, 320, 220));
+    } else {
+      this.printPane.setText(inspectString(this.varValue), printOpts);
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  MethodListPanel
+// -----------------
+// Search hits or recent changes as a method list.
+class MethodListPanel extends PanelMorph {
+  constructor(initialBounds, methodSpecs, recentMethodsIfAny, optionalTitle, searchStringIfAny) {
+    const bounds = initialBounds != null ? initialBounds : rect(400, 60, 400, 300);
+    super(bounds);
+    this.methodSpecs = methodSpecs;
+    this.recents = recentMethodsIfAny;
+    this.searchString = searchStringIfAny || null;
+    this._occurrenceLastSpec = null;
+    this._fragmentClassName = null;
+    this.initMethodsPane();
+    this.initPrintPane();
+    this.setPanelTitle(optionalTitle || 'Method list');
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  deleteThisMethod() {
+    let spec = this.selectedMethodSpec();
+    if (!spec) return;
+    if (!deleteMethodWithSpec(spec)) return;
+    if (this.methodSpecs) {
+      this.methodSpecs = this.methodSpecs.filter((s) => methodSpecKey(s) !== spec);
+      this.methodsPane.setList(this.methodSpecs);
+    }
+    if (this.printPane) this.printPane.setText('Selected method', { force: true });
+    this._occurrenceLastSpec = null;
+    this._fragmentClassName = null;
+  }
+  exportMethodCopyToOSPaste() {
+    let exportText = this.methodCopyText();
+    if (!exportText) return;
+    addPasteBufferItem(exportText);
+    copyTextToOSClipboard(exportText);
+  }
+  initMethodsPane() {
+    /** Method-spec list (upper) for search results and recent changes. */
+    let panelBounds = this.paneLayoutBounds();
+    this.methodsPane = this.addMorph(new ListPane(panelBounds, rect(0.0, 0.0, 1.0, 0.4)));
+    this.methodsPane.setList(this.methodSpecs);
+    this.methodsPane.setPaneMenu(methodSelectorPaneMenuSpec(this));
+    this.methodsPane.onSelect((spec, shiftKey) => {
+      let applySpec = () => {
+        // Fragment members display as bare class fragments (like the browser's
+        // method pane) and re-save via replaceMethod through fragmentSaveClassName;
+        // globals and legacy-format members keep the assignment form.
+        let methodString = null;
+        let preamble = null;
+        let fragmentClassName = null;
+        if (spec.includes('[')) {
+          methodString = this.methodFromRecentSpec(spec);
+          let parsed = parseReplaceMethodCallString(methodString);
+          if (parsed) {
+            methodString = parsed.fragmentText;
+            fragmentClassName = parsed.className;
+            preamble = '';
+          } else {
+            preamble = spec.slice(0, spec.indexOf('[') - 1) + ' = ';
+          }
+        } else {
+          let fragment = fragmentForSpec(spec);
+          if (fragment != null) {
+            methodString = fragment;
+            fragmentClassName = methodSpecKey(spec).split('.')[0];
+            preamble = '';
+          } else {
+            methodString = methodFromSpec(spec);
+            preamble = spec + ' = ';
+          }
+        }
+        this._fragmentClassName = fragmentClassName;
+        this.printPane.setText(preamble + methodString, { force: true });
+        this._occurrenceLastSpec = spec;
+        if (this.searchString)
+          this.printPane.contentPane.shape.selectSearchString(this.searchString);
+        if (shiftKey) {
+          // A spawned panel has no owning class, so it gets the self-contained form.
+          let spawnText = fragmentClassName
+            ? replaceMethodCallString(fragmentClassName, '' + methodString)
+            : preamble + methodString;
+          Lively.addEphemeralMorph(
+            new MethodPanel(this.rectForSpawnedPanel(28, 320, 220), spawnText, spec),
+          );
+        }
+      };
+      if (this.printPane && this.printPane.hasUnsavedChanges()) {
+        if (this._occurrenceLastSpec != null && spec === this._occurrenceLastSpec) return;
+        this.promptOkToCancelEdits((okToCancel) => {
+          if (!okToCancel) {
+            if (this._occurrenceLastSpec != null)
+              this.methodsPane.setSelectionString(this._occurrenceLastSpec, true);
+            return;
+          }
+          applySpec();
+        });
+        return;
+      }
+      applySpec();
+    });
+  }
+  initPrintPane() {
+    /** Method source preview (lower) for search / recent-changes panels. */
+    let panelBounds = this.paneLayoutBounds();
+    this.printPane = this.addMorph(new TextPane(panelBounds, rect(0.0, 0.4, 1.0, 0.6)));
+    this.printPane.setText('Selected method');
+    // Class fragments in this pane save via replaceMethod, exactly like the
+    // system browser's method pane (see the ctrl-S handler).
+    this.printPane.contentPane.shape.fragmentSaveClassName = () => this._fragmentClassName;
+  }
+  methodCopyText() {
+    if (!this.printPane || !this.printPane.contentPane) return null;
+    let text = this.printPane.contentPane.shape.string;
+    if (!text || text === 'Selected method') return null;
+    // Fragments only make sense with their class; copies get the self-contained form.
+    if (this._fragmentClassName && !looksLikeLegacyMethodText(text))
+      return replaceMethodCallString(this._fragmentClassName, text);
+    return text;
+  }
+  methodCopyTitle() {
+    return this._occurrenceLastSpec || 'Method copy';
+  }
+  methodFromRecentSpec(spec) {
+    let found = null;
+    if (!this.recents) return found;
+    this.recents.forEach((tuple) => {
+      if (tuple[0] + tuple[1] == spec) found = tuple[2];
+    });
+    return found;
+  }
+  promptDeleteThisMethod() {
+    let spec = this.selectedMethodSpec();
+    if (!spec) return;
+    this.promptConfirm('Do you really want to delete ' + spec + '?', ' yes', ' NO', (ok) => {
+      if (ok) this.deleteThisMethod();
+    });
+  }
+  selectedMethodSpec() {
+    if (this._occurrenceLastSpec) return methodSpecKey(this._occurrenceLastSpec);
+    let text = this.methodCopyText();
+    if (!text) return null;
+    let ix = text.indexOf(' =');
+    if (ix < 0) return null;
+    return text.slice(0, ix).trim();
+  }
+  spawnMethodCopyToWindow() {
+    let text = this.methodCopyText();
+    if (!text) return;
+    Lively.addEphemeralMorph(
+      new MethodPanel(this.rectForSpawnedPanel(28, 320, 220), text, this.methodCopyTitle()),
+    );
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  ErrorStackPanel
+// -----------------
+// Error stack browser with frame list and source pane.
+class ErrorStackPanel extends MethodListPanel {
+  constructor(initialBounds, err, contextIfAny, optionalTitle) {
+    const stackFrames = stackFramesFromError(err);
+    const specs = stackFrames.map(function (f) {
+      return f.listLabel;
+    });
+    super(initialBounds, specs, null, optionalTitle || errorPanelTitle(err), null);
+    // The raw host Error is per-replica (not representable in the document).
+    this.$errorErr = err;
+    this.errorContext = contextIfAny;
+    this.stackFrames = stackFrames;
+    if (this.printPane)
+      this.printPane.setText(
+        errorReportHeader(err, contextIfAny) + '\n\n// Select a stack frame above',
+        { force: true },
+      );
+    let self = this;
+    this.methodsPane.onSelect(function (label, shiftKey) {
+      let idx = self.methodSpecs.indexOf(label);
+      if (idx >= 0) self.showStackFrame(idx);
+      if (shiftKey && idx >= 0 && self.printPane) {
+        let text = self.printPane.contentPane.shape.string;
+        Lively.addEphemeralMorph(
+          new MethodPanel(self.rectForSpawnedPanel(28, 320, 220), text, label),
+        );
+      }
+    });
+    if (this.stackFrames.length) this.methodsPane.setSelectionString(this.methodSpecs[0]);
+  }
+  refreshStackSources() {
+    let idx = this.methodSpecs.indexOf(this._occurrenceLastSpec);
+    if (idx < 0 && this.stackFrames.length) idx = 0;
+    if (idx >= 0) this.showStackFrame(idx);
+  }
+  showStackFrame(index) {
+    let frame = this.stackFrames[index];
+    if (!frame || !this.printPane) return;
+    frame.sourceText = stackFrameSourceText(frame);
+    let text = frame.sourceText || '// source not available for ' + frame.listLabel;
+    this.printPane.setText(text, { force: true });
+    this._occurrenceLastSpec = this.methodSpecs[index];
+    if (index > 0 && this.printPane.contentPane && this.printPane.contentPane.shape) {
+      let hl = stackFrameHighlightName(this.stackFrames[index - 1]);
+      if (hl) this.printPane.contentPane.shape.selectSearchString(hl);
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  TranscriptPanelMorph
+// ----------------------
+// Panel hosting a TranscriptTextPane.
+class TranscriptPanelMorph extends PanelMorph {
+  constructor(initialBounds) {
+    // Open with 'openTranscript()' ;
+    // Show with 'Transcript.push("Hi there")' ;
+    super(initialBounds);
+    let panelBounds = this.paneLayoutBounds();
+    this.transcriptPane = this.addMorph(new TranscriptTextPane(panelBounds, rect(0, 0, 1, 1)));
+    this.setPanelTitle('Transcript');
+    this.layoutChrome();
+    this.relayoutContentPanes();
+  }
+  clear() {
+    if (this.transcriptPane) this.transcriptPane.clear();
+  }
+  push(str) {
+    if (this.transcriptPane) this.transcriptPane.push(str);
+  }
+  receivesConsoleOutput() {
+    return this.transcriptPane && this.transcriptPane.receivesConsoleOutput();
+  }
+  setConsoleMirror(on) {
+    if (this.transcriptPane) this.transcriptPane.setConsoleMirror(on);
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +---------+
+// |  Halos  |
+// +---------+
+// Meta-click halo ring and its affordance handles.
+
+//  HaloHandle
+// ------------
+// One halo affordance (move, rotate, copy, …).
+class HaloHandle extends Morph {
+  constructor(index, iconLetter, handleName, halo) {
+    super(null, this.makeHandleShape(index, iconLetter, halo));
+    this.halo = halo;
+    this.handleName = handleName;
+    this.$alwaysOnTop = true; // stays in the overlay zBand even when reparented to the world mid-drag
+    let m = halo.handleLetterMetrics();
+    let localBounds = this.shape.getBounds();
+    let c = localBounds.center();
+    let letterBounds = rect(c.x - m.letterW / 2, c.y - m.letterH / 2, m.letterW, m.letterH);
+    this.letterMorph = this.addMorph(new TextMorph(letterBounds, iconLetter));
+    let letter = this.letterMorph.shape;
+    letter.font = m.font;
+    letter.lineHeight = m.lineHeight;
+    letter.setStyles(null, 0, null);
+    letter.boxColor = null;
+    if (iconLetter != 'I') letter.moveBy(m.nudge);
+    letter.$selectedLineIndex = 0;
+    letter.$selStart = null;
+    letter.$selStop = null;
+  }
+  makeHandleShape(index, iconLetter, halo) {
+    let radius = 10;
+    let center = halo.handleCenterForIndex(index);
+    let handleShape = new Ellipse(center, radius);
+    let chrome = halo.handleChromeStyle();
+    handleShape.setStyles(chrome.fill, chrome.borderWidth, chrome.borderColor);
+    return handleShape;
+  }
+  onPointerDown(pt, evt) {
+    if (!this.includesPt(pt)) return false;
+    this.$hitPoint = pt; // set for pointerDownOnHandle (e.g. Rotate) and for drag handles
+    if (['Menu', 'Style', 'Browse', 'Inspect', 'Delete', 'Persist'].includes(this.handleName))
+      return this.halo.pointerDownOnHandle(this, pt, evt);
+    // These handles become active handles on the target
+    this.target = this.halo.target;
+    if (this.handleName == 'Copy') {
+      // The fresh copy is in no submorph list yet, so it can't infer its edge
+      // kind — pass the original's so ephemeral morphs copy as ephemeral.
+      let copy = this.target.morphCopy();
+      copy.reparentToOwnerPreservingWorldAnchor(
+        this.world(),
+        null,
+        this.target.isEphemeralSubmorph(),
+      );
+      this.target = copy;
+    }
+    if (this.handleName == 'Grab') {
+      this.target.reparentToOwnerPreservingWorldAnchor(this.world(), null);
+    }
+    // Drag, Rotate and Scale here drag the handle during manipulation
+    let worldP = this.owner.globalize(pt);
+    if (this.handleName == 'Rotate') {
+      // Pivot is the shape center's true world position (rotateBy keeps it fixed).
+      let c = this.target.globalize(this.target.shape.getBounds().center());
+      this.$rotateStartAngle = Math.atan2(worldP.y - c.y, worldP.x - c.x);
+    }
+    if (this.handleName == 'Scale') {
+      // Anchors are relative to the shape's local topLeft — the fixed point of
+      // both scale modes. (Owner-coord bounds corners are only meaningful for
+      // unrotated targets.)
+      this.$scaleAnchorLocal = this.target.shape.getBounds().topLeft.copy();
+      this.$scaleAnchorInOwner = this.target.transform.transformPt(this.$scaleAnchorLocal);
+      this.$scaleAnchorWorld = this.target.owner
+        ? this.target.owner.globalize(this.$scaleAnchorInOwner)
+        : this.$scaleAnchorInOwner.copy();
+      this.$scaleStartPointerWorld = worldP.copy();
+      this.scaleTransformDrag = effectiveShiftKey(evt);
+      this.$scaleStartTransform = this.target.transform.scale.copy();
+      // Start-of-drag frame for the resize preview (SimpleTransform.copy()
+      // aliases its points, so build one with copies).
+      let tfm = this.target.transform;
+      this.$scaleStartTfm = new SimpleTransform(
+        tfm.translation.copy(),
+        tfm.rotation || 0,
+        tfm.scale ? tfm.scale.copy() : pt(1, 1),
+      );
+      this.$scaleStartShapeExtent = this.target.shape.getBounds().extent.copy();
+      this.$scaleDesiredExtent = null;
+      // Where the grab started, in start-local coordinates. Resizing is
+      // RELATIVE: start extent + the handle's movement along the shape's own
+      // axes. The handle sits on the halo frame, not on the shape's corner,
+      // so snapping the corner to it would make a rotated morph's size jump
+      // on the first move.
+      let downCornerWorld = this.owner.globalize(this.getBounds().center());
+      let downCornerInOwner = this.target.owner
+        ? this.target.owner.localize(downCornerWorld)
+        : downCornerWorld;
+      let downScrollY = this.target.$scrollOffsetY;
+      if (downScrollY)
+        downCornerInOwner = pt(downCornerInOwner.x, downCornerInOwner.y - downScrollY);
+      this.$scaleStartCornerLocal = this.$scaleStartTfm.invertPt(downCornerInOwner);
+    }
+    let worldTopLeft = this.owner.getBounds().topLeft.addPt(this.getBounds().topLeft); // handle topLeft in world before reparent
+    this.world().addEphemeralMorph(this); // handle owner was halo; now world (per-user, like the halo itself)
+    this.transform.translation = worldTopLeft.subPt(this.shape.getBounds().topLeft); // set world position so topLeft stays at worldTopLeft
+    this.syncBoundsFromGeometry();
+    // Shared drag protocol, with the halo's target as the drag target: its
+    // per-frame transform edits stay ephemeral until one commit on pointer-up.
+    this.beginPointerDrag(worldP, evt, this.target);
+    this.halo.remove();
+    return true;
+  }
+  onPointerMove(p, evt) {
+    // No submorph dispatch (the letter TextMorph must never see drag moves).
+    return this.continuePointerDrag(p, evt);
+  }
+  dragMovedBy(delta, p, evt) {
+    this.moveBy(delta); // the handle itself tracks the pointer
+    if (['Copy', 'Drag', 'Grab'].includes(this.handleName)) this.target.moveBy(delta);
+    if (this.handleName == 'Scale') {
+      let cornerPos = this.getBounds().center();
+      if (this.scaleTransformDrag) {
+        // Uniform transform scale: ratio of the pointer's distance from the
+        // anchor (the shape's rendered topLeft corner, which stays fixed).
+        let startDist = Math.max(this.$scaleStartPointerWorld.dist(this.$scaleAnchorWorld), 1);
+        let r = p.dist(this.$scaleAnchorWorld) / startDist;
+        r = Math.max(0.05, Math.min(24, r));
+        this.target.transform.scale = pt(
+          this.$scaleStartTransform.x * r,
+          this.$scaleStartTransform.y * r,
+        );
+        // The transform scales about the morph's local origin; re-pin the
+        // anchor in owner coordinates (as setRotation does for the center).
+        let after = this.target.transform.transformPt(this.$scaleAnchorLocal);
+        this.target.transform.translation = this.target.transform.translation.addPt(
+          this.$scaleAnchorInOwner.subPt(after),
+        );
+      } else {
+        // Resize preview: per-frame feedback lives ONLY on the ephemeral
+        // transform — the frozen shape is stretched via the scale, with the
+        // anchor re-pinned — so neither the shape nor any submorph relayout
+        // touches the document while the pointer moves. The one real
+        // setBounds (+ subclass relayout) happens in dragEnded.
+        let cornerInOwner = this.target.owner ? this.target.owner.localize(cornerPos) : cornerPos;
+        let scrollY = this.target.$scrollOffsetY;
+        if (scrollY) cornerInOwner = pt(cornerInOwner.x, cornerInOwner.y - scrollY);
+        // Desired final local extent: the start extent adjusted by the
+        // handle's movement, measured in the start-of-drag frame so the
+        // preview's own scale edits don't feed back into the math. (Relative,
+        // not corner-snapping — see the note at $scaleStartCornerLocal.)
+        let localCorner = this.$scaleStartTfm.invertPt(cornerInOwner);
+        let ext = this.$scaleStartShapeExtent
+          .addPt(localCorner.subPt(this.$scaleStartCornerLocal))
+          .maxPt(pt(1, 1));
+        this.$scaleDesiredExtent = ext;
+        let e0 = this.$scaleStartShapeExtent;
+        let s0 = this.$scaleStartTransform;
+        this.target.transform.scale = pt(
+          (s0.x * ext.x) / Math.max(e0.x, 0.001),
+          (s0.y * ext.y) / Math.max(e0.y, 0.001),
+        );
+        let after = this.target.transform.transformPt(this.$scaleAnchorLocal);
+        this.target.transform.translation = this.target.transform.translation.addPt(
+          this.$scaleAnchorInOwner.subPt(after),
+        );
+      }
+      if (this.target.syncBoundsFromGeometry) this.target.syncBoundsFromGeometry();
+      this.target.changed();
+      let world = this.target.world();
+      if (world && world.changed) world.changed();
+    }
+    if (this.handleName == 'Rotate') {
+      let c = this.target.globalize(this.target.shape.getBounds().center());
+      let currentAngle = Math.atan2(p.y - c.y, p.x - c.x);
+      this.target.rotateBy(currentAngle - this.$rotateStartAngle);
+      this.$rotateStartAngle = currentAngle;
+    }
+  }
+  dragEnded(p, evt, wasDrag) {
+    if (this.target && ['Copy', 'Grab'].includes(this.handleName)) {
+      let worldPt = this.owner ? this.owner.globalize(p) : p;
+      this.target.dropOnTopMorphAt(worldPt);
+    }
+    if (this.target && this.handleName == 'Scale' && !this.scaleTransformDrag && wasDrag) {
+      // The one real resize: drop the preview stretch back to the start
+      // scale, then route the final rect through setBounds so subclasses
+      // (panels, scroll panes, text) relayout. setBounds re-origins the shape
+      // and pins the translation at the rect's topLeft; under any rotation or
+      // scale the rendered anchor corner (the local origin) IS the
+      // translation, so passing the anchor's owner-coord position keeps it
+      // fixed. This runs before finishPointerDrag's commit, so the whole
+      // drag still lands in the document as a single write.
+      let s0 = this.$scaleStartTransform;
+      this.target.transform.scale = pt(s0.x, s0.y);
+      let ext = this.$scaleDesiredExtent;
+      if (ext) this.target.setBounds(this.$scaleAnchorInOwner.extent(ext.copy()));
+      if (this.target.syncBoundsFromGeometry) this.target.syncBoundsFromGeometry();
+      this.target.changed();
+    }
+  }
+  onPointerUp(pt, evt) {
+    this.endPointerDrag(pt, evt);
+    this.remove();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+//  HaloMorph
+// -----------
+// Meta-click halo ring around a morph.
+class HaloMorph extends Morph {
+  constructor(targetMorph) {
+    const isWorld =
+      targetMorph.className === 'WorldMorph' ||
+      (targetMorph.instanceOf && targetMorph.instanceOf(WorldMorph));
+    const haloBounds = isWorld
+      ? targetMorph.clippedBoundsInWorld().insetBy(20)
+      : targetMorph.clippedBoundsInWorld().insetBy(-10);
+    super(haloBounds);
+    this.target = targetMorph;
+    this.$alwaysOnTop = true; // per-user overlay: never buried by beTopMorph (see zBand)
+    this.shape.setStyles(null, 1, Color.green);
+    this.layoutTitleMorph();
+    if (isWorld) {
+      this.rotateHandle = null;
+      this.styleHandle = null;
+      this.copyHandle = null;
+      this.menuHandle = this.addMorph(new HaloHandle(4, 'M', 'Menu', this));
+      this.grabHandle = null;
+      this.dragHandle = null;
+      this.deleteHandle = null;
+      this.codeHandle = this.addMorph(new HaloHandle(8, 'B', 'Browse', this));
+      this.inspectHandle = this.addMorph(new HaloHandle(9, 'I', 'Inspect', this));
+      this.resizeHandle = null;
+      this.persistHandle = null;
+    } else {
+      this.rotateHandle = this.addMorph(new HaloHandle(1, 'R', 'Rotate', this));
+      this.styleHandle = this.addMorph(new HaloHandle(2, 'S', 'Style', this));
+      this.copyHandle = this.addMorph(new HaloHandle(3, 'C', 'Copy', this));
+      this.menuHandle = this.addMorph(new HaloHandle(4, 'M', 'Menu', this));
+      this.grabHandle = this.addMorph(new HaloHandle(5, 'G', 'Grab', this));
+      this.dragHandle = this.addMorph(new HaloHandle(6, 'D', 'Drag', this));
+      this.deleteHandle = this.addMorph(new HaloHandle(7, 'X', 'Delete', this));
+      this.codeHandle = this.addMorph(new HaloHandle(8, 'B', 'Browse', this));
+      this.inspectHandle = this.addMorph(new HaloHandle(9, 'I', 'Inspect', this));
+      this.resizeHandle = this.addMorph(new HaloHandle(10, 'Z', 'Scale', this));
+      // Only for morphs whose own edge is ephemeral (and whose ancestors are all
+      // persistent, so flipping the edge truly persists them) — see canBePersisted.
+      this.persistHandle = targetMorph.canBePersisted()
+        ? this.addMorph(new HaloHandle(11, 'P', 'Persist', this))
+        : null;
+    }
+  }
+  handleCenterForIndex(index) {
+    /** Center of handle ellipse `index` (1–11) in halo-local coordinates. */
+    let wid = 20;
+    let haloBounds = this.shape.getBounds();
+    let frame = rect(-wid, -wid, haloBounds.width() + 2 * wid, haloBounds.height() + 2 * wid);
+    let p1 = frame.bottomLeft().subPt(pt(0, wid));
+    let p2 = frame.topLeft;
+    let p3 = frame.topRight().subPt(pt(wid, 0));
+    let p4 = frame.bottomRight().subPt(pt(wid, wid));
+    let c1, c2, d;
+    if (index <= 4) {
+      c1 = p1;
+      c2 = p2;
+      d = (4 - index) / 3;
+    } else if (index <= 7) {
+      c1 = p2;
+      c2 = p3;
+      d = (7 - index) / 3;
+    } else if (index <= 10) {
+      c1 = p3;
+      c2 = p4;
+      d = (10 - index) / 3;
+    } else {
+      // 11+ continue around the bottom edge (unused by the standard ten)
+      c1 = p4;
+      c2 = p1;
+      d = (13 - index) / 3;
+    }
+    let handleLoc = c2.addPt(c1.subPt(c2).scaleBy(d));
+    let radius = wid / 2;
+    return handleLoc.addPt(pt(radius, radius));
+  }
+  handleChromeStyle() {
+    /** Fill and border for handle ellipses and the halo title plate. */
+    return {
+      fill: Color.blue.lighter().lighter().withAlpha(0.5),
+      borderWidth: 1,
+      borderColor: Color.blue,
+    };
+  }
+  handleLetterBaselineYInHalo(index) {
+    /** Canvas y of the text baseline for a handle letter, in halo-local coordinates. */
+    let m = this.handleLetterMetrics();
+    let center = this.handleCenterForIndex(index);
+    let letterTop = center.y - m.letterH / 2;
+    if (index !== 9) letterTop += m.nudge.y;
+    return letterTop + m.hang;
+  }
+  handleLetterMetrics() {
+    return {
+      font: '14px sans-serif',
+      lineHeight: 16,
+      letterW: 14,
+      letterH: 16,
+      hang: 4,
+      nudge: pt(-2, -1),
+    };
+  }
+  includesPt(p) {
+    // p is in owner (world) coords. A halo should be hittable if either its
+    // own frame contains p or any of its handles (submorphs) does.
+    let localP = this.relativize(p); // halo-local
+    if (this.shape.includesPt(localP)) return true;
+    let hit = false;
+    this.submorphs.forEach((sub) => {
+      if (!hit && sub !== this.titleMorph && sub.includesPt(localP)) hit = true;
+    });
+    return hit;
+  }
+  layoutTitleMorph() {
+    let m = this.handleLetterMetrics();
+    let rC = this.handleCenterForIndex(1);
+    let zC = this.handleCenterForIndex(10);
+    let mid = rC.addPt(zC.subPt(rC).scaleBy(0.5));
+    let span = Math.max(24, rC.dist(zC) - 36);
+    let maxChars = Math.max(4, Math.floor(span / 8));
+    let name = this.target && this.target.className ? this.target.className : 'Morph';
+    let titleStr = truncateString(name, maxChars);
+    let baselineY = this.handleLetterBaselineYInHalo(1);
+    let chrome = this.handleChromeStyle();
+    let padX = 6;
+    let padY = 1;
+    let innerW = Math.min(span, Math.max(28, titleStr.length * 8));
+    let titleW = innerW + padX * 2;
+    let titleH = m.lineHeight + padY * 2;
+    let titleTop = baselineY - m.hang - padY;
+    let titleBounds = rect(mid.x - titleW / 2, titleTop, titleW, titleH);
+    this.titleMorph = this.addMorph(new TextMorph(titleBounds, titleStr));
+    let letter = this.titleMorph.shape;
+    letter.font = m.font;
+    letter.lineHeight = m.lineHeight;
+    letter.hang = m.hang + padY;
+    letter.inset = pt(m.hang + padX, m.hang + padY);
+    letter.boxColor = chrome.fill;
+    letter.borderWidth = 1;
+    letter.borderColor = chrome.borderColor;
+    letter.fill = chrome.fill;
+    letter.$selStart = null;
+    letter.$selStop = null;
+    letter.disableSelectionRendering = true;
+    letter.noMenuLineHighlight = true;
+    letter.centerGlyph = true;
+    letter.verticallyCenterSingleLine = false;
+    letter.composeBottomPad = 0;
+    if (letter.compose) letter.compose();
+    this.titleMorph.onPointerDown = () => false;
+    this.titleMorph.includesPt = () => false;
+  }
+  pointerDownOnHandle(handle, pt, evt) {
+    let worldPt = this.getBounds().topLeft.addPt(pt); // pt is in halo coords
+    switch (handle.handleName) {
+      case 'Style':
+        this.target.restyle();
+        break;
+      case 'Menu': {
+        let anchor = this.getBounds().topLeft.addPt(handle.getBounds().center());
+        let target = this.target;
+        let morphSpec = target && target.morphMenu ? target.morphMenu() : null;
+        if (morphSpec && morphSpec.items && morphSpec.items.length > 0) {
+          target.showMorphMenuAt(anchor, { fleeting: true });
+          break;
+        }
+        this.world().showWorldMenuAt(anchor, { fleeting: true });
+        break;
+      }
+      case 'Browse': {
+        let className = this.target && this.target.className ? this.target.className : 'Morph';
+        let browser = Lively.addEphemeralMorph(new BrowserPanel());
+        browser.classPane.setSelectionString(className);
+        break;
+      }
+      case 'Inspect':
+        this.target.inspect();
+        break;
+      case 'Delete':
+        this.target.remove();
+        break;
+      case 'Persist':
+        this.target.bePersistent();
+        break;
+      default:
+        console.log('Invalid halo handle name??');
+    }
+    this.remove();
+    return true;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +---------+
+// |  Hands  |
+// +---------+
+// Alt-drag hand morph for submorph pickup.
+
+//  HandMorph
+// -----------
+// Alt-drag hand for picking up submorph trees.
+class HandMorph extends Morph {
+  constructor(id, location, color) {
+    super(null, new Pen().makeHandShape(location, color));
+    this.actorID = id;
+    // Per-hand last point for move deltas — must not share the world pointerLocation
+    // (WorldMorph updates that before/after hand moves).
+    this.$handPointerLocation = location ? location.copy() : this.location();
+    setPointerLocation(this.$handPointerLocation);
+  }
+  dropMorph(p, evt) {
+    let worldPt = p ? p : this.location();
+    // Cargo can sit in either list: grabs preserve the morph's edge kind, so an
+    // ephemeral morph rides in the hand's $submorphs. (allSubmorphs is a fresh array.)
+    this.allSubmorphs().forEach((morphToDrop) => {
+      let anchorLocal = morphToDrop.$handGrabAnchorLocal;
+      if (!anchorLocal) anchorLocal = morphToDrop.shape.getBounds().topLeft;
+      morphToDrop.dropOnTopMorphAt(worldPt, anchorLocal);
+      morphToDrop.$handGrabAnchorLocal = null;
+    });
+  }
+  grabMorph(p, evt) {
+    let worldPt = p ? p : this.location();
+    let morphUnder = this.world().topMorphAt(worldPt);
+    if (!morphUnder || morphUnder === this || morphUnder.className == 'WorldMorph') return false;
+    let anchorLocal = morphUnder.localize(worldPt);
+    morphUnder.$handGrabAnchorLocal = anchorLocal;
+    morphUnder.reparentToOwnerPreservingWorldAnchor(this, anchorLocal);
+    return true;
+  }
+  handColor() {
+    if (!this.shape) return null;
+    // Hand visual color is usually fillColor; border is often black outline.
+    if (this.shape.fillColor) return this.shape.fillColor;
+    if (this.shape.borderColor) return this.shape.borderColor;
+    return null;
+  }
+  isaHand() {
+    return true;
+  }
+  location() {
+    return this.getBounds().topLeft;
+  }
+  onPointerDown(p, evt) {
+    this.$hitPoint = p;
+    this.$handPointerLocation = p;
+    setPointerLocation(p);
+    // Hand operations are explicit (Alt-click), so normal clicks still edit/select panes.
+    // Switching active hand when clicking another is handled in WorldMorph.onPointerDown
+    // (hands live in world.hands, not the submorph tree, so inactive hands never get events).
+    if (!evt.altKey) return false;
+    if (evt.shiftKey) {
+      // Alt+Shift click means copy target into hand.
+      if (this.hasSubmorphs()) return false; // no sense to copy if laden
+      let morphUnder = this.world().topMorphAt(p);
+      if (!morphUnder || morphUnder.className == 'WorldMorph' || morphUnder === this) return false;
+      let copy = morphUnder.morphCopy();
+      let anchorLocal = copy.localize(p);
+      copy.$handGrabAnchorLocal = anchorLocal;
+      copy.reparentToOwnerPreservingWorldAnchor(this, anchorLocal);
+      return true;
+    }
+    if (this.hasSubmorphs()) this.dropMorph(p, evt);
+    else this.grabMorph(p, evt);
+    return true;
+  }
+  onPointerMove(p, evt) {
+    let prev = this.$handPointerLocation ? this.$handPointerLocation : this.location();
+    let d = p.subPt(prev);
+    this.$handPointerLocation = p;
+    setPointerLocation(p);
+    this.moveBy(d);
+    // Submorphs ride under transform; do not move them separately.
+  }
+  onPointerUp(p, evt) {
+    this.$handPointerLocation = p;
+    setPointerLocation(p);
+    // $hitPoint is per-replica; it can be missing (e.g. after a reload while laden) — treat that as a drop.
+    if (this.hasSubmorphs() && (!this.$hitPoint || this.$hitPoint.dist(p) > 2)) this.dropMorph();
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +----------------------+
+// |  On-Screen Keyboard  |
+// +----------------------+
+// Soft keyboard morph and focus sync helpers.
+
+function getKbdShiftTable() {
+  /** Ensure shift table is object-shaped even if external patch/load assigns null. */
+  let t = kbdShiftTable;
+  if (!t || typeof t !== 'object') {
+    t = { ...kbdDefaultShiftTable };
+    kbdShiftTable = t;
+  }
+  return t;
+}
+function defaultOnScreenKeyboardBounds(world) {
+  let gb = world && world.getBounds ? world.getBounds() : getBounds();
+  if (!gb) return rect(8, 100, 900, 276);
+  let width = Math.min(920, Math.max(420, gb.width() - 16));
+  let x = Math.max(8, gb.width() - width - 8);
+  let y = Math.max(8, gb.height() - 292);
+  return rect(x, y, width, 276);
+}
+function syncOnScreenKeyboardWithFocus(worldIfAny) {
+  let world = worldIfAny || Lively;
+  if (!world) return;
+  if (!shouldShowOnScreenKeyboardForWorld(world)) {
+    if (
+      $onScreenKeyboardMorph &&
+      $onScreenKeyboardMorph.world() &&
+      $onScreenKeyboardMorph._openedViaFocusSync
+    ) {
+      $onScreenKeyboardMorph.remove();
+      $onScreenKeyboardMorph = null;
+      _refreshPadModifierStyles();
+    }
+    return;
+  }
+  let kb = $onScreenKeyboardMorph;
+  if (kb && kb.world()) {
+    kb._openedViaFocusSync = true;
+    _refreshPadModifierStyles();
+    return;
+  }
+  kb = new OnScreenKeyboardMorph(defaultOnScreenKeyboardBounds(world));
+  kb._openedViaFocusSync = true;
+  world.addEphemeralMorph(kb); // OSK is per-user UI
+  kb.startStepping('stepRefreshLockLabels', null, 200);
+  $onScreenKeyboardMorph = kb;
+  _refreshPadModifierStyles();
+}
+function toggleOnScreenKeyboard(worldIfAny) {
+  let world = worldIfAny || Lively;
+  if (!world) return null;
+  if ($onScreenKeyboardMorph && $onScreenKeyboardMorph.world()) {
+    $onScreenKeyboardMorph.remove();
+    $onScreenKeyboardMorph = null;
+    _refreshPadModifierStyles();
+    if ($useOnScreenKbd) syncOnScreenKeyboardWithFocus(world);
+    return null;
+  }
+  if ($useOnScreenKbd) {
+    syncOnScreenKeyboardWithFocus(world);
+    return $onScreenKeyboardMorph;
+  }
+  let kb = new OnScreenKeyboardMorph(defaultOnScreenKeyboardBounds(world));
+  kb._openedViaFocusSync = false;
+  world.addEphemeralMorph(kb); // OSK is per-user UI
+  kb.startStepping('stepRefreshLockLabels', null, 200);
+  $onScreenKeyboardMorph = kb;
+  _refreshPadModifierStyles();
+  return kb;
+}
+function saveOnScreenKeyboardChrome(kb) {
+  /** Remember OSK position/size (world bounds) for the next show. */
+  if (!kb || !kb.getBounds) return;
+  let b = kb.getBounds();
+  $oskSavedChrome = {
+    x: b.topLeft.x,
+    y: b.topLeft.y,
+    w: b.width(),
+    h: b.height(),
+  };
+}
+function onScreenKeyboardBoundsForWorld(world) {
+  let c = $oskSavedChrome;
+  if (c && c.w > 0 && c.h > 0) return rect(c.x, c.y, c.w, c.h);
+  return defaultOnScreenKeyboardBounds(world);
+}
+function padModifierHighlightOn(baseColor) {
+  /** Gray highlight for active SHIFT/META on OSK pad keys. */
+  let base = baseColor && baseColor.copy ? baseColor.copy() : Color.lightGray.copy();
+  return Color.gray.mixedWith(base, 0.58);
+}
+function pressPadShiftKey() {
+  /** SHIFT on OSK ⇧ — clears LOCK if on, else toggles one-shot soft shift. */
+  if (isLockKeyPressed()) {
+    setLockKeyPressed(false);
+    setShiftKeyPressed(false);
+  } else {
+    setShiftKeyPressed(!$shiftKeyPressedFlag);
+  }
+  _refreshPadModifierStyles();
+}
+function pressPadMetaKey() {
+  /** META on OSK ⌘ — toggles until next character or pointerDown consumes it. */
+  toggleMetaKeyPressed();
+}
+function clearOskPadModifierState() {
+  /** LOCK / shift-lock and soft pad modifiers when the OSK goes away. */
+  setLockKeyPressed(false);
+  setShiftKeyPressed(false);
+  setMetaKeyPressed(false);
+}
+//  OnScreenKeyboardMorph
+// -----------------------
+// Soft keyboard for TextPane entry on touch devices.
+class OnScreenKeyboardMorph extends Morph {
+  constructor(bounds) {
+    let ib = bounds || rect(0, 0, 880, 268);
+    super(
+      ib,
+      new Shape(
+        'Rectangle',
+        rect(0, 0, ib.width(), ib.height()),
+        Color.veryLightGray.withAlpha(0.95),
+        1,
+        Color.gray,
+      ),
+    );
+    this.transform.translation = ib.topLeft.copy();
+    this.$alwaysOnTop = true; // per-user overlay: never buried by beTopMorph (see zBand)
+    this.keyMorphs = [];
+    this._kbdRowSpecs = OnScreenKeyboardMorph.prototype.defaultRowSpecs();
+    this.buildKeys();
+    this._kbdLockWas = isLockKeyPressed();
+    // startStepping must run after addMorph — Morph.startStepping uses this.world().
+  }
+  _noteOskBodyPressForLongClick(evt) {
+    if (!evt || typeof evt.pointerId !== 'number' || !$uiState) return;
+    let arm = $uiState.longClickByPointerId[evt.pointerId];
+    if (arm) arm.longClickMoveCancelPx = OnScreenKeyboardMorph.OSK_LONG_CLICK_MOVE_CANCEL_PX;
+  }
+  _startOskBodyDragIfNeeded(p, evt) {
+    if (!this.$oskBodyPress || this.$hitPoint) return false;
+    let slop = OnScreenKeyboardMorph.OSK_BODY_DRAG_SLOP;
+    if (p.dist(this.$oskBodyPress.ownerPt) < slop) return true;
+    this.$pickUpOnDrag = this.owner != null && this.owner !== this.world();
+    this.beginPointerDrag(this.$oskBodyPress.ownerPt, evt);
+    this.$oskBodyPress = null;
+    return super.onPointerMove(p, evt);
+  }
+  applyKeyMetrics(keyMorph, ks, displayText) {
+    let sh = keyMorph.shape;
+    if (!sh) return;
+    let txt = displayText != null ? displayText : sh.string || '';
+    let twoLine = txt.indexOf('\n') >= 0;
+    let baseFs = 12;
+    sh.font = baseFs + 'px sans-serif';
+    if (twoLine) {
+      let lh = Math.max(12, Math.floor((ks - 6) / 2));
+      sh.lineHeight = lh;
+      sh.inset = pt(Math.max(1, ks * 0.06), Math.max(1, ks * 0.05));
+      sh.hang = sh.inset.y + 4;
+      sh.verticalNudge = Math.floor(ks * 0.04);
+    } else {
+      sh.lineHeight = ks;
+      sh.inset = pt(Math.max(1, ks * 0.07), Math.max(1, ks * 0.07));
+      sh.hang = sh.inset.y;
+      sh.verticalNudge = Math.floor(ks * 0.12) + 4;
+    }
+    sh.composeBottomPad = 0;
+    if (sh.compose) sh.compose();
+    sh.extent.y = ks;
+  }
+  buildKeys() {
+    this.keyMorphs.forEach((m) => m.remove());
+    clearArray(this.keyMorphs);
+    let rows = this._kbdRowSpecs || OnScreenKeyboardMorph.prototype.defaultRowSpecs();
+    let nRows = rows.length;
+    let pad = 8;
+    let rowGap = 8;
+    let measureRowUnits = function (row) {
+      return row.keys.reduce((s, k) => s + (k.units || 1), 0);
+    };
+    let innerW = Math.max(320, this.shape.getBounds().width() - 2 * pad);
+    let innerH = Math.max(120, this.shape.getBounds().height() - 2 * pad);
+    let ks = (innerH - (nRows - 1) * rowGap) / nRows;
+    let gap = Math.max(3, ks * 0.11);
+    let rowWidth = function (row, keySize, g) {
+      let u = measureRowUnits(row);
+      return row.stagger * keySize + u * keySize + (row.keys.length - 1) * g;
+    };
+    let widest = 0;
+    rows.forEach((row) => {
+      widest = Math.max(widest, rowWidth(row, ks, gap));
+    });
+    if (widest > innerW && widest > 0) ks *= innerW / widest;
+    for (let guard = 0; guard < 6; guard++) {
+      gap = Math.max(3, ks * 0.11);
+      widest = 0;
+      rows.forEach((row) => {
+        widest = Math.max(widest, rowWidth(row, ks, gap));
+      });
+      let hNeed = nRows * ks + (nRows - 1) * rowGap;
+      if (widest <= innerW && hNeed <= innerH) break;
+      ks *= 0.94;
+    }
+    gap = Math.max(3, ks * 0.11);
+    let contentW = pad * 2 + widest;
+    let contentH = pad * 2 + nRows * ks + (nRows - 1) * rowGap;
+    this.shape.setBounds(rect(0, 0, contentW, contentH));
+    this.transform.scale = pt(1, 1);
+    let b = this.shape.getBounds();
+    for (let r = 0; r < nRows; r++) {
+      let row = rows[r];
+      let y = b.topLeft.y + pad + r * (ks + rowGap);
+      let x = b.topLeft.x + pad + row.stagger * ks;
+      row.keys.forEach((spec) => {
+        let units = spec.units || 1;
+        let wKey = units * ks;
+        let keyBounds = rect(x, y, wKey, ks);
+        let face = this.keyFaceLabel(spec);
+        let key = this.addMorph(new KbdKeyMorph(keyBounds, face, spec, this));
+        this.applyKeyMetrics(key, ks, face);
+        this.keyMorphs.push(key);
+        x += wKey + gap;
+      });
+    }
+    this._kbdKeySize = ks;
+    this._kbdNaturalSize = pt(b.width(), b.height());
+    this.syncBoundsFromGeometry();
+    this.refreshKeyLabels();
+    this.refreshModifierKeyHighlights();
+    this.changed();
+  }
+  defaultRowSpecs() {
+    /** Staggered rows: numbers, QWERTY (+ tab), ASDF (with return), ZXCV (shifts), bottom row (space + arrows). */
+    let spaceU = 7.4;
+    return [
+      {
+        stagger: 0,
+        keys: [
+          { key: '`', label: '`' },
+          { key: '1', label: '1' },
+          { key: '2', label: '2' },
+          { key: '3', label: '3' },
+          { key: '4', label: '4' },
+          { key: '5', label: '5' },
+          { key: '6', label: '6' },
+          { key: '7', label: '7' },
+          { key: '8', label: '8' },
+          { key: '9', label: '9' },
+          { key: '0', label: '0' },
+          { key: '-', label: '-' },
+          { key: '=', label: '=' },
+          { type: 'backspace', key: 'Backspace', label: '⌫', units: 2 },
+        ],
+      },
+      {
+        stagger: 0.52,
+        keys: [
+          { type: 'tab', key: 'Tab', label: '⇥', units: 1.5 },
+          { key: 'q', label: 'q' },
+          { key: 'w', label: 'w' },
+          { key: 'e', label: 'e' },
+          { key: 'r', label: 'r' },
+          { key: 't', label: 't' },
+          { key: 'y', label: 'y' },
+          { key: 'u', label: 'u' },
+          { key: 'i', label: 'i' },
+          { key: 'o', label: 'o' },
+          { key: 'p', label: 'p' },
+          { key: '[', label: '[' },
+          { key: ']', label: ']' },
+          { key: '\\', label: '\\' },
+        ],
+      },
+      {
+        stagger: 0.58,
+        keys: [
+          { type: 'caps_unused', label: '⇪', units: 1.75 },
+          { key: 'a', label: 'a' },
+          { key: 's', label: 's' },
+          { key: 'd', label: 'd' },
+          { key: 'f', label: 'f' },
+          { key: 'g', label: 'g' },
+          { key: 'h', label: 'h' },
+          { key: 'j', label: 'j' },
+          { key: 'k', label: 'k' },
+          { key: 'l', label: 'l' },
+          { key: ';', label: ';' },
+          { key: "'", label: "'" },
+          { type: 'enter', key: 'Enter', label: '↵', units: 1.85 },
+        ],
+      },
+      {
+        stagger: 0.62,
+        keys: [
+          { type: 'shift', key: 'Shift', label: '⇧', units: 2 },
+          { key: 'z', label: 'z' },
+          { key: 'x', label: 'x' },
+          { key: 'c', label: 'c' },
+          { key: 'v', label: 'v' },
+          { key: 'b', label: 'b' },
+          { key: 'n', label: 'n' },
+          { key: 'm', label: 'm' },
+          { key: ',', label: ',' },
+          { key: '.', label: '.' },
+          { key: '/', label: '/' },
+          { type: 'shift', key: 'Shift', label: '⇧', units: 2 },
+        ],
+      },
+      {
+        stagger: 0.62,
+        keys: [
+          { type: 'shift', key: 'Shift', label: '⇧', units: 1.35 },
+          { type: 'meta_toggle', label: '⌘', units: 1.35 },
+          { type: 'space', key: ' ', label: '', units: spaceU },
+          { key: 'ArrowUp', label: '↑' },
+          { key: 'ArrowLeft', label: '←' },
+          { key: 'ArrowDown', label: '↓' },
+          { key: 'ArrowRight', label: '→' },
+          { type: 'close', label: '✕', units: 1 },
+        ],
+      },
+    ];
+  }
+  getBounds() {
+    /** Axis-aligned footprint in owner space (includes uniform scale from halo resize). */
+    let sb = this.shape.getBounds();
+    let sx = this.transform.scale.x || 1;
+    let sy = this.transform.scale.y || 1;
+    let ext = pt(sb.width() * sx, sb.height() * sy);
+    return this.transform.translation.copy().extent(ext);
+  }
+  handleVirtualKey(spec, evtIfAny) {
+    if (!spec) return;
+    if (spec.type === 'meta_toggle') {
+      pressPadMetaKey();
+      this.refreshKeyLabels();
+      return;
+    }
+    if (spec.type === 'caps_unused') {
+      setLockKeyPressed(!isLockKeyPressed());
+      this.refreshKeyLabels();
+      return;
+    }
+    if (spec.type === 'shift') {
+      pressPadShiftKey();
+      this.refreshKeyLabels();
+      return;
+    }
+    if (spec.type === 'close') {
+      $useOnScreenKbd = false;
+      this.remove();
+      return;
+    }
+    let locked = isLockKeyPressed();
+    let shiftLike = locked || $shiftKeyPressedFlag;
+    let key = spec.key;
+    if (spec.type === 'space') key = ' ';
+    if (!key) return;
+    let metaChord = $metaKeyPressedFlag || !!(evtIfAny && evtIfAny.metaKey);
+    if (metaChord && $metaKeyPressedFlag) consumeSoftMetaKey();
+    if (!metaChord) {
+      let shiftTable = getKbdShiftTable ? getKbdShiftTable() : kbdShiftTable || {};
+      if (/^[a-z]$/i.test(key)) {
+        key = shiftLike ? key.toUpperCase() : key.toLowerCase();
+      } else if (shiftLike && shiftTable[key]) {
+        key = shiftTable[key];
+      }
+    } else if (key && key.length === 1) {
+      key = key.toLowerCase();
+    }
+    let evt = {
+      key: key,
+      keyCode: key === 'Enter' ? 13 : key === 'Tab' ? 9 : key === 'Backspace' ? 8 : 0,
+      // Keep synthetic virtual-key events from latching WorldMorph.$shiftKeyDown.
+      shiftKey: false,
+      metaKey: metaChord,
+      ctrlKey: metaChord,
+      altKey: false,
+      actorID: $actorID,
+      preventDefault: function () {},
+      stopPropagation: function () {},
+    };
+    let world = this.world();
+    if (!world) return;
+    world.$shiftKeyDown = false; // synthetic key events are one-shot; avoid sticky world shift state
+    let focus = world.$keyboardFocus;
+    if (focus && focus.className === 'TextPane' && focus.contentPane) focus = focus.contentPane;
+    if (focus && focus.onKeyDown) focus.onKeyDown(evt);
+    else world.onKeyDown(evt);
+    consumeSoftShiftKey();
+    if (metaChord) _refreshPadModifierStyles();
+    this.refreshKeyLabels();
+  }
+  keyFaceLabel(spec) {
+    /** Stable keycap face: shifted glyph on top, base on bottom when both exist (same style before/after shift). */
+    if (spec.type === 'shift') return 'Shift';
+    if (spec.type === 'meta_toggle') return '⌘';
+    if (spec.type === 'close') return '✕';
+    if (spec.type === 'space') return 'space';
+    if (spec.type === 'tab') return '⇥\nTab';
+    if (spec.type === 'enter') return '↵\nreturn';
+    if (spec.type === 'backspace') return '⌫\ndelete';
+    if (spec.type === 'caps_unused') return isLockKeyPressed() ? 'CAPS*\n⇪' : 'CAPS\n⇪';
+    if (spec.key && spec.key.indexOf('Arrow') === 0) {
+      if (spec.key === 'ArrowUp') return '▲';
+      if (spec.key === 'ArrowDown') return '▼';
+      if (spec.key === 'ArrowLeft') return '◀';
+      if (spec.key === 'ArrowRight') return '▶';
+    }
+    if (!spec.key) {
+      if (spec.label != null && spec.label !== '') return spec.label;
+      return '';
+    }
+    let k = spec.key;
+    if (/^[a-z]$/i.test(k)) {
+      let lo = k.toLowerCase();
+      return lo.toUpperCase() + '\n' + lo;
+    }
+    let shiftTable = getKbdShiftTable ? getKbdShiftTable() : kbdShiftTable || {};
+    let up = shiftTable[k];
+    if (up) return up + '\n' + k;
+    return k;
+  }
+  onPointerDown(p, evt) {
+    /** Children (keys) before body handling so soft META + tap toggles keys instead of halo-on-key. */
+    if (!this.fullBounds().includesPt(p)) return false;
+    if (this.bringTopLevelPanelToFrontIfNeeded(p)) return true;
+    let localP = this.relativize(p);
+    let eventConsumed = false;
+    this.submorphs.forEach((sub) => {
+      if (sub.fullBounds().includesPt(localP)) eventConsumed = sub.onPointerDown(localP, evt);
+    });
+    if (eventConsumed) return true;
+    clearKeyboardFocusUnlessTypingOrOsk(this);
+    if (effectiveMetaKey(evt)) {
+      consumeSoftMetaKey();
+      this.showHalo();
+      return false;
+    }
+    this.beTopMorph();
+    if (effectiveShiftKey(evt)) {
+      let copy = this.world().addMorph(this.morphCopy());
+      return copy.beginPointerDrag(p, evt);
+    }
+    this.$oskBodyPress = { ownerPt: p.copy ? p.copy() : pt(p.x, p.y) };
+    this._noteOskBodyPressForLongClick(evt);
+    return true;
+  }
+  onPointerMove(p, evt) {
+    if (this._startOskBodyDragIfNeeded(p, evt)) return true;
+    if (this.$oskBodyPress) return true;
+    return super.onPointerMove(p, evt);
+  }
+  onPointerUp(p, evt) {
+    this.$oskBodyPress = null;
+    return super.onPointerUp(p, evt);
+  }
+  refreshKeyLabels() {
+    let ks = this._kbdKeySize || 28;
+    this.keyMorphs.forEach((keyMorph) => {
+      if (!keyMorph.keySpec) return;
+      let face = this.keyFaceLabel(keyMorph.keySpec);
+      keyMorph.setKeyLabel(face);
+      this.applyKeyMetrics(keyMorph, ks, face);
+    });
+  }
+  refreshModifierKeyHighlights() {
+    this.keyMorphs.forEach((keyMorph) => {
+      if (keyMorph.refreshModifierHighlight) keyMorph.refreshModifierHighlight();
+    });
+  }
+  remove() {
+    this.stopStepping('stepRefreshLockLabels');
+    saveOnScreenKeyboardChrome(this);
+    clearOskPadModifierState();
+    if ($onScreenKeyboardMorph === this) $onScreenKeyboardMorph = null;
+    if (_refreshPadModifierStyles) _refreshPadModifierStyles();
+    return super.remove();
+  }
+  setBounds(rect) {
+    /** Halo Z (Scale) adjusts uniform scale; shape + layout stay fixed in local space. */
+    let nw = Math.max(48, rect.width());
+    let nh = Math.max(36, rect.height());
+    let bw = this._kbdNaturalSize ? this._kbdNaturalSize.x : nw;
+    let bh = this._kbdNaturalSize ? this._kbdNaturalSize.y : nh;
+    let s = Math.min(nw / bw, nh / bh);
+    if (s < 0.06) s = 0.06;
+    if (s > 24) s = 24;
+    this.transform.translation = rect.topLeft.copy();
+    this.transform.scale = pt(s, s);
+    this.syncBoundsFromGeometry();
+    this.changed();
+  }
+  stepRefreshLockLabels() {
+    let now = isLockKeyPressed();
+    if (now !== this._kbdLockWas) {
+      this._kbdLockWas = now;
+      this.refreshKeyLabels();
+      this.changed();
+    }
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +--------------+
+// |  WorldMorph  |
+// +--------------+
+// Root morph: event dispatch, halos, hands, stepping, world menu.
+
+function _transcriptFmtConsoleArg(a) {
+  if (a === null) return 'null';
+  let t = typeof a;
+  if (t === 'string') return a;
+  if (t === 'number' || t === 'boolean' || t === 'undefined') return '' + a;
+  try {
+    return JSON.stringify(a);
+  } catch (e) {
+    try {
+      return Object.prototype.toString.call(a);
+    } catch (e2) {
+      return '?';
+    }
+  }
+}
+function _routeConsoleToTranscripts(label, line) {
+  let arr = _transcriptConsoleTargets;
+  if (!arr || arr.length === 0) return;
+  let suffix = label ? '[' + label + '] ' : '';
+  let payload = suffix + line;
+  let copy = arr.slice();
+  for (let i = 0; i < copy.length; i++) {
+    let tp = copy[i];
+    if (tp && tp.push) tp.push(payload + '\n');
+  }
+}
+function hasTranscriptConsoleTargets() {
+  let arr = _transcriptConsoleTargets;
+  return !!(arr && arr.length > 0);
+}
+function _consoleMsgLine(msg) {
+  if (msg === null) return 'null';
+  if (msg === undefined) return 'undefined';
+  if (typeof msg === 'string') return msg;
+  if (typeof msg === 'number' || typeof msg === 'boolean') return '' + msg;
+  try {
+    return JSON.stringify(msg);
+  } catch (e) {
+    try {
+      return '' + msg;
+    } catch (e2) {
+      return '?';
+    }
+  }
+}
+function log(msg) {
+  // Open Console logger: reaches transcript targets without relying on $console.
+  let line = _consoleMsgLine(msg);
+  _routeConsoleToTranscripts('', line);
+  try {
+    window.console.log(msg);
+  } catch (e) {}
+  return line;
+}
+function _lmConsoleMirrorSink(level, line) {
+  // Optional runtime hook (console.setMirrorSink) when the synced package has it.
+  let label = level === 'log' ? '' : '' + level;
+  _routeConsoleToTranscripts(label, line);
+}
+function _mirroredConsoleLog(msg) {
+  _routeConsoleToTranscripts('', _consoleMsgLine(msg));
+  try {
+    window.console.log(msg);
+  } catch (e) {}
+}
+function _mirroredConsoleInfo(msg) {
+  _routeConsoleToTranscripts('info', _consoleMsgLine(msg));
+  try {
+    window.console.info(msg);
+  } catch (e) {}
+}
+function _mirroredConsoleWarn(msg) {
+  _routeConsoleToTranscripts('warn', _consoleMsgLine(msg));
+  try {
+    window.console.warn(msg);
+  } catch (e) {}
+}
+function _mirroredConsoleError(msg) {
+  _routeConsoleToTranscripts('error', _consoleMsgLine(msg));
+  try {
+    window.console.error(msg);
+  } catch (e) {}
+}
+function _ensureConsoleMirrorInstalled() {
+  /** Wire console → transcript. Prefer runtime setMirrorSink; else replace console.log
+   * with top-level one-arg wrappers (no nested origLog / rest-arg free-var bugs). */
+  if (!_consoleMirrorInstalled) {
+    _transcriptConsoleTargets = [];
+    _consoleMirrorInstalled = true;
+  }
+  try {
+    window._consoleMirrorInstalled = false;
+  } catch (e) {}
+  if (typeof console.setMirrorSink === 'function') {
+    console.setMirrorSink(_lmConsoleMirrorSink);
+    return;
+  }
+  console.log = _mirroredConsoleLog;
+  console.info = _mirroredConsoleInfo;
+  console.warn = _mirroredConsoleWarn;
+  console.error = _mirroredConsoleError;
+}
+function openTranscript() {
+  /** Opens a transcript panel in the upper-right quadrant of the backing canvas. */
+  let gb = getBounds();
+  if (!gb || !Lively) return null;
+  let m = 8;
+  let rw = Math.max(120, gb.width() / 2 - 2 * m);
+  let rh = Math.max(80, gb.height() / 2 - 2 * m);
+  let rx = gb.width() / 2 + m / 2;
+  let ry = m;
+  let panel = new TranscriptPanelMorph(rect(rx, ry, rw, rh));
+  Lively.addEphemeralMorph(panel);
+  panel.beTopMorph();
+  return panel;
+}
+//  WorldMorph
+// ------------
+// Root morph: pointer routing, halos, hands, world menu.
+class WorldMorph extends Morph {
+  constructor(bounds) {
+    if (traceMe) console.log('log ', 3);
+    super(bounds, null);
+    this.setColor(Color.green.lighter().lighter());
+    if (traceMe) console.log('log ', 4);
+    // PER-USER ($-prefixed): the stepping schedule is replica-local execution state.
+    // Only the replica that started an animation runs its step methods (others see the
+    // results through the document); reload stops local animations until restarted;
+    // and per-step bookkeeping (nextStepTime) never generates Automerge ops.
+    this.$stepList = [];
+    this.$pointerFocus = null;
+    this.$keyboardFocus = null;
+    this.$shiftKeyDown = false; // maintained here
+    this.hands = null;
+    setPointerLocation(bounds.topLeft);
+  }
+  addHand(handMorph) {
+    // maybe should check for duplicate adds
+    if (!this.hands) this.hands = [];
+    if (handMorph.actorID == null) handMorph.actorID = $actorID;
+    this.hands.push(handMorph);
+    handMorph.owner = this;
+    this.updateCursorForHands();
+    this.render(canvas.getContext('2d')); // hand should now appear
+  }
+  cycleHaloAt(pt) {
+    let candidates = this.morphsAtPointInDepthOrder(pt);
+    if (candidates.length === 0) {
+      this.removeExistingHalos();
+      return;
+    }
+    let existingHalo = this.allSubmorphs().find((morph) => morph.className == 'HaloMorph');
+    let prevTarget = existingHalo && existingHalo.target;
+    let continueChain =
+      prevTarget &&
+      prevTarget.clippedBoundsInWorld &&
+      prevTarget.clippedBoundsInWorld().includesPt(pt);
+    let currentIx = -1;
+    if (continueChain && prevTarget) {
+      currentIx = candidates.indexOf(prevTarget);
+    }
+    this.removeExistingHalos();
+    let nextIx = currentIx + 1;
+    if (nextIx < candidates.length) {
+      // Per-user UI: my halo is mine alone (never enters the Automerge document).
+      this.addEphemeralMorph(new HaloMorph(candidates[nextIx]));
+    }
+  }
+  dismissFleetingMenusAt(p) {
+    // Scan persistent + ephemeral children: confirms / level menus are ephemeral so they
+    // sit above per-user panels.
+    let fleetingMenus = [];
+    this.eachSubmorph((morph) => {
+      if (morph.className == 'MenuMorph' && morph.isFleetingMenu) fleetingMenus.push(morph);
+    });
+    if (fleetingMenus.length == 0) return false;
+    if (hitScrollPaneMenuButtonAt(this, p)) return false;
+    let clickWasInside = fleetingMenus.some((morph) => morph.includesPt(p));
+    if (clickWasInside) return false;
+    let removedAny = false;
+    let world = this;
+    fleetingMenus.forEach((morph) => {
+      let pinContent = morph._paneMenuPinWhileInContent;
+      let ownerPane = morph._paneMenuOwnerScrollPane;
+      if (pinContent && ownerPane && worldPtHitsMorphOrSubmorphs(world, p, pinContent)) {
+        if (ownerPane.instanceOf && ownerPane.instanceOf(ListPane)) return;
+        if (
+          ownerPane.instanceOf &&
+          ownerPane.instanceOf(TextPane) &&
+          keyboardFocusBelongsToScrollPane(world, ownerPane)
+        )
+          return;
+      }
+      morph.remove();
+      removedAny = true;
+    });
+    return removedAny;
+  }
+  handForActor(actorID) {
+    return this.handForID(actorID);
+  }
+  handForID(id) {
+    if (!this.hands || this.hands.length == 0) return null;
+    let matched = this.hands.find((hand) => hand.actorID == id);
+    if (matched) return matched;
+    return null;
+  }
+  handAt(pt, excludeIfAny) {
+    /** Frontmost hand whose bounds contain world-pt `pt`, optionally skipping one hand. */
+    if (!this.hands || this.hands.length == 0) return null;
+    for (let i = this.hands.length - 1; i >= 0; i--) {
+      let hand = this.hands[i];
+      if (excludeIfAny && hand === excludeIfAny) continue;
+      // Hands are owned by the world but not in submorphs; owner coords == world coords.
+      if (hand.fullBounds && hand.fullBounds().includesPt(pt)) return hand;
+    }
+    return null;
+  }
+  activateHand(hand, p, evt) {
+    /** Make `hand` the local active user (testing multi-hand). */
+    if (!hand) return false;
+    $actorID = hand.actorID;
+    if (evt) evt.actorID = hand.actorID;
+    // Avoid a jump on the first move after switching.
+    hand.$handPointerLocation = p ? p : getPointerLocation();
+    if (p) setPointerLocation(p);
+    return true;
+  }
+  handleStepList() {
+    // Fire all due specs without mutating stepList structure during iteration.
+    // This avoids stepping corruption when other code calls stopStepping/removeMorph
+    // while we're processing due steps.
+    let now = Date.now();
+    let due = this.activeStepList().filter((spec) => spec.nextStepTime < now);
+    due.forEach((spec) => {
+      // If spec was removed during earlier step processing, skip it.
+      if (!this.activeStepList().includes(spec)) return;
+      // A morph that has left the world must stop stepping, no matter how it was
+      // removed -- remove(), a bare removeMorph, or removal of an enclosing
+      // container (only the first of which can clean up its own schedule).
+      if (spec.stepMorph.isInWorld && !spec.stepMorph.isInWorld()) {
+        this.stopSteppingMorph(spec.stepMorph);
+        return;
+      }
+      // Advance from the scheduled time, not from `now`: re-anchoring on the frame
+      // time stretches every period up to the next frame boundary (a 50ms step on
+      // 33ms frames would fire every ~67ms). A late frame owes missed steps; run
+      // them, so steppers keep wall-clock speed through slow frames -- but at most
+      // maxCatchUpSteps, past which (hidden tab, long stall) the backlog is dropped
+      // and the spec re-anchors at `now`.
+      let maxCatchUpSteps = 4;
+      let runs = 1;
+      spec.nextStepTime += spec.stepPeriod;
+      while (spec.stepPeriod > 0 && spec.nextStepTime < now && runs < maxCatchUpSteps) {
+        spec.nextStepTime += spec.stepPeriod;
+        runs++;
+      }
+      if (spec.nextStepTime < now) spec.nextStepTime = now + spec.stepPeriod;
+      for (let i = 0; i < runs; i++) {
+        // The step itself may stop or remove the stepper; don't run it again.
+        if (i > 0 && !this.activeStepList().includes(spec)) return;
+        try {
+          if (spec.arg) spec.stepMorph[spec.methodName](spec.arg);
+          else spec.stepMorph[spec.methodName]();
+        } catch (err) {
+          let morphName = spec.stepMorph.className || 'Morph';
+          let fn = spec.stepMorph[spec.methodName];
+          if (typeof fn === 'function') _lastEvalSource = fn.toString();
+          handleRuntimeError(err, 'stepping ' + morphName + '.' + spec.methodName);
+          if (spec.stepMorph.stopStepping) spec.stepMorph.stopStepping(spec.methodName);
+          else this.stopSteppingMorph(spec.stepMorph, spec.methodName);
+          return;
+        }
+      }
+    });
+  }
+  hitMorphAt(pt) {
+    return this.topMorphAt(pt);
+    /*let minDist = 999;
+    let hitMorph = null;
+    this.forEverySubmorph((morph) => {
+      let d = pt.dist(morph.getBounds().center());
+      if (d < minDist) {
+        minDist = d; hitMorph = morph;
+        console.log('hitMorph at dist ' + minDist + ': ' + hitMorph.toString()) }
+    });
+    console.log('hitMorph ' + hitMorph.toString() + '/n at ' + pt.toString());
+    return hitMorph; */
+  }
+  initHand(start) {
+    if (start == false) {
+      this.hands = null;
+      this.updateCursorForHands();
+      return;
+    }
+    if (!this.hands) this.hands = [];  //Means we're using hands
+    // for testing we give new hands IDs of 0, 1, 2, 3, 4, etc
+      let id = this.hands.length;
+      $actorID = id;  // now we act like another user N
+    let color = Color[['green', 'blue', 'red', 'yellow', 'cyan'][id%5]];
+    console.log('creating hand morph');
+    const hm = new HandMorph($actorID, getPointerLocation(), color);
+    console.log('adding hand morph');
+    this.addHand(hm);
+  }
+  isSteppingMorph(morph, methodName) {
+    return this.activeStepList().some((spec) => {
+      if (spec.stepMorph !== morph) return false;
+      if (methodName != null) return spec.methodName === methodName;
+      return true;
+    });
+  }
+  longClickHaloDefersAt(worldPt) {
+    /**
+     * True → skip long-press halo cycling ({@link onLongClickHalo}); normal interaction applies.
+     * Uses the same top-hit basis as {@link morphsAtPointInDepthOrder} / meta-click halos
+     * ({@link topMorphAtExcludingHaloUI}), so an existing halo does not block repeats or chain climbs.
+     */
+    let m = this.topMorphAtExcludingHaloUI(worldPt);
+    while (m && m !== this) {
+      let cn = m.className;
+      if (
+        cn === 'HaloHandle' ||
+        cn === 'HaloMorph' ||
+        cn === 'MenuMorph' ||
+        cn === 'SliderMorph' ||
+        cn === 'HandMorph' ||
+        cn === 'KbdKeyMorph'
+      )
+        return true;
+      if (m.instanceOf && m.instanceOf(PanelMorph)) {
+        let localP = m.localize(worldPt);
+        let hitInfo = m.titleBarHitInfo(localP);
+        if (hitInfo && (hitInfo.onCollapse || hitInfo.onClose)) return true;
+      }
+      m = m.owner;
+    }
+    return false;
+  }
+  makeBouncer(shared) {
+    // Wandering-bug demo. Spawn is local; the bug is then made persistent so
+    // other replicas see it move (each moveTo writes Automerge — intentional
+    // for multi-screen demos / op-cost experiments). Step state stays $-local.
+    //  Lively.makeBouncer(true) 
+    //  Lively.makeBouncer(false) 
+    //  Lively.unMakeBouncer()
+
+    if (!$bouncers) $bouncers = [];
+    let world = Lively;
+    if (!world) return null;
+
+    let pen = new Pen(world.getBounds().center().copy()).withBug();
+    let bug = pen.bug;
+    if (!bug) return null;
+
+    // withBug attaches ephemerally (cheap for spiral); 
+    if (shared && bug.bePersistent) bug.bePersistent();  // bug gets shared here
+    
+    bug.$pen = pen;
+    bug.$velocity = pt(Math.random() * 12 - 6, Math.random() * 12 - 6);
+    bug.syncRotationToVelocity();
+    $bouncers.push(bug);
+    bug.startStepping('bouncerStep', null, 50);
+    return bug;
+  }
+  unMakeBouncer() {
+    if (!$bouncers || $bouncers.length === 0) return;
+    $bouncers.pop().remove();
+  }
+  morphsAtPointInDepthOrder(pt) {
+    // Return deepest hit morph first, then owner chain up toward world.
+    // Skip halo/handle layers in hit-testing so repeated meta-clicks climb real morphs, not the HaloMorph.
+    let m = this.topMorphAtExcludingHaloUI(pt);
+    if (!m) return [];
+    let chain = [];
+    while (m && m !== this) {
+      if (
+        m.className !== 'HaloMorph' &&
+        m.className !== 'HaloHandle' &&
+        m.className !== 'HandMorph'
+      ) {
+        chain.push(m);
+      }
+      m = m.owner;
+    }
+    if (this.fullBounds().includesPt(pt)) chain.push(this);
+    return chain;
+  }
+  myHand() {
+    return this.handForID($actorID);
+  }
+  onKeyDown(evt) {
+    // Match browser modifier state (handles Shift+N and both Shift keys reliably).
+    this.$shiftKeyDown = !!evt.shiftKey;
+    _refreshPadModifierStyles();
+    if (!this.$keyboardFocus) return null;
+    if (this.$keyboardFocus.onKeyDown) return this.$keyboardFocus.onKeyDown(evt);
+  }
+  onKeyPress(evt) {
+    this.$shiftKeyDown = !!evt.shiftKey;
+    _refreshPadModifierStyles();
+    if (this.$keyboardFocus != null && this.$keyboardFocus.world() != null) {
+      this.$keyboardFocus.onKeyPress(evt);
+    }
+  }
+  onKeyUp(evt) {
+    this.$shiftKeyDown = !!evt.shiftKey;
+    _refreshPadModifierStyles();
+    if (this.$keyboardFocus && this.$keyboardFocus.onKeyUp) this.$keyboardFocus.onKeyUp(evt);
+    return super.onKeyUp(evt);
+  }
+  onLongClickHalo(pt, downEvt) {
+    /** Halo cycling when `evt.longClick` fires after {@link LONG_CLICK_MS}. */
+    if (this.dismissFleetingMenusAt(pt)) return;
+    if (pointerOnOskKeyUI(this, pt)) return;
+    if (this.longClickHaloDefersAt(pt)) return;
+    this.cycleHaloAt(pt);
+  }
+  onWheel(p, evt) {
+    setPointerLocation(p);
+    let pane = scrollPaneAtWorldPt(this, p);
+    if (!pane || !pane.scrollByLines) return false;
+    let lh = pane.contentLineHeight ? pane.contentLineHeight() : 16;
+    let deltaPx = evt.deltaY;
+    if (evt.deltaMode === 1) deltaPx = evt.deltaY * lh; // DOM_DELTA_LINE
+    else if (evt.deltaMode === 2) deltaPx = evt.deltaY * pane.getBounds().height(); // DOM_DELTA_PAGE
+    // At least one line when the wheel notch is coarse; trackpads keep proportional motion.
+    let lines = deltaPx / lh;
+    if (Math.abs(lines) < 0.01) return false;
+    if (Math.abs(lines) < 1 && evt.deltaMode === 0 && Math.abs(evt.deltaY) >= 40)
+      lines = Math.sign(lines);
+    pane.scrollByLines(lines);
+    return true;
+  }
+  onPointerDown(p, evt) {
+    setPointerLocation(p);
+    // Dismiss fleeting menus but still deliver this click to morphs underneath
+    // (otherwise the first click after a pane menu only closes the menu).
+    this.dismissFleetingMenusAt(p);
+    if (effectiveMetaKey(evt) && !pointerOnOskKeyUI(this, p)) {
+      consumeSoftMetaKey();
+      this.cycleHaloAt(p);
+      return true;
+    }
+    // Hands are drawn from this.hands, not the submorph tree. If the active hand
+    // (cursor) is over another hand, clicking it switches $actorID to that hand.
+    let activeHand = this.handForID(evt.actorID);
+    let handUnder = this.handAt(p, activeHand);
+    if (handUnder) {
+      this.activateHand(handUnder, p, evt);
+      return true;
+    }
+    // this.removeExistingHalos();  // OK here?
+    let hand = activeHand;
+    if (hand && evt.altKey) {
+      hand.onPointerDown(p, evt);
+      return true;
+    }
+    if (this.$pointerFocus && this.$pointerFocus.$stickyDragCollapsedBar) {
+      let pf = this.$pointerFocus;
+      let pForFocus = pf.owner ? pf.owner.localize(p) : p;
+      return pf.finishStickyCollapsedTitleBarDrag(pForFocus, evt);
+    }
+    let hit = false; // return of true stops at top morph
+    this.allSubmorphsTopFirst().forEach((morph) => {
+      // Pass world/owner coords into child; it will localize as needed.
+      // Top-first order means overlay-band morphs (halos, fleeting menus) see the event first.
+      if (!hit) hit = morph.onPointerDown(p, evt);
+    });
+    if (!hit) {
+      this.removeExistingHalos();
+      this.setKeyboardFocus(null);
+    }
+    return hit;
+  }
+  onPointerMove(p, evt) {
+    let hand = this.handForID(evt.actorID);
+    if (hand) {
+      // Hand must see the previous location to compute its delta; update shared
+      // pointerLocation only after the hand has moved.
+      hand.onPointerMove(p, evt);
+      setPointerLocation(p);
+    } else {
+      setPointerLocation(p);
+    }
+    // Hover UI must track every move — including mid-drag ($pointerFocus set) and
+    // while a hand carries morphs — so it runs before the early returns below.
+    this.updateHoverUI(p);
+    if (hand && hand.hasSubmorphs()) return true;
+    if (this.$pointerFocus) {
+      // pointerFocus expects pt in its owner's coords (e.g. SliderMorph in ListPane)
+      let pForFocus = this.$pointerFocus.owner ? this.$pointerFocus.owner.localize(p) : p;
+      return this.$pointerFocus.onPointerMove(pForFocus, evt);
+    }
+    this.eachSubmorph((morph) => morph.onPointerMove(p, evt));
+  }
+  onPointerUp(p, evt) {
+    setPointerLocation(p);
+    let hand = this.handForID(evt.actorID);
+    if (hand) {
+      let handHandled = hand.hasSubmorphs() || evt.altKey;
+      hand.onPointerUp(p, evt);
+      if (handHandled) return true;
+    }
+    let result;
+    if (this.$pointerFocus) {
+      let pForFocus = this.$pointerFocus.owner ? this.$pointerFocus.owner.localize(p) : p;
+      result = this.$pointerFocus.onPointerUp(pForFocus, evt);
+    } else {
+      this.eachSubmorph((morph) => morph.onPointerUp(p, evt));
+    }
+    return result;
+  }
+  updateHoverUI(p) {
+    /**
+     * Give every morph that has hover UI (e.g. {@link LineMorph#updateHoverHandles})
+     * a chance to show or hide it for the pointer at world-pt `p`. Event-driven from
+     * {@link WorldMorph#onPointerMove}: each user's own moves drive their own runtime,
+     * so hover UI works on every replica — a stepping schedule lives only in the
+     * runtime that started it, which is why the old stepHoverHandles polling showed
+     * handles only to the user who evaluated populateLively().
+     */
+    let walk = (m) => {
+      if (m.updateHoverHandles) m.updateHoverHandles(p);
+      m.eachSubmorph(walk);
+    };
+    this.eachSubmorph(walk);
+  }
+  removeExistingHalos() {
+    // Halos are per-user: they live in $submorphs. Collect first, then remove, so we
+    // never mutate a list while iterating it. (Scans both layers for robustness.)
+    let halos = [];
+    this.eachSubmorph((morph) => {
+      if (morph.className == 'HaloMorph') halos.push(morph);
+    });
+    halos.forEach((halo) => halo.remove());
+  }
+  removeHand(handMorph) {
+    this.hands = this.hands.filter((m) => m !== handMorph);
+    this.updateCursorForHands();
+  }
+  render(ctx) {
+    this.handleStepList();
+    this.renderOn(ctx);
+    if (this.hands)
+      this.hands.forEach((hand) => {
+        ctx.save();
+        const tfm = hand.transform;
+        ctx.translate(tfm.translation.x, tfm.translation.y);
+        ctx.rotate(tfm.rotation);
+        ctx.scale(tfm.scale.x, tfm.scale.y);
+        hand.renderOn(ctx);
+        ctx.restore();
+      });
+  }
+  setKeyboardFocus(morphOrNull) {
+    /*
+     * Keyboard companion + live documentation:
+     * — Only comments inside method bodies (like this block) are indexed for the user’s
+     *   online search; place cross-cutting notes near the code they describe.
+     * — keyboardFocus is the morph that receives synthetic keys from OnScreenKeyboardMorph
+     *   (see handleVirtualKey) and physical keys from the host. Only TextMorph sets it;
+     *   other morphs clear it via clearKeyboardFocusUnlessTypingOrOsk when a morph
+     *   handles a click that did not go to a submorph (e.g. chrome, not TextMorph).
+     * — World menu “On-screen keyboard” toggles $useOnScreenKbd; the keyboard’s ✕ key
+     *   removes it and clears $useOnScreenKbd.
+     * — When $useOnScreenKbd is true, OSK follows keyboardFocus automatically.
+     */
+    // PER-USER ($-prefixed): my physical keyboard's focus is mine by nature. Shared
+    // focus meant two people editing different panes routed keys to whichever pane
+    // was focused last, and a focus set before reload leaked into the next session.
+    if (this.$keyboardFocus === morphOrNull) return;
+    this.$keyboardFocus = morphOrNull;
+    syncOnScreenKeyboardWithFocus(this);
+  }
+  setPointerFocus(morphOrNull) {
+    /**
+     * PER-USER ($-prefixed): the morph receiving my pointer stream. Two reasons it
+     * must be ephemeral: (1) two users dragging concurrently must not steal each
+     * other's gesture; (2) it can point at per-user morphs (halo handles) — a
+     * persistent reference would make them persistently reachable, silently promoting
+     * the whole halo into the shared document at end-of-transaction GC.
+     */
+    this.$pointerFocus = morphOrNull;
+  }
+  showHaloHelp() {
+    Lively.addEphemeralMorph(
+      new MethodPanel(
+        null,
+        `HALOS
+    Halos provide ten "handles" for manipulating morphs.  Halos are accessed by a meta-click (see also below) and the handles offer the following functions, not all of which will always be available...
+    'R' - Rotate: Drag the handle to rotate the target object
+    'S' - Style: Open a style editor to choose fill and border color and border width
+    'C' - Copy: Make a copy of this object, attached to the hand for dragging
+    'M' - Menu: Bring up a menu of commands for this object
+    'G' - Grab: Pluck this object out of its owner, and drop it elsewhere
+    Note: this can be useful to bring obscured objects 'forward'
+    'D' - Drag: Drag this object without removing it from its current owner
+    'X' - Delete: Delete this object
+    'B' - Browse: Open a browser to edit the code for this object
+    'I' -  Inspect: Open an inspector on this object
+    'Z' - Scale: Drag the handle to resize the object (changes bounds)
+    Shift-drag Z: drag to grow or shrink via transform.scale (shape and submorphs)
+    Note that on platforms that do not offer meta keys, halos can still be accessed by enabling the "Long click for halos" option in the world menu.  This may occasionally prove bothersome when selecting in text, but you can always turn the feature off again.
+    [Long-press is currently $LONG_CLICK_MS ==> 700 ms
+    and $LONG_CLICK_MOVE_CANCEL_PX ==> 7 pixels]
+    `,
+        'Halo help',
+      ),
+    );
+  }
+  showMorphicHelp() {
+    Lively.addEphemeralMorph(
+      new MethodPanel(
+        null,
+        `MORPHIC
+    The graphics model of this system is Morphic, and the UI is taken very closely from Squeak and Lively.
+    All objects ("morphs") on the screen are in a tree of morphs (owners) and submorphs, similar to the parent/children structure of HTML.  The root of this tree is a WorldMorph, and any morph can access it with the method "world()".
+    Each user is associated with a "hand" that can pick up any morph (removing it from its prior owner (may be the "world")), and drop it on another object that then becomes its new owner. The hand is the sole source of pointer and keyboard events.
+    Every morph has a 2-D coordinate transform between its bounds (in its owner's oordinate system) and its submorphs and other graphical content)).
+    Please note: hands and transforms are not currently used`,
+        'Morphic help',
+      ),
+    );
+  }
+  showTextHelp() {
+    Lively.addEphemeralMorph(
+      new MethodPanel(
+        null,
+        `Text editing in this system is very simple - there are no automatic pop-ups or type-aheads.  The following command-keys provide basic edits:
+    [Note: currently on a Mac, you must stick to the designated form of meta key to achieve the desired results]
+    ctrl-A: select the entire string
+    ctrl-X: cut the current selection
+    ctrl-C: copy the current selection to a paste buffer
+    also gets copied to the OS paste buffer!
+    the menu 'paste...' command accesses the last 4 of these
+    ctrl-V: paste the contents of the paste buffer
+    ctrl-D: evaluate the current selection (more about scope etc)
+    ctrl-P: paste the result of evaluating the current selection
+    ctrl-F: search for the current selection and browse occurrences
+    ctrl-G: (think 'aGain') do another similar replacement
+    ctrl-P: paste the result of evaluating the current selection
+    ctrl-S: evaluate the entire string (ie 'save' in browser method pane)
+    ctrl-Z: should undo most edits, and even a ctrl-P
+    esc:    selects what you just typed.  Handy when followed by ctrl-F
+    to search for that string, or ctrl-P to print its value
+    A couple more nice features:
+    Careful double clicking next to most bracket characters will select matching parentheses and other brackets (even // and /*).  Double click at the beginning or end ot the entire text will select all of it.
+    If you shift-click near either end of a selection it lets you change that end of the selection range`,
+        'Text help',
+      ),
+    );
+  }
+  showWorldMenuAt(pos, optsIfAny) {
+    /**
+     * World menu with label+action items (editable live via findItem / addItem* / removeItem).
+     * Answers the menu morph — e.g. wm = Lively.showWorldMenuAt(pt(130, 40))
+     *   wm.removeItem(wm.findItem('todo'))
+     *   wm.addItemBefore('transcript', 'Quick Brown Fox', () => openQBF())
+     */
+    let opts = optsIfAny || {};
+    let items = [
+      menuItem('ToDo List', () => storageEditItem('ToDoList')),
+      menuItem('System browser', function () {
+        this.world().addEphemeralMorph(new BrowserPanel());
+      }),
+      menuItem('Recent changes', () => browseRecentChanges()),
+      menuItem('Morphic help', function () {
+        this.world().showMorphicHelp();
+      }),
+      menuItem('Halo help', function () {
+        this.world().showHaloHelp();
+      }),
+      menuItem('Text help', function () {
+        this.world().showTextHelp();
+      }),
+      menuItem('Init hand', function () {
+        this.world().initHand(true);
+      }),
+      menuItem('Open Transcript', () => {
+        Transcript = openTranscript();
+      }),
+      menuItem('Open Console', () => {
+        let p = openTranscript();
+        p.setPanelTitle('Console');
+        p.transcriptPane.setConsoleMirror(true);
+        Console = p;
+        log('Console ready — use log(msg) or console.log(msg); errors also appear.');
+      }),
+      menuItem('Restart Console', () => {
+        let con = Console;
+        if (con && con.transcriptPane) con.transcriptPane.setConsoleMirror(true);
+      }),
+      menuItem(menuToggleLabel(longClickForHalosLabel, $longClickForHalos), function () {
+        $longClickForHalos = !$longClickForHalos;
+        refreshWorldMenuItems(this);
+        this.shape.selectLineAt(0);
+      }),
+      menuItem(menuToggleLabel(onScreenKeyboardLabel, $useOnScreenKbd), function () {
+        $useOnScreenKbd = !$useOnScreenKbd;
+        syncOnScreenKeyboardWithFocus(this.world());
+        refreshWorldMenuItems(this);
+        this.shape.selectLineAt(0);
+      }),
+    ];
+    let menu = new MenuMorph(pos.extent(pt(220, 24 + items.length * 20)), items);
+    // Deselect after non-toggle actions (toggles refresh the list themselves).
+    let priorSelect = menu.actionFn;
+    menu.setSelectFn(function (item, shiftKey) {
+      priorSelect.call(this, item, shiftKey);
+      let cap = menuItemCaption(item);
+      if (
+        cap === longClickForHalosLabel ||
+        cap.endsWith(longClickForHalosLabel) ||
+        cap === onScreenKeyboardLabel ||
+        cap.endsWith(onScreenKeyboardLabel)
+      )
+        return;
+      this.shape.selectLineAt(0);
+    });
+    menu.isFleetingMenu = !!opts.fleeting;
+    if (opts.fleeting) Lively.addEphemeralMorph(menu);
+    else Lively.addMorph(menu);
+    return menu;
+  }
+  activeStepList() {
+    /** Lazily created: worlds restored from older documents have no $stepList yet. */
+    if (!this.$stepList) this.$stepList = [];
+    return this.$stepList;
+  }
+  startSteppingSpec(spec) {
+    this.activeStepList().push(spec);
+  }
+  stopSteppingMorph(morph, methodName) {
+    if (methodName) {
+      this.$stepList = this.activeStepList().filter(
+        (spec) => !(spec.stepMorph === morph && spec.methodName === methodName),
+      );
+      return;
+    }
+    this.$stepList = this.activeStepList().filter((spec) => spec.stepMorph !== morph);
+  }
+  topMorphAt(pt) {
+    // Deepest morph under pt; among overlapping siblings, frontmost wins.
+    // pt is world coordinates.
+    let walk = (ownerMorph, worldPt) => {
+      let subs = ownerMorph.allSubmorphsTopFirst(); // frontmost first, both layers interleaved by zIndex
+      for (let i = 0; i < subs.length; i++) {
+        let sub = subs.at(i);
+        let pInOwner = sub.owner ? sub.owner.localize(worldPt) : worldPt;
+        // fullBounds (AABB incl. submorph stickouts) is just a cheap prefilter;
+        // the hit itself must be on a shape, so rotated morphs' AABB corner
+        // wedges and stickout dead zones fall through to siblings behind.
+        if (!sub.fullBounds().includesPt(pInOwner)) continue;
+        let deeper = walk(sub, worldPt);
+        if (deeper != null) return deeper;
+        if (sub.includesPt(pInOwner)) return sub;
+      }
+      return null;
+    };
+    return walk(this, pt);
+  }
+  topMorphAtExcludingHaloUI(pt) {
+    /** Like {@link topMorphAt} but skips halo UI and hands so halo cycling hits morphs *behind* them (avoids halos-on-halos). */
+    let walk = (ownerMorph, worldPt) => {
+      let subs = ownerMorph.allSubmorphsTopFirst();
+      for (let i = 0; i < subs.length; i++) {
+        let sub = subs.at(i);
+        let cn = sub.className;
+        if (cn === 'HaloMorph' || cn === 'HaloHandle' || cn === 'HandMorph') continue;
+        let pInOwner = sub.owner ? sub.owner.localize(worldPt) : worldPt;
+        // Same shape-exact hit rule as topMorphAt: bounds only gate descent.
+        if (!sub.fullBounds().includesPt(pInOwner)) continue;
+        let deeper = walk(sub, worldPt);
+        if (deeper != null) return deeper;
+        if (sub.includesPt(pInOwner)) return sub;
+      }
+      return null;
+    };
+    return walk(this, pt);
+  }
+  updateCursorForHands() {
+    let canvas = canvas ? canvas : null;
+    if (!canvas) return;
+    canvas.style.cursor = this.hands && this.hands.length > 0 ? 'none' : 'default';
+  }
+  world() {
+    // Note should be cleaner -- see other implementations
+    return this;
+  }
+  static new(...args) {
+    return new this(...args);
+  }
+}
+
+// +----------------------------+
+// |  Source Code Manipulation  |
+// +----------------------------+
+// Browse, export, delete, and persist method definitions.
+
+function exportPartsForSelection(selection, optsIfAny) {
+  let opts = optsIfAny || {};
+  let includeClassDef = opts.includeClassDef !== false;
+  let classSelection = selection;
+  if (!classSelection) return null;
+  let header = '// Export for ' + classSelection + '\n';
+  let classDef = '';
+  if (classSelection == 'globals') {
+    let names = Object.getOwnPropertyNames($global)
+      .filter((name) => typeof $global[name] == 'function' && !isClass($global[name]))
+      .filter((name) => !exportMethodShouldOmit(name))
+      .sort();
+    let lines = names.map((name) => name + ' = ' + $global[name].toString());
+    return { header, classDef, lines };
+  }
+  if (classSelection.endsWith('.class')) {
+    let classOnly = classSelection.split('.')[0];
+    let cls = $global[classOnly];
+    if (!cls) return null;
+    let lines = classStaticNames(cls)
+      .filter((name) => typeof cls[name] == 'function')
+      .filter((name) => !exportMethodShouldOmit(name))
+      .map((name) => {
+        let src = cls[name].toString();
+        return isLegacyFunctionShow(src)
+          ? classOnly + '.' + name + ' = ' + src
+          : replaceMethodCallString(classOnly, src);
+      });
+    return { header, classDef, lines };
+  }
+  let cls = $global[classSelection];
+  if (!cls || !cls.prototype) return null;
+  if (includeClassDef && isClass(cls)) classDef = cls.toString();
+  let lines = classMemberRows(cls)
+    .map((row) => {
+      let isAccessor = /^(get|set) /.test(row);
+      let name = isAccessor ? row.slice(4) : row;
+      if (exportMethodShouldOmit(name)) return null;
+      let fn = isAccessor ? accessorForRow(cls, row) : cls.prototype[row];
+      if (typeof fn != 'function') return null;
+      let src = fn.toString();
+      if (!isLegacyFunctionShow(src)) return replaceMethodCallString(classSelection, src);
+      if (!isAccessor) return classSelection + '.prototype.' + row + ' = ' + src;
+      // Legacy accessor Funs (pre-fragment shows) have no evaluable standalone form.
+      return '// (legacy accessor ' + row + ' of ' + classSelection + ' not exported)';
+    })
+    .filter((line) => line != null);
+  return { header, classDef, lines };
+}
+function exportStringForSelection(selection, optsIfAny) {
+  let opts = optsIfAny || {};
+  let includeHeader = opts.includeHeader !== false;
+  let parts = exportPartsForSelection(selection, opts);
+  if (!parts) return '';
+  let out = [];
+  if (includeHeader && parts.header) out.push(parts.header);
+  if (parts.classDef) out.push(parts.classDef);
+  if (parts.lines && parts.lines.length > 0) out.push(parts.lines.join(';\n'));
+  return out.join('\n');
+}
+function exportSelectionsForEntireSystem() {
+  let selections = ['globals'];
+  allClassNamesInSuperclassOrder().forEach((className) => {
+    selections.push(className);
+    if (classStaticNames($global[className]).length > 0) selections.push(className + '.class');
+  });
+  return selections;
+}
+function methodFromSpec(spec) {
+  // methodFromSpec('rect')                        — a global function
+  // methodFromSpec('Color.gray')                  — a class static
+  // methodFromSpec('Color.prototype.copy')        — an instance method
+  // methodFromSpec('Morph.prototype.get transform') — an accessor half
+  // methodFromSpec('Point.constructor')           — the class constructor Fun itself
+  let parts = spec.split('.');
+  if (parts.length == 1) return $global[parts[0]];
+  let cls = $global[parts[0]];
+  if (cls == null) return null;
+  if (parts.length == 2 && parts[1] === 'constructor' && isClass(cls)) return cls;
+  if (parts.length == 2) return cls[parts[1]];
+  if (parts.length == 3 && parts[1] == 'prototype' && cls.prototype) {
+    if (/^(get|set) /.test(parts[2])) return accessorForRow(cls, parts[2]);
+    return cls.prototype[parts[2]];
+  }
+  return null;
+}
+function methodSpecKey(spec) {
+  /** Method spec key without a recent-changes date suffix. */
+  if (!spec) return spec;
+  if (spec.includes('[')) return spec.slice(0, spec.indexOf('[') - 1).trim();
+  return spec;
+}
+function deleteMethodWithSpec(spec) {
+  /** Remove a live method by spec (`Morph.prototype.foo`, `Color.gray`, `init`, …). */
+  let key = methodSpecKey(spec);
+  if (!key) return false;
+  let parts = key.split('.');
+  // Refuse to delete a class via the constructor row.
+  if (parts.length == 2 && parts[1] === 'constructor') return false;
+  try {
+    if (parts.length == 1) delete $global[parts[0]];
+    else if (parts.length == 2) delete $global[parts[0]][parts[1]];
+    else if (parts.length == 3 && parts[1] == 'prototype' && /^(get|set) /.test(parts[2]))
+      return deleteAccessorHalf(parts[0], parts[2].slice(0, 3), parts[2].slice(4));
+    else if (parts.length == 3 && parts[1] == 'prototype') {
+      // Also drop the class-Fun mirror (the transpiler stores instance methods on
+      // the class object too); otherwise the name would resurface as a bogus static.
+      let cls = $global[parts[0]];
+      if (cls[parts[2]] === cls.prototype[parts[2]]) delete cls[parts[2]];
+      delete cls.prototype[parts[2]];
+    } else return false;
+    return true;
+  } catch (e) {
+    console.log('delete failed: ' + key, e);
+    return false;
+  }
+}
+function deleteClassNamed(className) {
+  if (!className || className == 'globals' || !$global[className]) return false;
+  try {
+    delete $global[className];
+    return true;
+  } catch (e) {
+    console.log('delete class failed: ' + className, e);
+    return false;
+  }
+}
+function methodsContaining(searchString) {
+  // methodsContaining('Pane').length
+  let lcKey = searchString.toLowerCase(); //For case-insensitive compare
+  let found = [];
+  allMethodSpecs().forEach((spec) => {
+    let method = methodFromSpec(spec);
+    if (typeof method !== 'function') return;
+    let bodyLc = method.toString().toLowerCase();
+    let specLc = spec.toLowerCase();
+    if (bodyLc.indexOf(lcKey) >= 0 || specLc.indexOf(lcKey) >= 0) found.push(spec);
+  });
+  return found;
+}
+function showFindNoMatchesMenu(world, pt, searchString) {
+  /** Fleeting notifier for find-in-methods when there are zero hits (no panel required). */
+  if (!world) return;
+  let term = '' + (searchString != null ? searchString : '');
+  let msg =
+    "no occurrences of '" + term.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "' were found";
+  let menu = new MenuMorph(
+    rect(pt.x, pt.y, Math.max(280, 24 + Math.min(msg.length, 80) * 7), 48),
+    [msg],
+    function () {
+      menu.remove();
+    },
+  );
+  menu.isFleetingMenu = true;
+  world.addEphemeralMorph(menu);
+}
+function noteMethodChanges(evalString) {
+  /* recentChanges is an array of triples as in the last line here
+  spec, eg, 'TextBox.prototype.render'
+  date string - see recentDateStr
+  the method source: a string beginning with 'function' (legacy '<spec> = ...'
+  saves) or a self-contained replaceMethod(...) call (class-fragment saves) */
+  if (!recentChanges) recentChanges = [];
+  let spec = null;
+  let sourceStr = null;
+  let parsed = parseReplaceMethodCallString(evalString);
+  if (parsed) {
+    spec = fragmentChangeSpec(parsed.className, parsed.fragmentText);
+    sourceStr = evalString;
+  } else {
+    let ix1 = evalString.indexOf(' =');
+    if (ix1 < 0) return;
+    let ix2 = evalString.indexOf('function', ix1);
+    if ((ix2, 0)) return;
+    spec = evalString.slice(0, ix1);
+    sourceStr = evalString.slice(ix2);
+  }
+  // If method already exists, but no change, add current def for revert
+  let noChange = true;
+  recentChanges.forEach((tuple) => {
+    if (tuple[0] == spec) noChange = false;
+  });
+  if (noChange && methodFromSpec(spec) !== null) {
+    let priorTime = new Date(new Date().getTime() - 60000); // a minute ago
+    let priorFragment = fragmentForSpec(spec);
+    let priorSource =
+      priorFragment != null
+        ? replaceMethodCallString(methodSpecKey(spec).split('.')[0], priorFragment)
+        : methodFromSpec(spec);
+    recentChanges.push([spec, recentDateStr(priorTime), priorSource]);
+  }
+  recentChanges.push([spec, recentDateStr(new Date()), sourceStr]);
+}
+function browseRecentChanges() {
+  // browseRecentChanges()
+  let changes = recentChanges ?? [];
+  let panel = Lively.addEphemeralMorph(
+    new MethodListPanel(
+      null,
+      changes.map((tuple) => tuple[0] + tuple[1]),
+      changes,
+      'Recent Changes',
+    ),
+  );
+  return panel;
+}
+function browseSavedChanges() {
+  // browseSavedChanges()
+  let changes = JSON.parse(storageGetItem('recentChanges'));
+  let panel = Lively.addEphemeralMorph(
+    new MethodListPanel(
+      null,
+      changes.map((tuple) => tuple[0] + tuple[1]),
+      changes,
+      'Saved Changes',
+    ),
+  );
+  return panel;
+}
+function stats() {
+  //stats();
+  let statList = [];
+  statList.push('# classes = ' + allClassNames().length);
+  statList.push('# methods = ' + allMethodSpecs().length);
+  let nLines = 0,
+    nComments = 0,
+    nLogs = 0,
+    nChars = 0;
+  allMethodSpecs().forEach((spec) => {
+    let method = methodFromSpec(spec);
+    if (typeof method == 'function') {
+      let methStr = method.toString();
+      nChars += methStr.length;
+      let lines = methStr.split(/[\n\r]/);
+      lines.forEach((line) => {
+        nLines += 1;
+        let trimmed = line.trim();
+        if (trimmed.startsWith('//')) nComments += 1;
+        if (trimmed.startsWith('console.')) nLogs += 1;
+      });
+    }
+  });
+  statList.push('# lines = ' + nLines);
+  statList.push('# comments = ' + nComments);
+  statList.push('# logs = ' + nLogs);
+  statList.push('# chars = ' + nChars);
+  return statList.join('\n');
+}
+function allMethodSpecs() {
+  // allMethodSpecs().length ==> 307
+  let methodSpecs = [];
+  // First, all global functions (classes get their own entries below)
+  Object.getOwnPropertyNames($global)
+    .sort()
+    .forEach((name) => {
+      if (typeof $global[name] == 'function' && !isClass($global[name])) methodSpecs.push(name);
+    });
+  allClassNamesInSuperclassOrder().forEach((className) => {
+    let cls = $global[className];
+    classMemberRows(cls).forEach((row) => {
+      methodSpecs.push(className + '.prototype.' + row);
+    });
+    // Here we allow, eg, class constants such as Color.red
+    classStaticNames(cls).forEach((methodName) => {
+      methodSpecs.push(className + '.' + methodName);
+    });
+  });
+  return methodSpecs;
+}
+function exportEntireSystem() {
+  // exportEntireSystem() — full system source; viewExportedSystem() to browse
+  let parts = exportSelectionsForEntireSystem().map((selection) =>
+    exportStringForSelection(selection, { includeHeader: true, includeClassDef: true }),
+  );
+  let text = parts.filter((part) => part && part.length > 0).join('\n\n');
+  storageSetItem('system.export', text);
+  storageSetItem('system.export.timestamp', new Date().toLocaleString());
+  return text.length;
+}
+function viewExportedSystem() {
+  let text = storageGetItem('system.export') || storageGetItem('system.methods');
+  if (!text) text = '// No export yet. Run exportEntireSystem() first.';
+  let ts =
+    storageGetItem('system.export.timestamp') || storageGetItem('system.methods.timestamp') || '';
+  let title = ts ? 'alldefs export (' + ts + ')' : 'alldefs export';
+  Lively.addEphemeralMorph(new MethodPanel(null, text, title));
+  return text.length;
+}
+function exportMethodShouldOmit(name) {
+  if (
+    name === 'downloadTextFile' ||
+    name === '_finishSystemExport' ||
+    name === 'viewExportedSystem' ||
+    name === 'exportEntireSystem' ||
+    name === 'exportMethodShouldOmit' ||
+    name === 'exportOmitMethodNames'
+  )
+    return true;
+  if (name.indexOf('exportCatalog') === 0) return true;
+  if (
+    name === 'exportClassChunk' ||
+    name === 'exportMethodLinesOn' ||
+    name === 'exportProtoDataLines' ||
+    name === 'exportColorDataLines'
+  )
+    return true;
+  if (name.indexOf('systemCategory') === 0 || name.indexOf('systemClass') === 0) return true;
+  if (name === 'systemCatalog' || name === 'systemClassBlurbs') return true;
+  if (name === 'systemFileHeader' || name === 'systemBootstrapSource') return true;
+  return false;
+}
+// +-------------------------------+
+// |  Error Handling and Recovery  |
+// +-------------------------------+
+// On-screen error panel, stack traces, and eval recovery.
+
+function stackTraceLines(err, catchStackIfAny) {
+  let lines = [];
+  if (err && err.stack) lines = ('' + err.stack).split('\n');
+  else if (catchStackIfAny) lines = ('' + catchStackIfAny).split('\n').slice(1);
+  return lines.map((line) => line.trimEnd()).filter((line) => line.length > 0);
+}
+function parseStackFrameLine(line) {
+  let m = ('' + line)
+    .trim()
+    .match(/^at\s+(?:([\s\S]+?)\s+\(([\s\S]+?):(\d+):(\d+)\)|([\s\S]+?):(\d+):(\d+))$/);
+  if (!m) return null;
+  if (m[1] != null) return { name: m[1].trim(), file: m[2], line: +m[3], col: +m[4] };
+  return { name: null, file: m[5], line: +m[6], col: +m[7] };
+}
+function defsSourceFile() {
+  /** Basename of the live defs script (override with window.defsScriptUrl). */
+  let url =
+    window.defsScriptUrl != null
+      ? window.defsScriptUrl
+      : window.alldefsScriptUrl != null
+        ? window.alldefsScriptUrl
+        : 'newdefs.js';
+  return shortStackFileName(url);
+}
+function shortStackFileName(file) {
+  let s = String(file || '');
+  let q = s.indexOf('?');
+  if (q >= 0) s = s.slice(0, q);
+  let ix = s.lastIndexOf('/');
+  if (ix >= 0) s = s.slice(ix + 1);
+  return s || file;
+}
+function isDefsStackFile(file) {
+  let base = shortStackFileName(file).toLowerCase();
+  let want = defsSourceFile().toLowerCase();
+  // Accept configured name plus the historical alldefs/newdefs aliases.
+  return base === want || base === 'newdefs.js' || base === 'alldefs.js';
+}
+function extractDefsLineFromFrame(line) {
+  let m = ('' + line).match(/([\w.-]+\.js)(?:\?[^:]*)?:(\d+)(?::(\d+))?/i);
+  if (!m || !isDefsStackFile(m[1])) return null;
+  return { file: shortStackFileName(m[1]), line: +m[2], col: m[3] != null ? +m[3] : 0 };
+}
+/** @deprecated alias — prefer extractDefsLineFromFrame */
+function extractAlldefsLineFromFrame(line) {
+  return extractDefsLineFromFrame(line);
+}
+/** @deprecated alias — prefer isDefsStackFile */
+function isAlldefsStackFile(file) {
+  return isDefsStackFile(file);
+}
+function stackFrameLabelName(line) {
+  let m = ('' + line).trim().match(/^at\s+(.+?)\s+\(/);
+  if (m) return m[1].trim();
+  m = ('' + line).trim().match(/^at\s+(\S+)/);
+  return m ? m[1] : 'frame';
+}
+function scrubStackFrameUrls(line) {
+  return ('' + line).replace(/https?:\/\/[^\s):]+/g, function (url) {
+    return shortStackFileName(url);
+  });
+}
+function formatStackFrameLine(rawLine) {
+  let line = String(rawLine).trim();
+  let frame = parseStackFrameLine(line);
+  if (frame) {
+    let shortFile = shortStackFileName(frame.file);
+    if (frame.name) return ['  at ' + frame.name + ' (' + shortFile + ':' + frame.line + ')'];
+    return ['  at ' + shortFile + ':' + frame.line];
+  }
+  let defsRef = extractDefsLineFromFrame(line);
+  if (defsRef) {
+    let name = stackFrameLabelName(line);
+    return ['  at ' + name + ' (' + defsRef.file + ':' + defsRef.line + ')'];
+  }
+  let scrubbed = scrubStackFrameUrls(line);
+  return [scrubbed.startsWith('at ') ? '  ' + scrubbed : scrubbed];
+}
+function formatStackTraceForReport(err) {
+  let trace = stackTraceLines(err);
+  if (!trace.length) {
+    try {
+      throw new Error('stack capture');
+    } catch (cap) {
+      trace = stackTraceLines(cap).slice(1);
+    }
+  }
+  let msg = err && err.message != null ? String(err.message) : String(err);
+  let errName = err && err.name ? err.name : 'Error';
+  let parts = [];
+  trace.forEach(function (line) {
+    if (line.indexOf('Error:') === 0 && line.indexOf(msg) >= 0) return;
+    if (line.indexOf(errName + ':') === 0 && line.indexOf(msg) >= 0) return;
+    parts.push.apply(parts, formatStackFrameLine(line));
+  });
+  return parts;
+}
+function stackNameToMethodSpec(name) {
+  // 'Proxy.foo' / 'Object.foo' wrappers come from the runtime's proxies; the bare
+  // trailing name is the interesting part.
+  if (!name || name === 'eval' || name === '<anonymous>') return null;
+  let s = String(name).trim();
+  if (/^(Proxy|Object)\.\w+$/.test(s)) s = s.slice(s.indexOf('.') + 1);
+  if (/^\w+\.prototype\.\w+$/.test(s)) return s;
+  if (/^\w+$/.test(s) && typeof $global[s] === 'function') return s;
+  return null;
+}
+function stackFrameSourceText(frame) {
+  if (frame.methodSpec) {
+    try {
+      let fn = methodFromSpec(frame.methodSpec);
+      if (typeof fn === 'function') return frame.methodSpec + ' = ' + fn.toString();
+    } catch (e) {
+      /* fall through */
+    }
+  }
+  if (frame.alldefsLine && _alldefsSourceLines) {
+    return alldefsSourceExcerpt(frame.alldefsLine, 4)
+      .map(function (ex) {
+        return String(ex.no).padStart(5) + '  ' + ex.text;
+      })
+      .join('\n');
+  }
+  if ((frame.name === 'eval' || frame.name === '<anonymous>') && _lastEvalSource)
+    return _lastEvalSource;
+  return null;
+}
+function stackFrameListLabel(frame) {
+  if (frame.methodSpec) return frame.methodSpec;
+  if (frame.name === 'eval' || frame.name === '<anonymous>') {
+    if (_lastEvalSource)
+      return 'eval: ' + truncateString(_lastEvalSource.replace(/\s+/g, ' ').trim(), 52);
+    return 'eval';
+  }
+  if (frame.name && frame.file && frame.line)
+    return frame.name + ' (' + shortStackFileName(frame.file) + ':' + frame.line + ')';
+  if (frame.name) return frame.name;
+  if (frame.alldefsLine)
+    return (frame.defsFile || defsSourceFile()) + ':' + frame.alldefsLine;
+  return 'frame';
+}
+function stackFrameHighlightName(frame) {
+  if (!frame) return null;
+  if (frame.methodSpec) {
+    let dot = frame.methodSpec.lastIndexOf('.');
+    return dot >= 0 ? frame.methodSpec.slice(dot + 1) : frame.methodSpec;
+  }
+  let n = frame.name ? String(frame.name).trim() : '';
+  if (!n || n === 'eval' || n === '<anonymous>') return null;
+  let dot = n.lastIndexOf('.');
+  return dot >= 0 ? n.slice(dot + 1) : n;
+}
+function stackFrameFromRawLine(rawLine) {
+  let line = String(rawLine).trim();
+  let name = stackFrameLabelName(line);
+  let parsed = parseStackFrameLine(line);
+  let defsRef = extractDefsLineFromFrame(line);
+  let methodSpec = stackNameToMethodSpec(name);
+  let file = parsed ? shortStackFileName(parsed.file) : defsRef ? defsRef.file : null;
+  let lineNo = parsed ? parsed.line : defsRef ? defsRef.line : null;
+  let defsLine = null;
+  let defsFile = null;
+  if (file && lineNo != null && isDefsStackFile(file)) {
+    defsLine = lineNo;
+    defsFile = file;
+  } else if (defsRef) {
+    defsLine = defsRef.line;
+    defsFile = defsRef.file;
+  }
+  let frame = {
+    name: name,
+    file: file,
+    line: lineNo,
+    alldefsLine: defsLine, // line in defs source file, if any
+    defsFile: defsFile,
+    methodSpec: methodSpec,
+  };
+  frame.listLabel = stackFrameListLabel(frame);
+  frame.sourceText = stackFrameSourceText(frame);
+  return frame;
+}
+function stackFramesFromError(err) {
+  let trace = stackTraceLines(err);
+  let msg = err && err.message != null ? String(err.message) : String(err);
+  let errName = err && err.name ? err.name : 'Error';
+  let frames = [];
+  trace.forEach(function (line) {
+    if (line.indexOf('Error:') === 0 && line.indexOf(msg) >= 0) return;
+    if (line.indexOf(errName + ':') === 0 && line.indexOf(msg) >= 0) return;
+    frames.push(stackFrameFromRawLine(line));
+  });
+  return frames;
+}
+function errorReportHeader(err, contextIfAny) {
+  let when = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  let name = err && err.name ? err.name : 'Error';
+  let msg = err && err.message != null ? String(err.message) : String(err);
+  let parts = ['// Runtime error — ' + when];
+  if (contextIfAny) parts.push('// Context: ' + contextIfAny);
+  parts.push('', name + ': ' + msg);
+  return parts.join('\n');
+}
+function formatErrorReport(err, contextIfAny) {
+  let parts = [errorReportHeader(err, contextIfAny), '', '// Stack trace:'];
+  formatStackTraceForReport(err).forEach(function (line) {
+    parts.push(line);
+  });
+  return parts.join('\n');
+}
+function ensureAlldefsSourceLines() {
+  // TODO: think about fetch
+  return null;
+
+  if (_alldefsSourceLines) return Promise.resolve(_alldefsSourceLines);
+  let url =
+    window.defsScriptUrl != null
+      ? window.defsScriptUrl
+      : window.alldefsScriptUrl != null
+        ? window.alldefsScriptUrl
+        : defsSourceFile();
+  return fetch(url)
+    .then(function (r) {
+      if (!r.ok) throw new Error('ensureAlldefsSourceLines: ' + r.status + ' ' + url);
+      return r.text();
+    })
+    .then(function (text) {
+      _alldefsSourceLines = text.split('\n');
+      return _alldefsSourceLines;
+    })
+    .catch(function (e) {
+      console.warn('defs source not loaded for stack excerpts', e);
+      return null;
+    });
+}
+function alldefsSourceExcerpt(lineNo, radiusIfAny) {
+  let lines = _alldefsSourceLines;
+  if (!lines || lineNo < 1 || lineNo > lines.length) return [];
+  let radius = radiusIfAny != null ? radiusIfAny : 1;
+  let out = [];
+  let lo = Math.max(0, lineNo - 1 - radius);
+  let hi = Math.min(lines.length, lineNo - 1 + radius + 1);
+  for (let i = lo; i < hi; i++) out.push({ no: i + 1, text: lines[i] });
+  return out;
+}
+function handleRuntimeError(err, contextIfAny) {
+  if (Lively && Lively.addMorph) {
+    presentError(err, contextIfAny);
+    return true;
+  }
+  recoverFromRuntimeError(err, contextIfAny);
+  return false;
+}
+function errorPanelTitle(err) {
+  let name = err && err.name ? err.name : 'Error';
+  let msg = err && err.message != null ? String(err.message) : String(err);
+  return 'Error: ' + truncateString(name + ' — ' + msg, 72);
+}
+function errorReportPanelBounds() {
+  let b = getBounds();
+  if (!b) return rect(40, 40, 520, 420);
+  let wdt = Math.min(560, Math.max(320, Math.floor(b.width() * 0.55)));
+  let ht = Math.min(520, Math.max(240, Math.floor(b.height() * 0.65)));
+  return rect(24, 24, wdt, ht);
+}
+function openErrorStackPanel(err, contextIfAny, titleIfAny) {
+  if (!Lively || !Lively.addMorph) return null;
+  let panel = new ErrorStackPanel(
+    errorReportPanelBounds(),
+    err,
+    contextIfAny,
+    titleIfAny || errorPanelTitle(err),
+  );
+  Lively.addEphemeralMorph(panel);
+  panel.beTopMorph();
+  return panel;
+}
+function presentError(err, contextIfAny) {
+  let report = formatErrorReport(err, contextIfAny);
+  _lastErrorReport = report;
+  console.error(report);
+  // Open Console: show the report even when $console mirroring is unavailable.
+  _routeConsoleToTranscripts('error', report);
+  let panel = openErrorStackPanel(err, contextIfAny);
+  if (!_alldefsSourceLines) {
+    // ensureAlldefsSourceLines is currently disabled and returns null.
+    let loading = ensureAlldefsSourceLines();
+    if (loading && loading.then)
+      loading.then(function () {
+        if (panel && panel.refreshStackSources) panel.refreshStackSources();
+      });
+  }
+  return panel;
+}
+function recoverFromRuntimeError(err, contextIfAny) {
+  if (_errorRecoveryInProgress) {
+    console.error('error during recovery', err);
+    _routeConsoleToTranscripts('error', 'error during recovery');
+    return null;
+  }
+  _errorRecoveryInProgress = true;
+  try {
+    let report = formatErrorReport(err, contextIfAny);
+    _lastErrorReport = report;
+    console.error(report);
+    _routeConsoleToTranscripts('error', report);
+    if (window._uiRafId != null) {
+      window.cancelAnimationFrame(window._uiRafId);
+      window._uiRafId = null;
+    }
+    if (window._uiAbortController) window._uiAbortController.abort();
+    initUI();
+    initLively();
+    let panel = openErrorStackPanel(err, contextIfAny);
+    render();
+    return panel;
+  } finally {
+    _errorRecoveryInProgress = false;
+  }
+}
+function evaluateWithErrorRecovery(fn, contextIfAny) {
+  _evalJustFailed = false;
+  try {
+    return fn();
+  } catch (err) {
+    _evalJustFailed = true;
+    presentError(err, contextIfAny);
+    return undefined;
+  }
+}
+function triggerTestError(messageIfAny) {
+  throw new Error(messageIfAny != null ? String(messageIfAny) : 'intentional test error');
+}
+// +---------------------------------------+
+// |  Sundry Global — Storage and History  |
+// +---------------------------------------+
+// localStorage wrappers, recent-changes journal, timing helpers.
+
+function storageGetItem(key) {
+  return localStorage.getItem(key);
+}
+function storageKeys() {
+  return Object.keys(localStorage);
+}
+function storageSetItem(key, value) {
+  // storageSetItem('test', 'test string to localStorage');
+  // storageGetItem('test');
+  // storageKeys();
+  localStorage.setItem(key, value);
+}
+function storageEditItem(key) {
+  //storageEditItem('ToDoList')
+  Lively.addEphemeralMorph(new MethodPanel(null, 'to do list', 'localStorage.' + key));
+}
+function saveRecentChanges() {
+  // saveRecentChanges();
+  let changes = recentChanges.slice(-50);
+  storageSetItem('recentChanges', JSON.stringify(changes));
+}
+function recentChangesSince(dateStr) {
+  // recentChanges = recentChangesSince('December 1, 2025') // shorten changes; shrink VM
+  // recentChangesSince('October 1, 2025').length ==> 45
+  let firstDate = new Date(dateStr);
+  let changes = [];
+  recentChanges.forEach((tuple) => {
+    let timeAndDate = new Date(tuple[1].slice(2, 19));
+    if (timeAndDate >= firstDate) changes.push(tuple);
+  });
+  return changes;
+}
+function recentDateStr(date) {
+  // recentDateStr(new Date) ==>  [10:15 Jul 28 2025]
+  // Private method for recent methods browsing
+  let timeStr = date.toTimeString().slice(0, 5);
+  let dateStr = date.toDateString().slice(4);
+  return ' [' + timeStr + ' ' + dateStr + ']';
+}
+function timeSheet() {
+  // timeSheet()
+  //  Scan recentChanges, and report each day worked
+  //  later we will add time span
+  //  and finally methods worked on
+  let report = '';
+  let date = '';
+  // TODO: startMS is not initialized -- looks like a bug to me!
+  let startMS;
+  let hours = 0;
+  let methods = new Set();
+  recentChanges.forEach((tuple) => {
+    let timeAndDate = tuple[1].slice(2, 19);
+    let datePart = timeAndDate.slice(6, 17);
+    let timeMS = new Date(timeAndDate).getTime();
+    if (datePart == date) {
+      hours = (timeMS - startMS) / (60 * 60 * 1000);
+      methods.add(tuple[0]);
+    } else {
+      date = datePart;
+      startMS = timeMS;
+      hours = Math.max(hours, 1.5);
+      report += date + ': ' + hours.toFixed(1) + ' hours \n';
+      Array.from(methods)
+        .sort()
+        .forEach((spec) => {
+          report += '    ' + spec + '\n';
+        });
+      hours = 0;
+      methods = new Set().add(tuple[0]);
+    }
+  });
+  return report;
+}
+function msToRun(fn) {
+  // msToRun(() => {return methodsContaining('//').length}) ==> 149,3
+  let now = Date.now();
+  let value = fn.call(this);
+  return [value, Date.now() - now];
+}
+// +------------------------------+
+// |  Sundry Global — Inspection  |
+// +------------------------------+
+// Quick object inspection in an InspectorPanel.
+
+function inspect(obj, optionalBounds) {
+  // inspect(pt(3, 5));
+  let r;
+  if (optionalBounds != null) {
+    let o = optionalBounds;
+    r = rect(o.topLeft.x, o.topLeft.y, o.width(), o.height());
+  } else {
+    r = rect(500, 100, 300, 300);
+  }
+  let p = new InspectorPanel(r, obj);
+  Lively.addEphemeralMorph(p);
+  p.startStepping('showSelectedValue', false, 500);
+  return p;
+}
+function inspectString(obj) {
+  if (obj === null) return 'null';
+  let typeStr = typeof obj;
+  if (typeStr == 'number') return typeStr + ': ' + obj.toString();
+  if (typeStr == 'boolean') return typeStr + ': ' + obj.toString();
+  if (typeStr == 'string') return typeStr + ': ' + obj.toString();
+  if (Array.isArray(obj)) {
+    let parts = obj.map((el) => inspectString(el));
+    return 'array: [' + parts.join(', ') + ']';
+  }
+  if (obj && obj.instanceOf) {
+    if (obj.instanceOf(Point)) return obj.toString();
+    if (obj.instanceOf(Rectangle)) return obj.toString();
+    if (obj.instanceOf(SimpleTransform)) return obj.toString();
+    if (obj.instanceOf(StepSpec)) return obj.toString();
+  }
+  try {
+    let vowely = 'aeiou'.includes(obj.className[0].toLowerCase());
+    typeStr = typeStr + (vowely ? ': an ' : ': a ') + obj.className;
+  } catch (err) {
+    typeStr = typeStr + ': ' + err;
+  }
+  return typeStr;
+};
+init()

@@ -1,0 +1,691 @@
+@layer patchwork {
+:root,
+:host,
+[theme] {
+	color-scheme: light;
+	color: var(--studio-line);
+	accent-color: var(--studio-primary);
+	font-family: var(--studio-family);
+	font-size: var(--studio-font-size);
+	font-weight: var(--studio-font-weight);
+	line-height: var(--studio-line-height);
+	--default-tab-size: 2;
+
+	/* a plain fill<->line mix drifts to neutral gray in the middle of the
+	   ramp, so every derived offset is pulled a little toward this tint.
+	   keeps the whole ramp tied to the palette instead of only the light
+	   end inheriting a cast from a tinted fill. defaults to the secondary;
+	   set the amount to 0% for a purely neutral ramp. */
+	--studio-offset-tint: var(--studio-secondary);
+	--studio-offset-tint-amount: 10%;
+	--studio-fill: white;
+	/* the offset labels (10..50) stay linear, but the actual mix amount curves:
+	   finer steps near the fill where the eye is most sensitive, so subtle
+	   tints (active line, gutter) stay distinct. 10 starts at the fill itself. */
+	--studio-fill-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-fill), var(--studio-line) 0%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-fill-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-fill), var(--studio-line) 7%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-fill-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-fill), var(--studio-line) 18%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-fill-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-fill), var(--studio-line) 32%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-fill-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-fill), var(--studio-line) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-line: black;
+	--studio-line-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-line), var(--studio-fill) 10%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-line-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-line), var(--studio-fill) 20%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-line-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-line), var(--studio-fill) 30%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-line-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-line), var(--studio-fill) 40%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-line-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-line), var(--studio-fill) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+
+	/* chrome: the surface for app chrome (sideboard, context sidebar, toolbar).
+	   a faint secondary-tinted fill: light themes get a light tinted surface,
+	   dark themes a dark tinted one, because both fill and secondary come from
+	   the palette. the offset ramp mirrors --studio-fill-offset, curving the
+	   same way, so chrome surfaces get borders/hovers that track the palette. */
+	--studio-chrome-fill: var(--studio-fill-offset-10);
+	/* the offset ramp mixes chrome toward --studio-chrome-line (the chrome's own
+	   ink), not --studio-line, so borders/hovers stay sensible whether the chrome
+	   is lighter or darker than the content. defaults to --studio-line, so light
+	   themes are unchanged. */
+	--studio-chrome-fill-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-fill), var(--studio-chrome-line) 0%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-fill-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-fill), var(--studio-chrome-line) 7%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-fill-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-fill), var(--studio-chrome-line) 18%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-fill-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-fill), var(--studio-chrome-line) 32%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-fill-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-fill), var(--studio-chrome-line) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+
+	/* back-compat aliases for the pre-rename --studio-chrome[-offset-*] names. */
+	--studio-chrome: var(--studio-chrome-fill);
+	--studio-chrome-offset-10: var(--studio-chrome-fill-offset-10);
+	--studio-chrome-offset-20: var(--studio-chrome-fill-offset-20);
+	--studio-chrome-offset-30: var(--studio-chrome-fill-offset-30);
+	--studio-chrome-offset-40: var(--studio-chrome-fill-offset-40);
+	--studio-chrome-offset-50: var(--studio-chrome-fill-offset-50);
+
+	/* the ink/line color for content on chrome surfaces. mirrors --studio-line
+	   but its offset ramp mixes toward --studio-chrome-fill (the chrome surface)
+	   instead of --studio-fill, so borders/dividers on chrome track the chrome
+	   palette the same way --studio-line-offset tracks the fill. */
+	--studio-chrome-line: var(--studio-line);
+	--studio-chrome-line-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-line), var(--studio-chrome-fill) 10%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-line-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-line), var(--studio-chrome-fill) 20%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-line-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-line), var(--studio-chrome-fill) 30%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-line-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-line), var(--studio-chrome-fill) 40%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-chrome-line-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--studio-chrome-line), var(--studio-chrome-fill) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+
+	/* the font family for app chrome; tracks the ui family by default. */
+	--studio-chrome-family: var(--studio-family-ui);
+
+	--sideboard-primary: var(--studio-primary);
+	--sideboard-fill: var(--studio-chrome-fill);
+
+	--studio-primary: #35f7ca;
+	--studio-added: #35f7ca;
+	--studio-deleted: #ff6a90;
+	--studio-modified: #f8c43b;
+	--studio-secondary: #33ccf8;
+	--studio-link: #36e;
+	--studio-danger: #ff6a90;
+	--studio-warning: #f8c43b;
+
+	/* Accent surfaces. Each accent (primary/secondary/danger/warning) ships as a
+	   Bulma-style contrast pair — the same fill/line shape as --studio-chrome:
+
+	   --studio-{accent}-fill  the accent used AS A SURFACE (button/pill background).
+	   --studio-{accent}-line  the INVERT: ink placed ON that fill. Legibility must hold
+	                           for ANY accent (themes ship everything from near-white to
+	                           near-black accents), so it can't be tied to --studio-line
+	                           (that tracks the page, not the accent). Instead it's
+	                           luminance-adaptive: read the accent's own oklch lightness and
+	                           snap the ink to black for light accents / white for dark ones.
+	                           clamp(0,(0.62 - l)*1000,1) is a hard step at L≈0.62 — the
+	                           perceptual black/white flip point — with chroma & hue zeroed
+	                           for a neutral ink. A theme can still override -line to taste.
+	   --studio-{accent}-fill-offset-10..50  a hover/border ramp, fill mixed toward the
+	                           invert. offset-10 == the fill itself (matches the chrome
+	                           numbering); the first visible step is -20. No offset-tint:
+	                           an accent→dark-ink mix stays in-hue and never drifts gray,
+	                           so the neutralising tint the other ramps use isn't needed.
+
+	   Distinct from the -text tokens below: -line is for ink ON the accent; -text is the
+	   accent used AS ink on the ambient background. */
+	--studio-primary-fill: var(--studio-primary);
+	--studio-primary-line: oklch(from var(--studio-primary) clamp(0, (0.62 - l) * 1000, 1) 0 0);
+	--studio-primary-fill-offset-10: color-mix(in oklch, var(--studio-primary-fill), var(--studio-primary-line) 0%);
+	--studio-primary-fill-offset-20: color-mix(in oklch, var(--studio-primary-fill), var(--studio-primary-line) 7%);
+	--studio-primary-fill-offset-30: color-mix(in oklch, var(--studio-primary-fill), var(--studio-primary-line) 18%);
+	--studio-primary-fill-offset-40: color-mix(in oklch, var(--studio-primary-fill), var(--studio-primary-line) 32%);
+	--studio-primary-fill-offset-50: color-mix(in oklch, var(--studio-primary-fill), var(--studio-primary-line) 50%);
+
+	--studio-secondary-fill: var(--studio-secondary);
+	--studio-secondary-line: oklch(from var(--studio-secondary) clamp(0, (0.62 - l) * 1000, 1) 0 0);
+	--studio-secondary-fill-offset-10: color-mix(in oklch, var(--studio-secondary-fill), var(--studio-secondary-line) 0%);
+	--studio-secondary-fill-offset-20: color-mix(in oklch, var(--studio-secondary-fill), var(--studio-secondary-line) 7%);
+	--studio-secondary-fill-offset-30: color-mix(in oklch, var(--studio-secondary-fill), var(--studio-secondary-line) 18%);
+	--studio-secondary-fill-offset-40: color-mix(in oklch, var(--studio-secondary-fill), var(--studio-secondary-line) 32%);
+	--studio-secondary-fill-offset-50: color-mix(in oklch, var(--studio-secondary-fill), var(--studio-secondary-line) 50%);
+
+	--studio-danger-fill: var(--studio-danger);
+	--studio-danger-line: oklch(from var(--studio-danger) clamp(0, (0.62 - l) * 1000, 1) 0 0);
+	--studio-danger-fill-offset-10: color-mix(in oklch, var(--studio-danger-fill), var(--studio-danger-line) 0%);
+	--studio-danger-fill-offset-20: color-mix(in oklch, var(--studio-danger-fill), var(--studio-danger-line) 7%);
+	--studio-danger-fill-offset-30: color-mix(in oklch, var(--studio-danger-fill), var(--studio-danger-line) 18%);
+	--studio-danger-fill-offset-40: color-mix(in oklch, var(--studio-danger-fill), var(--studio-danger-line) 32%);
+	--studio-danger-fill-offset-50: color-mix(in oklch, var(--studio-danger-fill), var(--studio-danger-line) 50%);
+
+	--studio-warning-fill: var(--studio-warning);
+	--studio-warning-line: oklch(from var(--studio-warning) clamp(0, (0.62 - l) * 1000, 1) 0 0);
+	--studio-warning-fill-offset-10: color-mix(in oklch, var(--studio-warning-fill), var(--studio-warning-line) 0%);
+	--studio-warning-fill-offset-20: color-mix(in oklch, var(--studio-warning-fill), var(--studio-warning-line) 7%);
+	--studio-warning-fill-offset-30: color-mix(in oklch, var(--studio-warning-fill), var(--studio-warning-line) 18%);
+	--studio-warning-fill-offset-40: color-mix(in oklch, var(--studio-warning-fill), var(--studio-warning-line) 32%);
+	--studio-warning-fill-offset-50: color-mix(in oklch, var(--studio-warning-fill), var(--studio-warning-line) 50%);
+
+	/* The link accent is built on the --studio-link color. Everything else derives
+	   from --studio-link-fill — the invert ink, hover/border ramp, and all three
+	   -text variants — so retinting links is a single override of --studio-link. */
+	--studio-link-fill: var(--studio-link);
+	--studio-link-line: oklch(from var(--studio-link-fill) clamp(0, (0.62 - l) * 1000, 1) 0 0);
+	--studio-link-fill-offset-10: color-mix(in oklch, var(--studio-link-fill), var(--studio-link-line) 0%);
+	--studio-link-fill-offset-20: color-mix(in oklch, var(--studio-link-fill), var(--studio-link-line) 7%);
+	--studio-link-fill-offset-30: color-mix(in oklch, var(--studio-link-fill), var(--studio-link-line) 18%);
+	--studio-link-fill-offset-40: color-mix(in oklch, var(--studio-link-fill), var(--studio-link-line) 32%);
+	--studio-link-fill-offset-50: color-mix(in oklch, var(--studio-link-fill), var(--studio-link-line) 50%);
+
+	/* Accent AS ink on the ambient background. Legibility depends on which surface
+	   the text sits on, so there's one per surface family — each mixes the accent
+	   toward that surface's own line, which rides the theme automatically (darkened
+	   on light fills, lightened on dark ones). The --editor-*/--text-editor-* ones
+	   are defined alongside those surfaces below. */
+	--studio-primary-text: color-mix(in oklch, var(--studio-primary), var(--studio-line) 35%);
+	--studio-secondary-text: color-mix(in oklch, var(--studio-secondary), var(--studio-line) 35%);
+	--studio-danger-text: color-mix(in oklch, var(--studio-danger), var(--studio-line) 35%);
+	--studio-warning-text: color-mix(in oklch, var(--studio-warning), var(--studio-line) 35%);
+	--studio-link-text: color-mix(in oklch, var(--studio-link-fill), var(--studio-line) 35%);
+
+	--studio-family-sans: "Jost*", "Jost", system-ui, -apple-system, sans-serif;
+	--studio-family-code:
+		"Fantasque Sans Mono", "IBM Plex Mono", "Fira Code", "Iosevka",
+		ui-monospace, monospace;
+	/* the default family for studio content, and a separate ui family for
+	   controls/chrome; both track the sans family by default. */
+	--studio-family: var(--studio-family-sans);
+	--studio-family-ui: var(--studio-family-sans);
+	--studio-font-size: 16px;
+	--studio-font-weight: 400;
+	--studio-selection-fill: #ffee8888;
+	--studio-selection-line: var(--studio-line);
+	--studio-line-height: 1.5;
+
+	/* Border radius */
+	--studio-radius-xs: 2px;
+	--studio-radius-sm: 4px;
+	--studio-radius: 6px;
+	--studio-radius-md: 8px;
+	--studio-radius-lg: 12px;
+	--studio-radius-xl: 16px;
+	--studio-radius-round: 9999px;
+
+	/* Spacing scale */
+	--studio-space-3xs: 0.125rem;  /* 2px */
+	--studio-space-2xs: 0.25rem;   /* 4px */
+	--studio-space-xs: 0.375rem;   /* 6px */
+	--studio-space-sm: 0.5rem;     /* 8px */
+	--studio-space: 0.75rem;       /* 12px */
+	--studio-space-md: 1rem;       /* 16px */
+	--studio-space-lg: 1.5rem;     /* 24px */
+	--studio-space-xl: 2rem;       /* 32px */
+	--studio-space-2xl: 3rem;      /* 48px */
+
+	/* Shadows. the shadow colour is the line pulled toward the offset tint by
+	   the same amount as the rest of the ramp, so shadows read as part of the
+	   palette instead of a flat neutral black. */
+	--studio-shadow-color: color-mix(
+		in oklch,
+		var(--studio-line),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--studio-shadow-sm: 0 1px 2px
+		color-mix(in oklch, var(--studio-shadow-color), transparent 95%);
+	--studio-shadow: 0 1px 3px
+			color-mix(in oklch, var(--studio-shadow-color), transparent 90%),
+		0 1px 2px color-mix(in oklch, var(--studio-shadow-color), transparent 94%);
+	--studio-shadow-md: 0 4px 6px -1px
+			color-mix(in oklch, var(--studio-shadow-color), transparent 90%),
+		0 2px 4px -2px color-mix(in oklch, var(--studio-shadow-color), transparent 90%);
+	--studio-shadow-lg: 0 10px 15px -3px
+			color-mix(in oklch, var(--studio-shadow-color), transparent 90%),
+		0 4px 6px -4px color-mix(in oklch, var(--studio-shadow-color), transparent 90%);
+
+	/* Transitions */
+	--studio-transition-fast: 0.1s ease;
+	--studio-transition: 0.15s ease;
+	--studio-transition-slow: 0.25s ease;
+
+	--editor-line: var(--studio-line);
+	--editor-fill: var(--studio-fill);
+	--editor-fill-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-fill), var(--editor-line) 0%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-fill-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-fill), var(--editor-line) 7%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-fill-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-fill), var(--editor-line) 18%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-fill-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-fill), var(--editor-line) 32%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-fill-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-fill), var(--editor-line) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-line-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-line), var(--editor-fill) 10%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-line-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-line), var(--editor-fill) 20%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-line-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-line), var(--editor-fill) 30%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-line-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-line), var(--editor-fill) 40%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--editor-line-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--editor-line), var(--editor-fill) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+
+	/* accents as ink on the editor surface — mixed toward --editor-line */
+	--editor-primary-text: color-mix(in oklch, var(--studio-primary), var(--editor-line) 35%);
+	--editor-secondary-text: color-mix(in oklch, var(--studio-secondary), var(--editor-line) 35%);
+	--editor-danger-text: color-mix(in oklch, var(--studio-danger), var(--editor-line) 35%);
+	--editor-warning-text: color-mix(in oklch, var(--studio-warning), var(--editor-line) 35%);
+	--editor-link-text: color-mix(in oklch, var(--studio-link-fill), var(--editor-line) 35%);
+
+	--editor-family-code: var(--studio-family-code);
+	--editor-family-sans: var(--studio-family-sans);
+	--editor-family: var(--editor-family-sans);
+	--editor-font-size: var(--studio-font-size);
+	--editor-font-weight: var(--editor-font-weight);
+	--editor-selection-fill: var(--studio-selection-fill);
+	--editor-selection-line: var(--studio-selection-line);
+	--editor-line-height: var(--studio-line-height);
+	--editor-cursor-fill: var(--editor-line);
+	--text-editor-fill: var(--editor-fill);
+	--text-editor-fill-offset-10: var(--editor-fill-offset-10);
+	--text-editor-fill-offset-20: var(--editor-fill-offset-20);
+	--text-editor-fill-offset-30: var(--editor-fill-offset-30);
+	--text-editor-fill-offset-40: var(--editor-fill-offset-40);
+	--text-editor-fill-offset-50: var(--editor-fill-offset-50);
+	--text-editor-fill-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-fill), var(--text-editor-line) 0%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-fill-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-fill), var(--text-editor-line) 7%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-fill-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-fill), var(--text-editor-line) 18%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-fill-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-fill), var(--text-editor-line) 32%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-fill-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-fill), var(--text-editor-line) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-line: var(--editor-line);
+	--text-editor-line-offset-10: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-line), var(--text-editor-fill) 10%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-line-offset-20: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-line), var(--text-editor-fill) 20%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-line-offset-30: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-line), var(--text-editor-fill) 30%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-line-offset-40: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-line), var(--text-editor-fill) 40%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	--text-editor-line-offset-50: color-mix(
+		in oklch,
+		color-mix(in oklch, var(--text-editor-line), var(--text-editor-fill) 50%),
+		var(--studio-offset-tint) var(--studio-offset-tint-amount)
+	);
+	/* accents as ink on the text-editor surface — mixed toward --text-editor-line */
+	--text-editor-primary-text: color-mix(in oklch, var(--studio-primary), var(--text-editor-line) 35%);
+	--text-editor-secondary-text: color-mix(in oklch, var(--studio-secondary), var(--text-editor-line) 35%);
+	--text-editor-danger-text: color-mix(in oklch, var(--studio-danger), var(--text-editor-line) 35%);
+	--text-editor-warning-text: color-mix(in oklch, var(--studio-warning), var(--text-editor-line) 35%);
+	--text-editor-link-text: color-mix(in oklch, var(--studio-link-fill), var(--text-editor-line) 35%);
+
+	--text-editor-family-code: var(--editor-family-code);
+	--text-editor-family-sans: var(--editor-family-sans);
+	--text-editor-family: var(--text-editor-family-code);
+	--text-editor-cursor-fill: var(--editor-cursor-fill);
+	--text-editor-selection-fill: var(--editor-selection-fill);
+	--text-editor-selection-line: var(--editor-selection-line);
+	--text-editor-active-line-fill: color-mix(
+		in oklch,
+		var(--text-editor-fill-offset-10),
+		transparent 80%
+	);
+	--text-editor-active-line-line: var(--text-editor-line);
+	--text-editor-active-line-fill--gutter: var(--text-editor-fill-offset-20);
+	--text-editor-active-line-line--gutter: var(--text-editor-line);
+	--text-editor-gutter-fill: var(--text-editor-fill-offset-30);
+	--text-editor-gutter-line: var(--text-editor-line);
+	--text-editor-gutter-border: var(--text-editor-fill-offset-40);
+	--text-editor-gutter-font-size: var(--editor-font-size);
+	--text-editor-gutter-fill--line-numbers: var(--text-editor-gutter-fill);
+	--text-editor-gutter-line--line-numbers: var(--text-editor-gutter-line);
+	--text-editor-gutter-font-size--line-numbers: var(--editor-font-size);
+	--text-editor-tooltip-fill: var(--text-editor-fill-offset-20);
+	--text-editor-tooltip-color: var(--text-editor-line);
+	--text-editor-line-height: var(--editor-line-height);
+	--text-editor-text-style: normal;
+	--text-editor-text-weight: normal;
+	--text-editor-text-fill: transparent;
+
+	--syntax-comment: var(--text-editor-line-offset-50);
+	--syntax-style-comment: italic;
+	--syntax-fill-comment: var(--text-editor-text-fill);
+	--syntax-weight-comment: var(--text-editor-text-weight);
+
+	--syntax-line-comment: var(--syntax-comment);
+	--syntax-style-line-comment: var(--syntax-style-line-comment);
+	--syntax-fill-line-comment: var(--syntax-fill-comment);
+	--syntax-weight-line-comment: var(--syntax-weight-comment);
+
+	--syntax-block-comment: var(--syntax-comment);
+	--syntax-style-block-comment: var(--syntax-style-comment);
+	--syntax-fill-block-comment: var(--syntax-fill-comment);
+	--syntax-weight-block-comment: var(--syntax-weight-comment);
+
+	--syntax-doc-comment: var(--syntax-comment);
+	--syntax-style-doc-comment: var(--syntax-style-comment);
+	--syntax-fill-doc-comment: var(--syntax-fill-comment);
+	--syntax-weight-doc-comment: var(--syntax-weight-comment);
+
+	--syntax-meta: var(--text-editor-line);
+	--syntax-style-meta: var(--text-editor-text-style);
+	--syntax-fill-meta: var(--text-editor-text-fill);
+	--syntax-weight-meta: var(--text-editor-text-weight);
+
+	--syntax-invalid: var(--studio-danger);
+	--syntax-style-invalid: var(--text-editor-text-style);
+	--syntax-fill-invalid: var(--text-editor-text-fill);
+	--syntax-weight-invalid: var(--text-editor-text-weight);
+
+	--syntax-operator: var(--text-editor-line);
+	--syntax-style-operator: var(--text-editor-text-style);
+	--syntax-fill-operator: var(--text-editor-text-fill);
+	--syntax-weight-operator: var(--text-editor-text-weight);
+
+	--syntax-punctuation: var(--text-editor-line);
+	--syntax-style-punctuation: var(--text-editor-text-style);
+	--syntax-fill-punctuation: var(--text-editor-text-fill);
+	--syntax-weight-punctuation: var(--text-editor-text-weight);
+
+	--syntax-bool: var(--text-editor-line);
+	--syntax-style-bool: var(--text-editor-text-style);
+	--syntax-fill-bool: var(--text-editor-text-fill);
+	--syntax-weight-bool: var(--text-editor-text-weight);
+
+	--syntax-atom: var(--text-editor-line);
+	--syntax-style-atom: var(--text-editor-text-style);
+	--syntax-fill-atom: var(--text-editor-text-fill);
+	--syntax-weight-atom: var(--text-editor-text-weight);
+
+	--syntax-keyword: var(--text-editor-line);
+	--syntax-style-keyword: var(--text-editor-text-style);
+	--syntax-fill-keyword: var(--text-editor-text-fill);
+	--syntax-weight-keyword: var(--text-editor-text-weight);
+
+	--syntax-control-keyword: var(--syntax-keyword);
+	--syntax-style-control-keyword: var(--syntax-style-keyword);
+	--syntax-fill-control-keyword: var(--syntax-fill-keyword);
+	--syntax-weight-control-keyword: var(--syntax-weight-keyword);
+
+	--syntax-module-keyword: var(--syntax-keyword);
+	--syntax-style-module-keyword: var(--syntax-style-keyword);
+	--syntax-fill-module-keyword: var(--syntax-fill-keyword);
+	--syntax-weight-module-keyword: var(--syntax-weight-keyword);
+
+	--syntax-type-name: var(--text-editor-line);
+	--syntax-style-type-name: var(--text-editor-text-style);
+	--syntax-fill-type-name: var(--text-editor-text-fill);
+	--syntax-weight-type-name: var(--text-editor-text-weight);
+
+	--syntax-class-name: var(--text-editor-line);
+	--syntax-style-class-name: var(--text-editor-text-style);
+	--syntax-fill-class-name: var(--text-editor-text-fill);
+	--syntax-weight-class-name: var(--text-editor-text-weight);
+
+	--syntax-type-operator: var(--syntax-operator);
+	--syntax-style-type-operator: var(--syntax-style-operator);
+	--syntax-fill-type-operator: var(--syntax-fill-operator);
+	--syntax-weight-type-operator: var(--syntax-weight-operator);
+
+	--syntax-variable-name: var(--text-editor-line);
+	--syntax-style-variable-name: var(--text-editor-text-style);
+	--syntax-fill-variable-name: var(--text-editor-text-fill);
+	--syntax-weight-variable-name: var(--text-editor-text-weight);
+
+	--syntax-special--variable-name: var(--syntax-variable-name);
+	--syntax-style-special--variable-name: var(--syntax-style-variable-name);
+	--syntax-fill-special--variable-name: var(--syntax-fill-variable-name);
+	--syntax-weight-special--variable-name: var(--syntax-weight-variable-name);
+
+	--syntax-function--variable-name: var(--syntax-variable-name);
+	--syntax-style-function--variable-name: var(--syntax-style-variable-name);
+	--syntax-fill-function--variable-name: var(--syntax-fill-variable-name);
+	--syntax-weight-function--variable-name: var(--syntax-weight-variable-name);
+
+	--syntax-definition--variable-name: var(--syntax-variable-name);
+	--syntax-style-definition--variable-name: var(--syntax-style-variable-name);
+	--syntax-fill-definition--variable-name: var(--syntax-fill-variable-name);
+	--syntax-weight-definition--variable-name: var(--syntax-weight-variable-name);
+
+	--syntax-function--property-name: var(--syntax-variable-name);
+	--syntax-style-function--property-name: var(--syntax-style-variable-name);
+	--syntax-fill-function--property-name: var(--syntax-fill-variable-name);
+	--syntax-weight-function--property-name: var(--syntax-weight-variable-name);
+
+	--syntax-string: var(--text-editor-line);
+	--syntax-fill-string: var(--text-editor-text-style);
+	--syntax-style-string: var(--text-editor-text-fill);
+	--syntax-weight-string: var(--text-editor-text-weight);
+
+	--syntax-number: var(--text-editor-line);
+	--syntax-fill-number: var(--text-editor-text-style);
+	--syntax-style-number: var(--text-editor-text-fill);
+	--syntax-weight-number: var(--text-editor-text-weight);
+
+	--syntax-integer: var(--syntax-number);
+	--syntax-style-integer: var(--syntax-style-number);
+	--syntax-fill-integer: var(--syntax-fill-number);
+	--syntax-weight-integer: var(--syntax-weight-number);
+
+	--syntax-float: var(--syntax-number);
+	--syntax-style-float: var(--syntax-style-number);
+	--syntax-fill-float: var(--syntax-fill-number);
+	--syntax-weight-float: var(--syntax-weight-number);
+
+	--syntax-escape: var(--syntax-punctuation);
+	--syntax-style-escape: var(--syntax-style-punctuation);
+	--syntax-fill-escape: var(--syntax-fill-punctuation);
+	--syntax-weight-escape: var(--syntax-weight-punctuation);
+
+	--syntax-regexp: var(--syntax-string);
+	--syntax-style-regexp: var(--syntax-style-string);
+	--syntax-fill-regexp: var(--syntax-fill-string);
+	--syntax-weight-regexp: var(--syntax-weight-string);
+
+	--syntax-special--string: var(--syntax-string);
+	--syntax-style-special--string: var(--syntax-style-string);
+	--syntax-fill-special--string: var(--syntax-fill-string);
+	--syntax-weight-special--string: var(--syntax-weight-string);
+
+	--syntax-tag-name: var(--text-editor-line);
+	--syntax-fill-tag-name: var(--text-editor-text-style);
+	--syntax-style-tag-name: var(--text-editor-text-fill);
+	--syntax-weight-tag-name: var(--text-editor-text-weight);
+
+	--syntax-angle-bracket: var(--syntax-punctuation);
+	--syntax-style-angle-bracket: var(--syntax-style-punctuation);
+	--syntax-fill-angle-bracket: var(--syntax-fill-punctuation);
+	--syntax-weight-angle-bracket: var(--syntax-weight-punctuation);
+
+	--syntax-attribute-name: var(--text-editor-line);
+	--syntax-fill-attribute-name: var(--text-editor-text-style);
+	--syntax-style-attribute-name: var(--text-editor-text-fill);
+	--syntax-weight-attribute-name: var(--text-editor-text-weight);
+
+	--syntax-namespace: var(--text-editor-line);
+	--syntax-fill-namespace: var(--text-editor-text-style);
+	--syntax-style-namespace: var(--text-editor-text-fill);
+	--syntax-weight-namespace: var(--text-editor-text-weight);
+
+	--syntax-strong: var(--text-editor-line);
+	--syntax-fill-strong: var(--text-editor-text-style);
+	--syntax-style-strong: var(--text-editor-text-fill);
+	--syntax-weight-strong: bold;
+
+	--syntax-emphasis: var(--text-editor-line);
+	--syntax-fill-emphasis: var(--text-editor-text-style);
+	--syntax-style-emphasis: italic;
+	--syntax-weight-emphasis: var(--text-editor-text-weight);
+
+	--syntax-heading: var(--text-editor-line);
+	--syntax-fill-heading: var(--text-editor-text-style);
+	--syntax-style-heading: var(--text-editor-text-fill);
+	--syntax-weight-heading: bold;
+
+	--syntax-link: var(--studio-link);
+	--syntax-fill-link: var(--text-editor-text-style);
+	--syntax-style-link: var(--text-editor-text-fill);
+	--syntax-weight-link: var(--text-editor-text-weight);
+
+	--syntax-quote: var(--syntax-punctuation);
+	--syntax-style-quote: var(--syntax-style-punctuation);
+	--syntax-fill-quote: var(--syntax-fill-punctuation);
+	--syntax-weight-quote: var(--syntax-weight-punctuation);
+
+	--syntax-list: var(--text-editor-line);
+	--syntax-fill-list: var(--text-editor-text-style);
+	--syntax-style-list: var(--text-editor-text-fill);
+	--syntax-weight-list: var(--text-editor-text-weight);
+
+	--syntax-inserted: var(--studio-added);
+	--syntax-fill-inserted: var(--text-editor-text-fill);
+	--syntax-style-inserted: var(--text-editor-text-style);
+	--syntax-weight-inserted: var(--text-editor-text-weight);
+
+	--syntax-deleted: var(--studio-deleted);
+	--syntax-fill-deleted: var(--text-editor-text-fill);
+	--syntax-style-deleted: var(--text-editor-text-style);
+	--syntax-weight-deleted: var(--text-editor-text-weight);
+
+	--syntax-changed: var(--studio-modified);
+	--syntax-fill-changed: var(--text-editor-text-fill);
+	--syntax-style-changed: var(--text-editor-text-style);
+	--syntax-weight-changed: var(--text-editor-text-weight);
+
+	--syntax-content-separator: var(--text-editor-line);
+	--syntax-fill-content-separator: var(--text-editor-text-fill);
+	--syntax-style-content-separator: var(--text-editor-text-style);
+	--syntax-weight-content-separator: var(--text-editor-text-weight);
+}
+
+:root {
+	background-color: var(--studio-chrome-fill);
+}
+
+::selection {
+	background: var(--studio-selection-fill);
+	color: var(--studio-selection-line);
+}
+
+body {
+	margin: 0;
+}
+
+input, button, select, textarea, optgroup {
+	font-family: inherit;
+	font-size: inherit;
+	line-height: inherit;
+}
+}

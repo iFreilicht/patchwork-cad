@@ -1,0 +1,16 @@
+{
+  "name": "@patchwork/tic-tac-toe",
+  "version": "0.0.1",
+  "description": "Tic Tac Toe game tool for Patchwork",
+  "type": "module",
+  "main": "tic-tac-toe.js",
+  "exports": {
+    ".": "tic-tac-toe.js"
+  },
+  "scripts": {
+    "push": "pushwork sync",
+    "register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\""
+  },
+  "keywords": [],
+  "author": "Ink & Switch"
+}
