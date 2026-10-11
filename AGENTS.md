@@ -20,5 +20,5 @@ You MUST have the skill `writing-patchwork-tools` available! If not, abort and i
 
 ## Repository structure
 
-Reserach goes into `./research`, source code into `./src`.
+Research goes into `./research`, source code into `./src`.
 
