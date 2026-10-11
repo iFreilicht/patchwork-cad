@@ -4,7 +4,7 @@
  * sketched on the front face piece right of the notch.
  */
 import { edgesWhere, facesWhere, near, orGone, type Case } from "../bench.ts";
-import { circle, rect, when, XY } from "./common.ts";
+import { circle, rect, reverseSketchOf, when, XY } from "./common.ts";
 
 interface P {
   w: number;
@@ -68,5 +68,6 @@ export const m1: Case<P> = {
     { name: "insert 2nd notch upstream", category: "insert-upstream", params: { extraNotch: true }, expect: { notchTopEdge: 1, frontRightTopEdge: 2, frontRightFace: 1 } },
     { name: "delete notch", category: "delete-upstream", params: { notch: false }, expect: { notchTopEdge: "gone", frontRightTopEdge: 1, frontRightFace: 1 } },
     { name: "add corner segment to block sketch", category: "sketch-segment", params: { cornerCut: 5 }, expect: { notchTopEdge: 1, frontRightTopEdge: 1, frontRightFace: 1 } },
+    { name: "block sketch drawn reversed", category: "sketch-direction", features: reverseSketchOf("f1"), expect: { notchTopEdge: 1, frontRightTopEdge: 1, frontRightFace: 1 } },
   ],
 };

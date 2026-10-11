@@ -5,7 +5,7 @@
  */
 import { edgesWhere, facesWhere, near, orGone, type Case } from "../bench.ts";
 import type { Feature, Frame } from "../model.ts";
-import { circle, rect, XY } from "./common.ts";
+import { circle, rect, reverseSketchOf, XY } from "./common.ts";
 
 interface P {
   w: number;
@@ -76,5 +76,7 @@ export const m3: Case<P> = {
     { name: "upright not flush (y 0→2)", category: "dimension-topology", params: { uprightY: 2 }, expect: { innerCornerEdges: 2, uprightTopBackEdge: 1, backFace: 1 } },
     { name: "insert 2nd rib", category: "insert-upstream", params: { ribs: [30, 45] }, expect: { innerCornerEdges: 3, uprightTopBackEdge: 1, backFace: 1 } },
     { name: "add corner segment to base sketch", category: "sketch-segment", params: { cornerCut: 5 }, expect: { innerCornerEdges: 2, uprightTopBackEdge: 1, backFace: 1 } },
+    { name: "upright sketch drawn reversed", category: "sketch-direction", features: reverseSketchOf("upright"), expect: { innerCornerEdges: 2, uprightTopBackEdge: 1, backFace: 1 } },
+    { name: "base sketch drawn reversed", category: "sketch-direction", features: reverseSketchOf("base"), expect: { innerCornerEdges: 2, uprightTopBackEdge: 1, backFace: 1 } },
   ],
 };

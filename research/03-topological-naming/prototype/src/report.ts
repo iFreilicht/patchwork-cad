@@ -35,12 +35,17 @@ export function classify(r: Result): string {
       if (now > cap) return s.startsWith("S2") ? (r.score === "wrong" ? "pieces added; positional index picks wrong piece" : "split of a named entity; reported") : "piece count changed (more); reported";
     }
   }
-  if (s.startsWith("S4")) {
+  if (s.startsWith("S4") || s.startsWith("S5")) {
+    if (r.outcome.includes("disagrees with geometry")) return "split index disagrees with geometry; reported";
     const m = x.match(/(\d+) descendants/);
     if (m) {
       const n = +m[1]!;
-      if (n === 0) return r.outcome.includes("suggests") ? "split undone; ancestor only suggested" : "origin name changed (sketch edit)";
+      if (n === 0) {
+        if (s.startsWith("S4")) return r.outcome.includes("suggests") ? "split undone; ancestor only suggested" : "origin name changed (sketch edit)";
+        return x.includes("; split ") ? "split piece vanished or undone; reported" : "origin name changed (sketch edit)";
+      }
       if (n > 1) return "split into several pieces; single-entity parameter";
+      if (n === 1 && r.score === "wrong") return "split index points at another piece (OCCT order changed)";
     }
   }
   return "UNCLASSIFIED";

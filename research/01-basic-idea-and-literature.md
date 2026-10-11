@@ -82,6 +82,7 @@ Running OCCT locally in wasm with automerge sync would be a real differentiator.
 5. **Kernel robustness and determinism.**
    - OCCT's fillets are a known weak spot. [Its own docs](https://occt3d.com/dev/doc/refman/html/class_b_rep_fillet_a_p_i___make_fillet.html): "there may be instances where the algorithm fails … There is no initial analysis of errors and they only become evident at the construction stage." The UI needs good per-feature error reporting.
    - Kernel upgrades may change results or topology for the same input (unverified). Documents should therefore record the kernel version they were built with.
+   - Which operations are fragile, and how to report kernel failures to the user, is researched in [04-kernel-robustness.md](04-kernel-robustness.md).
 
 6. **Licensing.** replicad is MIT. OCCT and its wasm builds are LGPL-2.1 with the [Open CASCADE exception](https://github.com/Open-Cascade-SAS/OCCT/blob/master/OCCT_LGPL_EXCEPTION.txt). As long as the wasm is an unmodified, separately loaded file (as in the openscad tool), users can swap it out, which is the intent of the LGPL. The exact obligations, e.g. license notices and source availability for the wasm, still need checking. This is not legal advice.
 

@@ -18,6 +18,11 @@ export interface RefStrategy<R = unknown> {
   name: string;
   capture(state: State, kind: Kind, picked: Shape): R;
   resolve(state: State, kind: Kind, ref: R, opts: ResolveOpts): Resolution;
+  /**
+   * Optional: post-process the per-entity resolutions of a multi-entity reference (e.g. a fillet's
+   * edge list) as a whole. Gets the per-entity results in capture order.
+   */
+  combine?(parts: Resolution[]): Resolution | undefined;
   toCode(ref: R): string;
   /** Explains, in terms of the strategy's own mechanism, why `intended` was (not) found. For failure analysis. */
   explain(state: State, kind: Kind, ref: R, intended: Shape[] | "gone"): string;
@@ -317,10 +322,27 @@ function isDescendant(name: string, of: string): boolean {
     n.faces.length === 1 ? share(n.faces[0]!, o.faces[0]!) : (share(n.faces[0]!, o.faces[0]!) && share(n.faces[1]!, o.faces[1]!)) || (share(n.faces[0]!, o.faces[1]!) && share(n.faces[1]!, o.faces[0]!));
   return facesMatch && (n.chain === o.chain || n.chain.startsWith(`${o.chain}/`));
 }
-/** `a/op#1/op2#2` → `a/op#1` → `a`; edge names also drop a trailing `~k`. */
+/** Splits a history name into its origin and split levels at `/` outside parentheses: `a/op#1/op2#2` → [a, op#1, op2#2]. */
+export function splitChain(n: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < n.length; i++) {
+    if (n[i] === "(") depth++;
+    else if (n[i] === ")") depth--;
+    else if (n[i] === "/" && depth === 0) {
+      parts.push(n.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(n.slice(start));
+  return parts;
+}
+
+/** `a/op#1/op2#2` → `a/op#1` → `a` → undefined. */
 const parent = (n: string) => {
-  const i = n.lastIndexOf("/");
-  return i < 0 ? undefined : n.slice(0, i);
+  const c = splitChain(n);
+  return c.length > 1 ? c.slice(0, -1).join("/") : undefined;
 };
 
 export const historyStrategy: RefStrategy<string[]> = {
@@ -347,6 +369,96 @@ export const historyStrategy: RefStrategy<string[]> = {
   },
 };
 
-export const strategies: RefStrategy<any>[] = [indexStrategy, geometricStrategy, lineageStrategy, hybridStrategy, historyStrategy];
+// ---------- S5: history names, cross-checked by geometry ----------
+
+export interface CheckedRef {
+  names: string[];
+  /** Centroid of the picked entity at capture time. */
+  centroid: Vec;
+  /** For a captured name ending in a split level `<parent>/<op>#<k>`: centroid per sibling k at capture time. */
+  split?: { parent: string; op: string; picked: number; centroids: Map<number, Vec> };
+}
+
+const lastLevel = (n: string) => {
+  const c = splitChain(n);
+  const m = c.length > 1 ? c[c.length - 1]!.match(/^(.*)#(\d+)$/) : null;
+  return m ? { parent: c.slice(0, -1).join("/"), op: m[1]!, k: +m[2]! } : undefined;
+};
+
+/** Entities grouped by their piece index k at the split level `<parent>/<op>#k` (descendants included). */
+function splitGroups(s: State, kind: Kind, parent: string, op: string): Map<number, Shape[]> {
+  const groups = new Map<number, Shape[]>();
+  entities(s, kind).forEach((e, i) => {
+    for (const n of histOf(s, kind, i)) {
+      for (let k = 1; k <= 16; k++) {
+        if (!isDescendant(n, `${parent}/${op}#${k}`)) continue;
+        if (!groups.get(k)?.some((x) => x.IsSame(e))) groups.set(k, [...(groups.get(k) ?? []), e]);
+      }
+    }
+  });
+  return groups;
+}
+
+const meanCentroid = (es: Shape[], kind: Kind): Vec => {
+  const cs = es.map((e) => describe(e, kind).centroid);
+  return [0, 1, 2].map((i) => cs.reduce((a, c) => a + c[i]!, 0) / cs.length) as unknown as Vec;
+};
+
+/**
+ * S4's resolution, but a split index is only trusted if centroid matching of the sibling pieces
+ * agrees with it; otherwise the reference is reported with the geometric match as suggestion (also
+ * used instead of S4's ancestor fallback). Only the last split level of a name is checked.
+ */
+export const checkedStrategy: RefStrategy<CheckedRef> = {
+  name: "S5 history+geometry",
+  capture(s, kind, e) {
+    const names = historyStrategy.capture(s, kind, e);
+    const centroid = describe(e, kind).centroid;
+    const lv = names.length === 1 ? lastLevel(names[0]!) : undefined;
+    if (!lv) return { names, centroid };
+    const groups = splitGroups(s, kind, lv.parent, lv.op);
+    return { names, centroid, split: { parent: lv.parent, op: lv.op, picked: lv.k, centroids: new Map([...groups].map(([k, es]) => [k, meanCentroid(es, kind)])) } };
+  },
+  resolve(s, kind, ref, opts) {
+    const r0 = historyStrategy.resolve(s, kind, ref.names, opts);
+    // Several descendants for a single-entity parameter: suggest the one nearest to the picked entity.
+    const nearest = (es: Shape[]) => es.reduce((a, b) => (dist(describe(a, kind).centroid, ref.centroid) <= dist(describe(b, kind).centroid, ref.centroid) ? a : b));
+    const r: Resolution = "ambiguous" in r0 ? { ambiguous: r0.ambiguous, why: r0.why, suggestion: [nearest(r0.ambiguous)] } : r0;
+    if (!ref.split) return "ok" in r || "ambiguous" in r ? r : { missing: r.missing };
+    const { parent: par, op, picked, centroids } = ref.split;
+    const groups = splitGroups(s, kind, par, op);
+    // Pieces now present at this split level, or the unsplit parent if the split no longer happens.
+    const pieces: Shape[][] = groups.size ? [...groups.values()] : entities(s, kind).filter((_, i) => [...histOf(s, kind, i)].some((n) => n === par)).map((e) => [e]);
+    const capturedKs = [...centroids.keys()];
+    const match = matchPieces(capturedKs.map((k) => centroids.get(k)!), pieces.map((p) => meanCentroid(p, kind)));
+    const mine = match[capturedKs.indexOf(picked)];
+    const suggestion = mine === undefined ? undefined : pieces[mine]!;
+    const sameIndex = groups.size === centroids.size && suggestion !== undefined && groups.get(picked) === suggestion;
+    if ("ok" in r && sameIndex) return r;
+    if ("ambiguous" in r && sameIndex) return r;
+    if ("ambiguous" in r && !r.why.includes("disagrees")) return r;
+    if ("missing" in r) return suggestion ? { missing: r.missing, suggestion } : { missing: r.missing };
+    const why = "ok" in r ? `split index #${picked} disagrees with geometry` : r.why;
+    const candidates = "ok" in r ? r.ok : r.ambiguous;
+    return suggestion ? { ambiguous: candidates, why, suggestion } : { ambiguous: candidates, why };
+  },
+  toCode: (r) => historyStrategy.toCode(r.names),
+  // When a reference selects all pieces of a split, a changed piece order is harmless: if the
+  // name-based results and the geometric matches cover the same entities, accept them.
+  combine(parts) {
+    if (!parts.every((p) => "ok" in p || ("ambiguous" in p && p.why.includes("disagrees with geometry") && p.suggestion))) return undefined;
+    const byName = parts.flatMap((p) => ("ok" in p ? p.ok : (p as { ambiguous: Shape[] }).ambiguous));
+    const byGeometry = parts.flatMap((p) => ("ok" in p ? p.ok : (p as { suggestion: Shape[] }).suggestion));
+    const same = byName.every((x) => byGeometry.some((y) => y.IsSame(x))) && byGeometry.every((x) => byName.some((y) => y.IsSame(x)));
+    return same ? { ok: byName.filter((x, i) => byName.findIndex((y) => y.IsSame(x)) === i) } : undefined;
+  },
+  explain(s, kind, r, intended) {
+    const base = historyStrategy.explain(s, kind, r.names, intended);
+    if (!r.split) return base;
+    return `${base}; split ${r.split.op}: captured ${r.split.centroids.size} pieces, now ${splitGroups(s, kind, r.split.parent, r.split.op).size}`;
+  },
+};
+
+export const strategies: RefStrategy<any>[] = [indexStrategy, geometricStrategy, lineageStrategy, hybridStrategy, historyStrategy, checkedStrategy];
 
 export type { FaceInfo };

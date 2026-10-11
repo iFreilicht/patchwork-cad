@@ -24,3 +24,16 @@ export const circle = (cx: number, cy: number, radius: number, flip = false): Pr
 
 /** For optional features in a feature list: `...when(cond, feature)`. */
 export const when = (cond: boolean, f: Feature): Feature[] => (cond ? [f] : []);
+
+/** The same polygon drawn in the opposite direction; every segment keeps its name. */
+export function reversed(p: Profile): Profile {
+  if (p.kind !== "polygon") return p;
+  const n = p.points.length;
+  return { ...p, points: [...p.points].reverse(), segments: p.points.map((_, i) => p.segments[(2 * n - 2 - i) % n]!) };
+}
+
+/** Edit helper: redraw the sketch of feature `id` in the opposite direction. */
+export const reverseSketchOf =
+  (id: string) =>
+  (features: Feature[]): Feature[] =>
+    features.map((f) => (f.id === id && (f.type === "extrude" || f.type === "revolve") ? { ...f, profile: reversed(f.profile) } : f));

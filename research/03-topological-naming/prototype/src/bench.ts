@@ -10,6 +10,7 @@ export type Category =
   | "insert-upstream"
   | "delete-upstream"
   | "sketch-segment"
+  | "sketch-direction"
   | "reorder"
   | "pattern-count";
 
@@ -107,6 +108,8 @@ function suggestionScore(expected: Shape[] | "gone", r: Resolution): { suggestio
 /** Resolves a multi-entity reference: ok only if every captured entity resolves. */
 function resolveAll<R>(st: RefStrategy<R>, s: State, kind: Kind, refs: R[], opts: ResolveOpts): Resolution {
   const parts = refs.map((r) => st.resolve(s, kind, r, opts));
+  const combined = parts.length > 1 ? st.combine?.(parts) : undefined;
+  if (combined) return combined;
   const failed = parts.find((p) => "ambiguous" in p) ?? parts.find((p) => "missing" in p);
   if (failed) {
     // A combined suggestion exists only if every part either resolved or suggested something.
