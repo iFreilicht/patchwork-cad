@@ -1,6 +1,6 @@
 # Model Storage
 
-Outcome of the discussion on 2026-10-11 about [risk 2 in the review](01-basic-idea-and-literature.md#problems-and-risks).
+How models are stored, addressing [risk 2 in the review](01-basic-idea-and-literature.md#problems-and-risks).
 
 ## Decision: the model is code
 

@@ -1,6 +1,6 @@
 # Topological Naming
 
-Features like fillet, chamfer, shell or sketch-on-face refer to faces and edges of earlier results. Since [models are code](02-model-storage.md), each such reference must survive rebuilds after upstream edits and appear as readable text in a feature call. This document surveys the approaches and benchmarks prototypes of them. The plan was agreed on 2026-10-11.
+Features like fillet, chamfer, shell or sketch-on-face refer to faces and edges of earlier results. Since [models are code](02-model-storage.md), each such reference must survive rebuilds after upstream edits and appear as readable text in a feature call. This document surveys the approaches and benchmarks prototypes of them.
 
 ## The problem
 

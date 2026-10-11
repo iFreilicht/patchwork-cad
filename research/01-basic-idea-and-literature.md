@@ -25,7 +25,7 @@ A big complication will be advanced sketch features like projections and constra
 
 ## Review
 
-*Fact check and risk analysis of the section above, researched 2026-10-11.*
+*Fact check and risk analysis of the section above.*
 
 ### Verified claims
 
@@ -71,15 +71,11 @@ Running OCCT locally in wasm with automerge sync would be a real differentiator.
    - Onshape's answer is rule-based queries generated from UI picks: "The generated queries refer to the selected entities in a robust way so that features can be resistant to upstream changes" ([FeatureScript tutorial](https://cad.onshape.com/FsDoc/tutorials/create-a-slot-feature.html)).
    - OCCT has building blocks for this: modelling algorithms report `Modified`/`Generated`/`IsDeleted` history (these bindings exist in the replicad build), and OCAF's `TNaming` maintains "references to selected geometry even after these modifications" ([OCAF guide](https://occt3d.com/dev/doc/overview/html/occt_user_guides__ocaf.html)).
    
-   The MVP needs at least a design decision here: how does a click on an edge become a reference in the document that survives a rebuild?
-   
-   *Update:* prototypes benchmarked in [03-topological-naming.md](03-topological-naming.md). History-based names rooted in feature-semantic origins produced no silent errors in 108 test cells. Ambiguous cases are reported with a suggestion.
+   How a click on an edge becomes a reference that survives rebuilds is researched and benchmarked in [03-topological-naming.md](03-topological-naming.md).
 
-2. **Merging code as text.** An automerge document is JSON-like, so a "JavaScript automerge document" means code stored in text fields. Automerge merges strings character by character: the [automerge skill](../.claude/skills/working-with-automerge/SKILL.md) warns that a field should be an `ImmutableString` "so nobody accidentally gets character-level merging on it". That guarantees convergence, but not valid code. [COAST](http://soft.vub.ac.be/Publications/2022/vub-tr-soft-22-17.pdf) shows that character-based merges can yield programs that are "no longer syntactically correct". Concurrent edits to the same parameter can also produce interleaved digits. Storing features as structured data (one automerge map per feature, one numeric field per parameter) avoids this. Per the skill, "Concurrent edits to **different** fields/elements merge cleanly", and a concurrent set of the same field picks one winner while `Automerge.getConflicts` "returns all concurrently-written values if you want to surface them", which the UI could show. Structured features also make the GUI easy to bind, and code can be generated from them. Storing the code as the source of truth instead requires parsing arbitrary code back into features and rewriting it on every GUI edit (Zoo's approach). Recommendation: structured features as the source of truth, the "Custom Script" feature as an escape hatch with code stored as text, and the code view (use case 1) as a generated or partially editable projection. This is the central architectural decision and deserves its own research document.
-   
-   *Update:* after discussion, the model is stored as code after all, with the timeline as a derived view. See [02-model-storage.md](02-model-storage.md).
+2. **Merging code as text.** An automerge document is JSON-like, so a "JavaScript automerge document" means code stored in text fields. Automerge merges strings character by character: the [automerge skill](../.claude/skills/working-with-automerge/SKILL.md) warns that a field should be an `ImmutableString` "so nobody accidentally gets character-level merging on it". That guarantees convergence, but not valid code. [COAST](http://soft.vub.ac.be/Publications/2022/vub-tr-soft-22-17.pdf) shows that character-based merges can yield programs that are "no longer syntactically correct". This only happens when people edit the same spot at the same time, and the result is visible and fixable. [02-model-storage.md](02-model-storage.md) therefore keeps the model as code, with the timeline as a derived view.
 
-3. **Executing code from documents.** Every collaborator's browser runs the model's code. Anyone with write access to a model can therefore run arbitrary JS in every viewer's session. This also applies to embedded viewers (use case 2). The code must run sandboxed, e.g. in a worker or sandboxed iframe with no access to the repo, and generated code should come only from structured features.
+3. **Executing code from documents.** Every collaborator's browser runs the model's code. Anyone with write access to a model can therefore run arbitrary JS in every viewer's session. This also applies to embedded viewers (use case 2). The code must run sandboxed, e.g. in a worker or sandboxed iframe with no access to the repo.
 
 4. **Rebuild cost.** OCCT operations, especially booleans and fillets, are slow in wasm, and every change re-runs the timeline from the changed feature onward. This needs per-feature caching and a worker; replicad itself recommends a worker because "The model computation can take some time" ([use as a library](https://replicad.xyz/docs/use-as-a-library)). The multi-threaded build needs `SharedArrayBuffer`, i.e. a cross-origin-isolated page. According to a [Patchwork experiment](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/standalone-latex/src/compile.ts), "The current Patchwork host (sub.patchwork.inkandswitch.com) sets these". Standalone deployments must set COOP/COEP headers themselves.
 
@@ -89,4 +85,4 @@ Running OCCT locally in wasm with automerge sync would be a real differentiator.
 
 6. **Licensing.** replicad is MIT. OCCT and its wasm builds are LGPL-2.1 with the [Open CASCADE exception](https://github.com/Open-Cascade-SAS/OCCT/blob/master/OCCT_LGPL_EXCEPTION.txt). As long as the wasm is an unmodified, separately loaded file (as in the openscad tool), users can swap it out, which is the intent of the LGPL. The exact obligations, e.g. license notices and source availability for the wasm, still need checking. This is not legal advice.
 
-7. **Embedding.** Decided (2026-10-11): build all three variants (decal, reference in a sketch, annotation) and explore their UX in the broader Patchwork context. An example is deriving sketch geometry from an embedded SVG.
+7. **Embedding.** We build all three variants (decal, reference in a sketch, annotation) and explore their UX in the broader Patchwork context. An example is deriving sketch geometry from an embedded SVG.
