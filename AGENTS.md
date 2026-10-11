@@ -14,9 +14,13 @@ NEVER add line-breaks inside of a paragraph. The editor/viewer takes care of wra
 
 This repository uses git for version control, nix (with flakes enabled) for meta-dependency management and pnpm for JS/TS dependencies. DO NOT rely on a system package manager! NEVER assume presence of packages (except for nix itself) on a bare system. All dependencies MUST be locked and reproducible! Other languages than JS/TS might be covered sufficiently by nix. If not, ask the user for a decision for an additional package manager.
 
+Enter the development environment (node, pnpm, python) with `nix develop` (see `flake.nix`).
+
 Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
 
 You MUST have the skill `writing-patchwork-tools` available! If not, abort and inform the user!
+
+The skills in `.claude/skills` were installed with `npx @inkandswitch/patchwork-skills install .claude/skills` and then patched locally: `writing-patchwork-tools` uses pnpm with a pinned `pushwork` devDependency instead of npm/`npx pushwork@latest`, and `reference/patchwork-base/AGENTS.md` only lists tools that actually exist in the checkouts. Re-apply these patches after reinstalling.
 
 ## Repository structure
 

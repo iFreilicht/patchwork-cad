@@ -761,11 +761,10 @@ layer — they stay unlayered so they reliably override everything.
 
 ## 12. Build & sync
 
-**Bundleless:** no build step or toolchain. From the tool dir:
-`npx pushwork@latest sync`. `package.json` is minimal:
+**Bundleless:** no build step. From the tool dir: `pnpm exec pushwork sync`. `package.json` is minimal apart from the pinned pushwork devDependency (see "Use **pnpm**" below):
 
 ```json
-{ "type": "module", "main": "index.js" }
+{ "type": "module", "main": "index.js", "devDependencies": { "pushwork": "<exact version>" } }
 ```
 
 **Bundled (when you want Solid+JSX, TypeScript, npm deps, or a multi-file tree):** mark Patchwork
@@ -815,19 +814,15 @@ lands in the entry chunk and throws there. `relativeCSSInjection: true` (with
 with the tool code behind `load()` on the main thread. Corollary: import your CSS from the
 tool/datatype modules, never from the entry module.
 
-Use **npm** for installs and scripts.
+Use **pnpm** for installs and scripts, and commit `pnpm-lock.yaml`. All dependencies must be locked: add `pushwork` as a devDependency with an exact version (`pnpm add -D -E pushwork`) and run it via `pnpm exec pushwork`. Never use `npx pushwork@latest` or a globally installed pushwork.
 
-`package.json`: `"main": "./dist/index.js"`, scripts `"build": "vite build"`,
-`"push": "npm run build && npx pushwork@latest sync"`, and
-`"register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(npx pushwork@latest url)\""`.
-After ANY change to a bundled tool: **`cd` into the tool dir, `npm run build`, then
-`npx pushwork@latest sync`.**
+`package.json`: `"main": "./dist/index.js"`, scripts `"build": "vite build"`, `"push": "pnpm build && pushwork sync"`, and `"register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\""`. (Inside `package.json` scripts pnpm puts `node_modules/.bin` on the `PATH`, so bare `pushwork` resolves to the pinned version.) After ANY change to a bundled tool: **`cd` into the tool dir, then `pnpm run push`.**
 
 ### First run — from empty directory to running tool
 
 There is no scaffolding generator; you create the files by hand. Publishing uses the
-[`pushwork`](https://github.com/inkandswitch/pushwork) CLI — run it as `npx pushwork@latest …`;
-don't assume it's installed globally. Registration additionally needs
+[`pushwork`](https://github.com/inkandswitch/pushwork) CLI. Run it as `pnpm exec pushwork …` from the tool's pinned devDependency.
+Don't assume it's installed globally. Registration additionally needs
 the `pw-modules` CLI (from the patchwork-next repo, `scripts/module-settings`) plus
 `MODULE_SETTINGS_DOC_URL` in the environment — the automerge URL of the
 **module-settings doc** the Patchwork site boots from (its `modules` array lists every tool
@@ -841,15 +836,15 @@ and discover at the end that you can't ship it.
 
 1. **Scaffold by hand:** create the directory with `package.json` (+ source, + vite config
    if bundled). Section 14 is a complete bundleless example.
-2. **`npx pushwork@latest init .`** (first time only): initializes sync for the folder — creates
+2. **`pnpm exec pushwork init .`** (first time only): initializes sync for the folder — creates
    `.pushwork/` (local, untracked state: config + automerge storage). From then on
-   `npx pushwork@latest url` prints the tool's `automerge:` URL. That URL lives in
+   `pnpm exec pushwork url` prints the tool's `automerge:` URL. That URL lives in
    `.pushwork/config.json`; some tools also mirror it in `package.json` under
    `pushwork.url`, but the config is the source of truth.
-3. **Publish:** build first if bundled, then `npx pushwork@latest sync`. It prints what it pushed and
+3. **Publish:** build first if bundled, then `pnpm exec pushwork sync`. It prints what it pushed and
    ends with a `SYNCED` verdict once the server has confirmed everything.
-4. **Register** (first time only): `npm run register` — i.e.
-   `pw-modules add "$MODULE_SETTINGS_DOC_URL" "$(npx pushwork@latest url)"` — appends the tool's URL to
+4. **Register** (first time only): `pnpm run register`, i.e.
+   `pw-modules add "$MODULE_SETTINGS_DOC_URL" "$(pnpm exec pushwork url)"`. It appends the tool's URL to
    the settings doc. Idempotent; re-running is a no-op. If `pw-modules` isn't installed or
    you don't know the settings-doc URL, ask the user how tools get registered in their
    setup rather than improvising.
@@ -982,7 +977,7 @@ export default function CounterTool(handle, element) {
 }
 ```
 
-Then from the tool's directory: `npx pushwork@latest init .` (first time only), `npx pushwork@latest sync`, and
+Then from the tool's directory: `pnpm add -D -E pushwork`, `pnpm exec pushwork init .` (first time only), `pnpm exec pushwork sync`, and
 register it against the module-settings doc (section 12 "First run"). Done.
 
 ## 15. Reference examples — the bundled checkouts

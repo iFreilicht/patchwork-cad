@@ -79,27 +79,23 @@ Every tool has a `test` script (`vitest run`) and a `vitest.config.ts`, set to
 `passWithNoTests` so a tool without tests still reports green. `pnpm test` at
 the root runs them all.
 
-## Reference tools in this repo
+## Reference tools
 
-The skill's patterns map to these tools — copy from the category you need:
+The skill's patterns map to these tools — copy from the category you need. Only `file` and `chat` live in this repo; all others are in `../patchwork-experiments/`. (The vendored copy in patchwork-cad dropped references to tools that exist in neither checkout.)
 
 **Copy these patterns (vanilla JS):**
 
-- **Bundleless / vanilla:** `tic-tac-toe`, `catclock`, `walkies`, `sparkles`, `webtile`
-  (`tic-tac-toe/tic-tac-toe.js` also shows documenting the schema with a JSDoc `@typedef`)
-- **Web Components + audio/wasm:** `bento`, `call`, `sound`
+- **Bundleless / vanilla:** `tic-tac-toe` (`tic-tac-toe/tic-tac-toe.js` also shows documenting the schema with a JSDoc `@typedef`)
+- **Web Components + audio/wasm:** `call`
 - **Headless actions:** `actions` (written in TypeScript)
 
-**Reach for Solid if you need reactivity:** `cache-browser`, `file`, `chat`, `paper` (these use
-JSX + a bundle; `solid-js/html` is a bundleless alternative).
+**Reach for Solid if you need reactivity:** `file`, `chat` (these use JSX + a bundle; `solid-js/html` is a bundleless alternative).
 
 **Legacy React — reference for behavior, NOT for style (don't copy the React approach):**
 `datagrid`, `boardgame`, `datalog`, `doc-copy-history`.
 
-- **Multi-plugin packages** (one package registering several plugins): `file/src/index.ts`
-  (file + new-file datatypes), `bento/main.js` (datatype + tool)
+- **Multi-plugin packages** (one package registering several plugins): `file/src/index.ts` (file + new-file datatypes)
 - **Richer datatypes** (type guards, content getters): `file/src/datatype.ts`
 - **Collaborative text** (`@automerge/automerge-codemirror` + cursors): `file`, `call`, `datalog`
 - **CodeMirror extension:** `codemirror-latex`, `file`
-- **Whole-folder / inspector (`supportedDatatypes: ["*"]`):** `inspector`, `cache-browser`,
-  `breadboard`, `doc-copy-history`
+- **Whole-folder / inspector (`supportedDatatypes: ["*"]`):** `inspector`, `breadboard`, `doc-copy-history`
