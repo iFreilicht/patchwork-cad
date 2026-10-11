@@ -1,0 +1,14 @@
+{
+  "name": "patchwork-cad",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

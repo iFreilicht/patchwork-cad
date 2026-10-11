@@ -18,6 +18,8 @@ Enter the development environment (node, pnpm, python) with `nix develop` (see `
 
 Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
 
+All code committed to this repo (except vendored code in `.claude/skills`) MUST be TypeScript, checked against the strict root `tsconfig.json` (`pnpm run typecheck`). Python is only for ephemeral, uncommitted scripts. Patchwork tools are therefore always bundled (vite), never bundleless JS.
+
 You MUST have the skill `writing-patchwork-tools` available! If not, abort and inform the user!
 
 The skills in `.claude/skills` were installed with `npx @inkandswitch/patchwork-skills install .claude/skills` and then patched locally: `writing-patchwork-tools` uses pnpm with a pinned `pushwork` devDependency instead of npm/`npx pushwork@latest`, and `reference/patchwork-base/AGENTS.md` only lists tools that actually exist in the checkouts. Re-apply these patches after reinstalling.
