@@ -1,6 +1,7 @@
 packages:
   - research/08-module-evaluation/experiment
   - src/cad
+  - src/features
   - src/harness
 allowBuilds:
   cbor-extract: true

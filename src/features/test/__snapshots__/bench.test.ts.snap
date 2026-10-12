@@ -1,0 +1,19 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`M1: references survive edits as in the benchmark's S5 1`] = `
+[
+  "M1 slotted block | notch to left end (a=0) | frontRightTopEdge | reported (suggestion right)",
+  "M1 slotted block | notch to left end (a=0) | frontRightFace | reported (suggestion right)",
+  "M1 slotted block | insert 2nd notch upstream | frontRightFace | reported (suggestion right)",
+  "M1 slotted block | delete notch | frontRightTopEdge | reported (suggestion right)",
+  "M1 slotted block | delete notch | frontRightFace | reported (suggestion right)",
+  "M1 slotted block | block sketch drawn reversed | frontRightFace | reported (suggestion right)",
+]
+`;
+
+exports[`M3: references survive edits as in the benchmark's S5 1`] = `
+[
+  "M3 bracket | delete rib | innerCornerEdges | reported (suggestion right)",
+  "M3 bracket | upright not flush (y 0→2) | backFace | reported",
+]
+`;
