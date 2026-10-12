@@ -7,6 +7,8 @@
 | [03-topological-naming.md](03-topological-naming.md) | Stable references to faces and edges, benchmarked with prototypes | Done. Open: prototype of the reference syntax |
 | [04-kernel-robustness.md](04-kernel-robustness.md) | Which OCCT operations fail, and how to report failures | To do (approach only) |
 | [05-sandboxing.md](05-sandboxing.md) | Threat model and sandbox runner for model code; local test harness | In progress: [test harness](05-sandboxing.md#test-harness) done; sandbox runner to do |
+| [06-poc-replicad-in-patchwork.md](06-poc-replicad-in-patchwork.md) | PoC 1: replicad and OCCT in a Patchwork tool, code editor and 3D view | To do (abstract only) |
+| [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | To do (abstract only; needs 06) |
 
 ## Not started
 
