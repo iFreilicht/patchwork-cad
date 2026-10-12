@@ -47,11 +47,16 @@ Stopping M1 after each of its operations (meshed, deleted, collection after ever
 
 Over 1000 builds of the full M1 the heap grew to 811 MB with no sign of a plateau, about 0.7 MB per build, identically in all three browsers. At that rate a worker reaches wasm32's 4 GB limit after roughly 5000 builds of a model like M1, i.e. edits in one session. The as-is evaluator doubles the rate for models with top-level work, because it runs their kernel work twice (413 MB after 200 builds).
 
+### Restarting the kernel worker releases it all
+
+Terminating the worker releases its OCCT heap and its retained modules. With the tool's engine forced to start a new worker before every build, 82 restarts over 40 builds of M1 left the resident memory of all browser processes flat: 207–226 MB in Chromium, 967–1090 MB in Firefox, 1309–1459 MB in WebKit (`cad-restart.spec.ts`, `CAD_MEASURE=1`). Without the release, each restart would have added at least the 100 MB of a fresh OCCT heap.
+
 ## Conclusions
 
-- **The double evaluation is an implementation detail of `replicad-evaluator`, not a design limitation:** the first import already has `defaultName`. The memo wrapper in our `codeEvaluator` fixes it without forking.
-- **Module retention is inherent to evaluating models as ES modules** through `import()`, with or without the memo. Its own memory cost is small for M1, but it keeps any top-level state of every past build alive.
-- **The OCCT leak is the real memory problem,** and it is independent of the evaluator. Which objects leak, in replicad's fillet, chamfer and fuse or in OCCT itself, is not known yet. Restarting the kernel worker when the heap passes a threshold bounds both the leak and module retention, at the cost of a warm OCCT load (100–200 ms, 0.9 s in Firefox, [06](06-poc-replicad-in-patchwork.md#re-run-cost)). The sandbox runner ([05](05-sandboxing.md)) needs a worker lifecycle anyway.
+- **The double evaluation is an implementation detail of `replicad-evaluator`, not a design limitation:** the first import already has `defaultName`. The tool's `codeEvaluator` reuses the first import within a build ([`worker.ts`](../src/cad/src/kernel/worker.ts), `cad-evaluation.spec.ts`).
+- **Module retention is inherent to evaluating models as ES modules** through `import()`. Its own memory cost is small for M1, but it keeps any top-level state of every past build alive.
+- **The OCCT leak is the real memory problem,** and it is independent of the evaluator. Which objects leak, in replicad's fillet, chamfer and fuse or in OCCT itself, is not known yet.
+- **The tool bounds both by restarting its worker** ([`engine.ts`](../src/cad/src/kernel/engine.ts)): when the heap a build reports exceeds 1 GiB (about 1300 builds of M1), the next build starts in a new worker, at the cost of a warm OCCT load (100–200 ms, 0.9 s in Firefox, [06](06-poc-replicad-in-patchwork.md#re-run-cost)). Restarting before a build rather than after one keeps the worker holding the shown shapes, which picking and export will query, until a new build replaces them. Edits made during a restart queue as usual (`cad-restart.spec.ts`). A crashed worker is not restarted yet; that belongs to [05](05-sandboxing.md)'s watchdog.
 
 ## Open
 

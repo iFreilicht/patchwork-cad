@@ -37,5 +37,5 @@ export type WorkerRequest = { type: "build"; id: number; source: string };
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
-  | { type: "built"; id: number; shapes: MeshedShape[]; timings: BuildTimings }
-  | { type: "failed"; id: number; error: ModelError; timings: BuildTimings };
+  | { type: "built"; id: number; shapes: MeshedShape[]; timings: BuildTimings; heapBytes: number }
+  | { type: "failed"; id: number; error: ModelError; timings: BuildTimings; heapBytes: number };

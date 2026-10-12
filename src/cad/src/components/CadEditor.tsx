@@ -17,15 +17,18 @@ export function CadEditor(props: { handle: DocHandle<CadModelDoc> }) {
   const [building, setBuilding] = createSignal(false);
 
   let latest = props.handle.doc()?.source ?? "";
-  const engine = new Engine((result) => {
-    setLast(result);
-    if (result.ok) {
-      setShapes(result.shapes);
-      setError(undefined);
-    } else setError(result.error);
-    setBuilding(result.source !== latest);
+  const engine = new Engine({
+    onResult(result) {
+      setLast(result);
+      if (result.ok) {
+        setShapes(result.shapes);
+        setError(undefined);
+      } else setError(result.error);
+      setBuilding(result.source !== latest);
+    },
+    onReady: (timings) => setInit(timings),
+    onInitFailed: setInitError,
   });
-  engine.ready.then(setInit, (e: unknown) => setInitError(String((e as Error).message)));
 
   const rebuild = () => {
     const source = props.handle.doc()?.source ?? "";
@@ -49,6 +52,7 @@ export function CadEditor(props: { handle: DocHandle<CadModelDoc> }) {
       data-state={state()}
       data-builds-requested={String(last() ? engine.stats.requested : 0)}
       data-builds-executed={String(last() ? engine.stats.executed : 0)}
+      data-kernel-restarts={String(last() ? engine.stats.restarts : 0)}
       data-init={init() ? JSON.stringify(init()) : undefined}
       data-build={last() ? JSON.stringify(last()!.timings) : undefined}
     >

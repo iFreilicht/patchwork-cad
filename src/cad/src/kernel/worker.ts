@@ -29,6 +29,10 @@ async function fetchWasm(): Promise<{ response: Response; cached: boolean }> {
   return { response, cached: false };
 }
 
+/** OCCT's memory, once loaded. Its size only grows; the engine restarts the worker when it gets large. */
+let memory: WebAssembly.Memory | undefined;
+const heapBytes = () => memory?.buffer.byteLength ?? 0;
+
 async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
   const t0 = performance.now();
   const { response, cached } = await fetchWasm();
@@ -42,6 +46,7 @@ async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
     },
   });
   const t2 = performance.now();
+  memory = (oc as { wasmMemory: WebAssembly.Memory }).wasmMemory;
   return { oc, timings: { compile: t1 - t0, instantiate: t2 - t1, wasmBytes: bytes, cached } };
 }
 
@@ -90,7 +95,7 @@ async function build(id: number, source: string): Promise<void> {
   const t0 = performance.now();
   const fail = (error: ModelError) => {
     const t = performance.now() - t0;
-    post({ type: "failed", id, error, timings: { build: t, total: t } });
+    post({ type: "failed", id, error, timings: { build: t, total: t }, heapBytes: heapBytes() });
   };
   try {
     prepare(source);
@@ -115,7 +120,7 @@ async function build(id: number, source: string): Promise<void> {
     .filter((shape) => shape.format !== "svg" && shape.mesh)
     .map((shape) => ({ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh!, edges: shape.edges ?? undefined }));
   const timings: BuildTimings = { build: t2 - t1, total: performance.now() - t0 };
-  post({ type: "built", id, shapes, timings });
+  post({ type: "built", id, shapes, timings, heapBytes: heapBytes() });
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
@@ -127,6 +132,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       id: request.id,
       error: { message: String((error as Error)?.message ?? error), line: lineFromStack((error as Error)?.stack), kind: "runtime" },
       timings: { build: 0, total: 0 },
+      heapBytes: heapBytes(),
     }),
   );
 };
