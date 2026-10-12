@@ -1,0 +1,16 @@
+packages:
+  - src/harness
+allowBuilds:
+  cbor-extract: true
+  esbuild: true
+  # pushwork's native deps; their prebuilt binaries suffice.
+  lmdb: false
+  msgpackr-extract: false
+  sharp: true
+minimumReleaseAgeExclude:
+  - "@inkandswitch/*"
+  - "@automerge/*"
+# As in the public site: one automerge for every package, so the wasm the site
+# serves matches the JS glue (automerge-repo pins 3.3.2, patchwork 3.5.0).
+overrides:
+  "@automerge/automerge": 3.4.1

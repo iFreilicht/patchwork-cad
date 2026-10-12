@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "pnpm -r typecheck",
+    "test:e2e": "pnpm --filter patchwork-harness test:e2e"
   },
   "dependencies": {
     "solid-js": "1.9.17"
