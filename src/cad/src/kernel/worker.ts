@@ -46,12 +46,21 @@ async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
 }
 
 const browserEvaluator = createBrowserCodeEvaluator();
+/**
+ * The model module of the running build. buildShapesFromCode imports the model
+ * a second time only to read `defaultName`, which runs its top level again
+ * (research/08); within one build, the first import is reused instead.
+ */
+let buildModule: { code: string; module: Promise<Record<string, unknown>> } | undefined;
 const kernel = loadKernel();
 const builder = createBuilder({
   runtime: async () => ({ replicad, oc: (await kernel).oc }),
   codeEvaluator: {
     runInContext: browserEvaluator.runInContext,
-    evaluateModule: (code, options) => browserEvaluator.evaluateModule(prepare(code), options),
+    evaluateModule<TModule>(code: string, options?: Parameters<typeof browserEvaluator.evaluateModule>[1]): Promise<TModule> {
+      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule(prepare(code), options) };
+      return buildModule.module as Promise<TModule>;
+    },
   },
 });
 
@@ -91,7 +100,10 @@ async function build(id: number, source: string): Promise<void> {
   }
   await kernel;
   const t1 = performance.now();
-  const result = (await builder.buildShapesFromCode(source)) as BuiltShape[] | { error: true; message: string; stack?: unknown };
+  buildModule = undefined;
+  const result = (await builder.buildShapesFromCode(source).finally(() => (buildModule = undefined))) as
+    | BuiltShape[]
+    | { error: true; message: string; stack?: unknown };
   const t2 = performance.now();
   if (!Array.isArray(result)) {
     const line = lineFromStack(result.stack);
