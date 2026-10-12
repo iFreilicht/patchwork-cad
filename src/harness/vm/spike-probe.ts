@@ -45,6 +45,32 @@ for (const name of only ? [only] : ["chromium", "firefox", "webkit"]) {
       void pc.createOffer().then((offer) => pc.setLocalDescription(offer));
     }, name);
     await page.waitForTimeout(8_000);
+
+    // A second profile must receive a doc created in the first; the host's
+    // Subduction is the only path between them.
+    const url = await page.evaluate(() => {
+      const repo = (window as unknown as { repo: { create(): { url: string; change(f: (d: Record<string, unknown>) => void): void } } }).repo;
+      const handle = repo.create();
+      handle.change((doc) => void (doc["probe"] = "synced"));
+      return handle.url;
+    }, null);
+    const other = await browser.newContext();
+    const otherPage = await other.newPage();
+    await otherPage.goto(siteUrl);
+    await otherPage.waitForSelector(".threepane-sidebar", { timeout: 180_000 });
+    const synced = await otherPage.evaluate(async (url) => {
+      const repo = (window as unknown as { repo: { find(u: unknown): Promise<{ doc(): Record<string, unknown> | undefined }> } }).repo;
+      for (let i = 0; i < 120; i++) {
+        const value = await Promise.race([
+          repo.find(url).then((h) => h.doc()?.["probe"]),
+          new Promise((r) => setTimeout(r, 1_000)),
+        ]);
+        if (value === "synced") return true;
+      }
+      return false;
+    }, url);
+    console.log(synced ? `SYNCED ${name}` : `NOT SYNCED ${name}`);
+    await other.close();
     await context.close();
   } finally {
     await browser.close();
