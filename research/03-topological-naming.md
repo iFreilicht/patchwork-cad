@@ -133,6 +133,7 @@ Two failures during development turned out to be bugs in the prototype, and both
 - **The order of split pieces follows the split entity's direction, not its position.** Moving a notch or rib along the whole part, or flipping the extrude, never changed which piece is `#1`. Drawing the sketch in the opposite direction did change it, for M1's front face and M3's corner edge ([split-order.ts](03-topological-naming/prototype/investigations/split-order.ts)). Any name that relies on this order needs the geometric cross-check of S5.
 - **`SimplifyResult` keeps history intact.** Merged coplanar faces carry both parents' names ([model.test.ts](03-topological-naming/prototype/test/model.test.ts)).
 - **OCCT's shell is fragile.** `MakeThickSolidByJoin` fails on M5 once a slot splits the cap, for every variant tried ([shell-slot.ts](03-topological-naming/prototype/investigations/shell-slot.ts)). Kernel robustness is the subject of [04-kernel-robustness.md](04-kernel-robustness.md).
+- **Blends report faces of the whole tangent chain.** A fillet or chamfer propagates along tangent edges, and OCCT reports the faces it creates there as `Generated` from those edges, not from the picked one. Found in [PoC 2](07-poc-modelling-ui.md#the-reference-syntax), where M1's chamfer meets the notch's fillet; naming therefore asks every input edge.
 
 ### Reference names in the prototype
 
@@ -159,9 +160,9 @@ The strings below are the prototype's own serialization of each strategy's refer
 
 ## References in code
 
-References are written as valid JS. This syntax has not been prototyped yet.
+References are written as valid JS. [PoC 2](07-poc-modelling-ui.md#the-reference-syntax) implements this syntax in the feature library and the editor.
 
-- **References are expressions over feature variables.** They evaluate to reference objects, which the runtime resolves against the rebuilt model. Renaming a variable carries over, and typos fail when the code is evaluated:
+- **References are expressions over feature variables.** They evaluate to reference objects, which the runtime resolves against the rebuilt model. Renaming a variable carries over, and typos fail when the code is evaluated. A reference to a deleted feature fails the same way, although it only names history; the editor's delete therefore rewrites it to the lookup `ref.notch`, which reports itself as broken ([07](07-poc-modelling-ui.md#the-reference-syntax)):
 
   ```ts
   const f3 = fillet({ edges: [edge(f1.end, f1.side.front).piece(notch, 1)], radius: 2 });
@@ -178,7 +179,7 @@ References are written as valid JS. This syntax has not been prototyped yet.
 
 - **Every name the kernel can produce needs an expression form.** This includes faces created by fillets (`f3.face(edge(…))`), the inner faces of a shell (`shell.inner(f1.start)`), duplicate edges between the same two faces (the prototype's `~2`) and pattern instances (`holes[1]`).
 - **S4/S5 can refer to faces that no longer exist.** M3's corner edge would read `edge(upright.side.back, upright.start).piece(rib0, 1)`. Whether the syntax should instead re-express such references by their current faces is still open.
-- **Feature names come from the variable names.** A JS object doesn't know which variable holds it, so the tool rewrites `const f1 = extrude({…})` to `extrude({…}, { name: "f1" })` in memory before executing. The stored file stays plain JS ([portable models](02-model-storage.md#design-goal-portable-models)). Without the rewrite, e.g. when the file is run outside the tool, features get fallback names such as `extrude@L12#3` (source line and call count, e.g. for calls in loops). This only makes error messages less readable. Resolution is unaffected, because reference objects point to feature objects and keys only need to be consistent within one evaluation.
+- **Feature names come from the variable names.** A JS object doesn't know which variable holds it, so the tool rewrites `const f1 = extrude({…})` to `extrude({…}, { name: "f1" })` in memory before executing. The stored file stays plain JS ([portable models](02-model-storage.md#design-goal-portable-models)). Without the rewrite, e.g. when the file is run outside the tool, features get fallback names such as `extrude#3` (the call count); in the tool, features without a variable, e.g. in loops, also get their line (`extrude@L12#3`). This only makes error messages less readable. Resolution is unaffected, because reference objects point to feature objects and keys only need to be consistent within one evaluation.
 
 ## Recommendation
 

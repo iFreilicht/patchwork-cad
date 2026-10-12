@@ -11,19 +11,19 @@ No walled garden and no DSL: a thin library and a feature-rich editor. A model f
 A model is stored as one collaborative code text in an automerge document. Every view is derived from that text.
 
 - **Character-level merges are acceptable.** They only produce invalid code when people edit the same spot at the same time. The result is visible and can be fixed, like a git conflict.
-- **GUI edits work because the API has a fixed shape.** Each built-in feature is one function call in a flat sequence, e.g. `const f3 = extrude({ sketch: f1, distance: width / 2 })`. A GUI edit finds the call and replaces only the source span of the changed argument. Such a minimal splice merges well with concurrent typing and keeps comments and formatting.
-- **AST vs. plain text editing is deferred** until implementation, when we can compare the two in practice. Parsing the text to an AST and splicing node spans back into it is the expected approach. Storing the AST itself in automerge is ruled out, because it would make typing code the hard part.
+- **GUI edits work because the API has a fixed shape.** Each built-in feature is one function call in a flat sequence, e.g. `const extrude1 = extrude({ sketch: sketch1, distance: width / 2 })`. A GUI edit finds the call and replaces only the source span of the changed argument. Such a minimal splice merges well with concurrent typing and keeps comments and formatting.
+- **Edits read the AST and write text.** The editor parses the text to an AST and splices only the changed node's span back into it; this keeps concurrent edits and formatting intact, while printing the program from the AST does not ([07](07-poc-modelling-ui.md#text-vs-ast-editing)). Storing the AST itself in automerge is ruled out, because it would make typing code the hard part.
 
 ## The timeline is a view
 
-The WYSIWYG timeline is derived from the text and never owns any state. Any code the parser does not recognize as a feature call, such as a loop around a feature, becomes a "Custom Script" entry. Such an entry spans everything up to the next recognizable feature. In the worst case the whole timeline collapses into one Custom Script. An explicit "eject" step is therefore not needed. This follows Patchwork's Raw Editor philosophy: any edit is allowed, but there is no guarantee that it leads to a valid result. The UX for heavily collapsed timelines still needs a mechanism.
+The WYSIWYG timeline is derived from the text and never owns any state. Any code the parser does not recognize as a feature call, such as a loop around a feature, becomes a "Custom Script" entry. Such an entry spans everything up to the next recognizable feature. In the worst case the whole timeline collapses into one Custom Script. An explicit "eject" step is therefore not needed. This follows Patchwork's Raw Editor philosophy: any edit is allowed, but there is no guarantee that it leads to a valid result. A Custom Script entry lists the feature calls the last build ran inside it ([07](07-poc-modelling-ui.md#collapsed-timelines)).
 
 ## Consequences
 
 - **Parameters are JS expressions** (`width / 2`), so no separate expression evaluator is needed. Still open: which names an expression may refer to (only global parameters, or anything in scope).
 - **Order is text order.** Moving a feature means cutting and pasting text, so two people moving the same feature at once can duplicate it. This is accepted.
 - **Sandboxing is a day-one requirement**, because opening a model executes its code.
-- **Features need a stable identity across re-parses**, so that open dialogs and selections survive concurrent edits elsewhere in the text. Candidates are the variable name or an automerge cursor anchored in the text.
+- **Features need a stable identity across re-parses**, so that open dialogs and selections survive concurrent edits elsewhere in the text: an automerge cursor anchored at the call, with the variable name as a fallback ([07](07-poc-modelling-ui.md#feature-identity-across-re-parses)).
 - **The timeline must show references into unrecognized regions,** e.g. a fillet that refers to a variable defined inside a loop.
 
 ## Feature types
@@ -40,7 +40,7 @@ export const extrude = defineFeature({
 
 Onshape does the same: "The feature types in Onshape's default toolbar (like extrude and helix) are defined as functions in the Onshape Standard Library" ([FeatureScript intro](https://cad.onshape.com/FsDoc/intro.html)). The built-ins are therefore just a standard-library document.
 
-- **Recognizing a call is syntactic:** `const x = someName({ … })` with `someName` imported. Rendering its form needs the schema, so the module is loaded inside the sandbox. If loading fails, the call is shown as a Custom Script.
+- **Recognizing a call is syntactic:** `const x = someName({ … })` with `someName` imported. Rendering its form needs the schema. The built-ins' schemas are a kernel-free module the editor imports ([07](07-poc-modelling-ui.md#the-feature-library)); a user-defined feature's module would be loaded inside the sandbox. If loading fails, the call is shown as a Custom Script.
 - **JSX is not used.** Features refer to each other by variable, forming a graph rather than a tree. Sketches and assemblies are nested and could revisit this later.
 
 ### Versioning
@@ -74,4 +74,4 @@ The openscad-style drag-and-drop can remain as UX that inserts an import line. S
 
 ## Open
 
-- The shape of feature references (edges, faces): [03-topological-naming.md](03-topological-naming.md#recommendation) recommends history-based names rooted in feature variables and sketch segment ids, cross-checked by geometry and written as JS expressions like `edge(f1.end, f1.side.front).piece(notch, 1)`. Not yet decided.
+- The shape of feature references (edges, faces): [03-topological-naming.md](03-topological-naming.md#recommendation) recommends history-based names rooted in feature variables and sketch segment ids, cross-checked by geometry and written as JS expressions like `edge(f1.end, f1.side.front).piece(notch, 1)`. [PoC 2](07-poc-modelling-ui.md#the-reference-syntax) prototypes them; adopting them for the product is not decided yet.

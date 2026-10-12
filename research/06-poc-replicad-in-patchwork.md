@@ -17,9 +17,9 @@ A Patchwork tool with a datatype whose document holds the model as code ([02](02
 
 ## Implementation
 
-[src/cad/](../src/cad/) is the tool: a datatype and tool `cad-model` with the document `{ title, source }`, a Solid view with CodeMirror (bound to `source` by `@automerge/automerge-codemirror`) next to a three.js view, and one kernel worker per open view. The worker runs `replicad-evaluator`'s builder on replicad 1.1.0 and `replicad-opencascadejs` 1.1.0. `replicad-threejs-helper` turns its meshes into geometry, keeping the face and edge groups. Its [README](../src/cad/README.md) carries the unsandboxed warning.
+[src/cad/](../src/cad/) is the tool: a datatype `cad-model` with the document `{ title, source }` and the tool `cad-model-code-preview`, a Solid view with CodeMirror (bound to `source` by `@automerge/automerge-codemirror`) next to a three.js view, and one kernel worker per open view. The worker runs `replicad-evaluator`'s builder on replicad 1.1.0 and `replicad-opencascadejs` 1.1.0. `replicad-threejs-helper` turns its meshes into geometry, keeping the face and edge groups. Its [README](../src/cad/README.md) carries the unsandboxed warning.
 
-A model is a plain ES module, `import { … } from "replicad"; export default function main(params) { return shape }`. The seed model also runs unchanged under Node with only replicad and OCCT.
+A model is a plain ES module, `import { … } from "replicad"; export default function main(params) { return shape }`, which also runs unchanged under Node with only replicad and OCCT. [PoC 2](07-poc-modelling-ui.md) adds the feature library as a second import, three more tools, and a seed model that uses the library.
 
 One command (`pnpm dev` in `nix develop`) builds the tool and starts the local Subduction and Patchwork site from the [test harness](05-sandboxing.md#test-harness), with storage that survives restarts and the tool already installed, and prints the URL ([harness README](../src/harness/README.md)). A document created there reopens after a restart in a fresh browser profile, so it was loaded from Subduction's storage.
 
@@ -68,7 +68,7 @@ Use it as a dependency (1.1.0), but only its browser-safe entries:
 
 | median build, edit to mesh | Chromium | Firefox | WebKit |
 |---|---|---|---|
-| seed model (rounded plate, bore, fillet) | 28 ms | 122 ms | 44 ms |
+| PoC 1's seed model (rounded plate, bore, fillet) | 28 ms | 122 ms | 44 ms |
 | M1 from [03](03-topological-naming.md) (cut, fillet, chamfer, fuse) | 35 ms | 169 ms | 51 ms |
 
 Builds run one at a time, and while one runs only the newest source waits ([`engine.ts`](../src/cad/src/kernel/engine.ts)). Typing a 34-character comment into M1 at 40 ms per key ran all 34 builds in Chromium and WebKit and was done within 10 ms of the last key; Firefox ran 11 and settled 370 ms after it. At 10 ms per key, 17 (Chromium), 6 (Firefox) and 18 (WebKit) builds ran, and the view settled 120–220 ms after the last key. Models of this size need neither debouncing nor cancellation: the view is never more than about one build behind. Cancelling a running build means terminating the worker, and a new worker costs a warm OCCT load (100–200 ms, 0.9 s in Firefox), which matters for 05's watchdog rather than for typing.
