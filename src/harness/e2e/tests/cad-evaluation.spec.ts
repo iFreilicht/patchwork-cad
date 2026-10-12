@@ -1,6 +1,6 @@
-import { CAD_MODULES, cadView, replaceSource, vertices } from "../cad.ts";
+import { CAD_MODULES, CODE_TOOL, cadView, createModel, replaceSource, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
-import { bootToFrame, createViaMenu } from "../ui.ts";
+import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
@@ -23,7 +23,7 @@ test("a build evaluates the model once", async ({ users }) => {
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
   await bootToFrame(a.page);
-  await createViaMenu(a.page, "CAD Model");
+  await createModel(a.page, CODE_TOOL);
   await expect(cadView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
 
   const seed = await vertices(a.page);

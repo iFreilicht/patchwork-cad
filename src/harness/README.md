@@ -10,6 +10,7 @@ pnpm install
 pnpm test:e2e                      # builds the site and the CAD tool, then runs every browser
 pnpm test:e2e --project=firefox    # arguments go to `playwright test`
 CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure cad-pushwork   # timings for research/06
+CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timings for research/07
 ```
 
 `pnpm dev` (from the repo root, `dev.ts`) runs the same stack for manual use: fixed ports (site 4173, Subduction 4174; `PATCHWORK_DEV_PORT`, `PATCHWORK_DEV_SUBDUCTION_PORT`), Subduction's storage and key in `<repo>/.dev/`, so documents survive restarts, and every tool given as `<name>=<dir>` (the CAD tool, `src/cad`) rebuilt by `vite build --watch` and served as a static module. Reload the page after a rebuild.

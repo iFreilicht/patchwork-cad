@@ -1,6 +1,6 @@
-import { CAD_MODULES, cadView, replaceSource, vertices } from "../cad.ts";
+import { CAD_MODULES, CODE_TOOL, cadView, createModel, replaceSource, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
-import { bootToFrame, createViaMenu, docPath } from "../ui.ts";
+import { bootToFrame, docPath } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
@@ -14,7 +14,7 @@ test("CAD model edits sync and re-render between two profiles", async ({ users }
   if (!a || !b) throw new Error("users(2) returned fewer than two users");
 
   await bootToFrame(a.page);
-  await createViaMenu(a.page, "CAD Model");
+  await createModel(a.page, CODE_TOOL);
   await expect(cadView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await replaceSource(a.page, cylinder(30));
   await expect(cadView(a.page)).toHaveAttribute("data-state", "ready");

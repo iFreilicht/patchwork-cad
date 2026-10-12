@@ -2,10 +2,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cadView, M1_SOURCE, replaceSource } from "../cad.ts";
+import { CAD_MODULES, CODE_TOOL, M1_SOURCE, cadView, createModel, replaceSource } from "../cad.ts";
 import { firefoxLaunchOptions } from "../firefox.ts";
 import { expect, LOOPBACK, test } from "../fixtures.ts";
-import { bootToFrame, createViaMenu, docPath, editor } from "../ui.ts";
+import { bootToFrame, docPath, editor } from "../ui.ts";
 
 // Timings for research/06. Run alone, so that nothing else competes for the CPU:
 //   CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure
@@ -40,7 +40,7 @@ test("CAD load, re-run and burst timings", async ({ users, localStack, browserNa
   const [author] = await users(1);
   if (!author) throw new Error("users(1) returned no user");
   await bootToFrame(author.page);
-  await createViaMenu(author.page, "CAD Model");
+  await createModel(author.page, CODE_TOOL);
   await expect(cadView(author.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   const doc = docPath(author.page);
   const wasmRequests = () => localStack.siteRequests.filter((r) => r.path.endsWith(".wasm") && r.path.includes("replicad_single")).length;

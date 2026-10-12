@@ -1,8 +1,11 @@
-import type { BuildTimings, InitTimings, MeshedShape, ModelError, WorkerResponse } from "./protocol.ts";
+import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
-  | { ok: true; source: string; shapes: MeshedShape[]; timings: BuildTimings }
-  | { ok: false; source: string; error: ModelError; timings: BuildTimings };
+  | { ok: true; source: string; shapes: MeshedShape[]; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
+
+type Request = Exclude<WorkerRequest, { type: "build" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -43,6 +46,7 @@ export class Engine {
   #running: { id: number; source: string } | undefined;
   #waiting: string | undefined;
   #nextId = 1;
+  readonly #pending = new Map<number, { resolve: (answer: Answer) => void; reject: (error: Error) => void }>();
 
   constructor(callbacks: EngineCallbacks) {
     this.#callbacks = callbacks;
@@ -56,8 +60,29 @@ export class Engine {
     else this.#start(source);
   }
 
+  /** The bodies visible before `feature` in the last build, meshed for picking. */
+  async rollback(feature: string): Promise<MeshedShape[]> {
+    const answer = await this.#request({ type: "rollback", id: this.#nextId++, feature });
+    return answer.type === "rolledBack" ? answer.shapes : [];
+  }
+
+  /** The reference code for entity `index` of body `body` in the last build. */
+  async pick(body: string, kind: "face" | "edge", index: number): Promise<string> {
+    const answer = await this.#request({ type: "pick", id: this.#nextId++, body, kind, index });
+    return answer.type === "picked" ? answer.code : "";
+  }
+
   dispose(): void {
     this.#worker.terminate();
+    for (const { reject } of this.#pending.values()) reject(new Error("kernel disposed"));
+    this.#pending.clear();
+  }
+
+  #request(request: Request): Promise<Answer> {
+    return new Promise((resolve, reject) => {
+      this.#pending.set(request.id, { resolve, reject });
+      this.#worker.postMessage(request);
+    });
   }
 
   #spawn(): Worker {
@@ -69,7 +94,12 @@ export class Engine {
         loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else this.#finished(message);
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "requestFailed") {
+        const pending = this.#pending.get(message.id);
+        this.#pending.delete(message.id);
+        if (message.type === "requestFailed") pending?.reject(new Error(message.message));
+        else pending?.resolve(message);
+      } else this.#finished(message);
     });
     worker.addEventListener("error", (event) => {
       if (!loaded) this.#callbacks.onInitFailed(event.message || "kernel worker failed to start");
@@ -82,6 +112,8 @@ export class Engine {
     // shown shapes alive until a new build replaces them.
     if (this.#heapBytes > this.#heapLimit) {
       this.#worker.terminate();
+      for (const { reject } of this.#pending.values()) reject(new Error("kernel restarted"));
+      this.#pending.clear();
       this.#worker = this.#spawn();
       this.#heapBytes = 0;
       this.stats.restarts++;
@@ -92,7 +124,7 @@ export class Engine {
     this.#worker.postMessage({ type: "build", id: this.#running.id, source });
   }
 
-  #finished(message: Extract<WorkerResponse, { id: number }>): void {
+  #finished(message: Extract<WorkerResponse, { type: "built" | "failed" }>): void {
     const running = this.#running;
     if (!running || running.id !== message.id) return;
     this.#running = undefined;
@@ -103,7 +135,7 @@ export class Engine {
       this.#start(next);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, timings: message.timings });
-    else onResult({ ok: false, source: running.source, error: message.error, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, trace: message.trace, timings: message.timings });
+    else onResult({ ok: false, source: running.source, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

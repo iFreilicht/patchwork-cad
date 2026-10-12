@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cadView, M1_SOURCE, replaceSource, vertices } from "../cad.ts";
+import { CAD_MODULES, CODE_TOOL, M1_SOURCE, cadView, createModel, replaceSource, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
-import { bootToFrame, createViaMenu } from "../ui.ts";
+import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
@@ -20,7 +20,7 @@ export default function main() {
 async function restartingModel(page: Page): Promise<void> {
   await page.addInitScript(() => void ((globalThis as { patchworkCadHeapLimit?: number }).patchworkCadHeapLimit = 0));
   await bootToFrame(page);
-  await createViaMenu(page, "CAD Model");
+  await createModel(page, CODE_TOOL);
   await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
 }
 

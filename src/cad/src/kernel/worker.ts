@@ -4,8 +4,10 @@ import wasmUrl from "replicad-opencascadejs/wasm?url";
 import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
-import { prepare, PrepareError } from "./prepare.ts";
-import type { BuildTimings, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import * as features from "@patchwork-cad/features";
+import { beginBuild, currentTrace, liveBodies, meshIds, outline, pickCode, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
+import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -50,7 +52,25 @@ async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
   return { oc, timings: { compile: t1 - t0, instantiate: t2 - t1, wasmBytes: bytes, cached } };
 }
 
+// The feature library is provided like replicad (prepare.ts rewrites its imports to this global).
+(globalThis as Record<string, unknown>)[PROVIDED["@patchwork-cad/features"]!] = features;
+
 const browserEvaluator = createBrowserCodeEvaluator();
+
+/** What `main` returned in the running build, to find the bodies behind the meshed shapes. */
+let returned: unknown;
+/** The last successful build's trace, with its bodies, for rollback and picking. */
+let lastTrace: readonly TraceEntry[] = [];
+
+/** Wraps a model module so that its `main` result is recorded. */
+function recordMain(module: Record<string, unknown>): Record<string, unknown> {
+  const main = module["default"];
+  if (typeof main !== "function") return module;
+  return {
+    ...module,
+    default: (...args: unknown[]) => (returned = (main as (...a: unknown[]) => unknown)(...args)),
+  };
+}
 /**
  * The model module of the running build. buildShapesFromCode imports the model
  * a second time only to read `defaultName`, which runs its top level again
@@ -63,7 +83,7 @@ const builder = createBuilder({
   codeEvaluator: {
     runInContext: browserEvaluator.runInContext,
     evaluateModule<TModule>(code: string, options?: Parameters<typeof browserEvaluator.evaluateModule>[1]): Promise<TModule> {
-      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule(prepare(code), options) };
+      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule<Record<string, unknown>>(prepare(code), options).then(recordMain) };
       return buildModule.module as Promise<TModule>;
     },
   },
@@ -91,11 +111,64 @@ interface BuiltShape {
   format?: string;
 }
 
+/**
+ * Bodies that no feature consumed and main didn't return: geometry that a branch in the model
+ * silently drops, e.g. after a feature was retargeted to an earlier body.
+ */
+function unusedBodies(values: unknown[]): Set<features.Body> {
+  const shown = new Set(values.flatMap((v) => (v instanceof features.Body ? [v.shape] : v && typeof v === "object" && "shape" in v ? [(v as { shape: unknown }).shape] : [])));
+  return new Set(liveBodies().filter((b) => !shown.has(b.shape)));
+}
+
+const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body> = new Set()): FeatureTrace[] =>
+  trace.map((t) => ({
+    name: t.name,
+    type: t.type,
+    line: t.line,
+    variable: t.variable,
+    status: t.status,
+    message: t.message,
+    refs: t.refs,
+    before: t.before.map((b) => b.name),
+    result: t.result?.name,
+    outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
+    unused: t.result !== undefined && unused.has(t.result),
+    ms: t.ms,
+    namingMs: t.namingMs,
+  }));
+
+/** Bodies of a trace by name: results, and whatever was visible before each feature. */
+function bodiesOf(trace: readonly TraceEntry[]): Map<string, features.Body> {
+  const out = new Map<string, features.Body>();
+  for (const t of trace) for (const b of [...t.before, ...(t.result ? [t.result] : [])]) out.set(b.name, b);
+  return out;
+}
+
+const MESH = { tolerance: 0.1, angularTolerance: 30 };
+
+/** Meshes a body directly, as replicad-evaluator would, with its pickable entity indices. */
+function meshBody(body: features.Body): MeshedShape {
+  const shape = body.shape as unknown as { mesh(o: typeof MESH): MeshedShape["faces"]; meshEdges(o: typeof MESH): NonNullable<MeshedShape["edges"]> };
+  const faces = shape.mesh(MESH);
+  const edges = shape.meshEdges(MESH);
+  return { name: body.name, color: undefined, opacity: undefined, faces, edges, ...indices(body, faces, edges) };
+}
+
+function indices(body: features.Body, faces: MeshedShape["faces"], edges: MeshedShape["edges"]) {
+  const faceIds = meshIds(body, "face");
+  const edgeIds = meshIds(body, "edge");
+  return {
+    body: body.name,
+    faceIndex: faces.faceGroups?.map((g) => faceIds.indexOf(g.faceId)),
+    edgeIndex: edges?.edgeGroups?.map((g) => edgeIds.indexOf(g.edgeId)),
+  };
+}
+
 async function build(id: number, source: string): Promise<void> {
   const t0 = performance.now();
   const fail = (error: ModelError) => {
     const t = performance.now() - t0;
-    post({ type: "failed", id, error, timings: { build: t, total: t }, heapBytes: heapBytes() });
+    post({ type: "failed", id, error, trace: serialize(currentTrace()), timings: { build: t, total: t }, heapBytes: heapBytes() });
   };
   try {
     prepare(source);
@@ -106,6 +179,8 @@ async function build(id: number, source: string): Promise<void> {
   await kernel;
   const t1 = performance.now();
   buildModule = undefined;
+  returned = undefined;
+  beginBuild({ lenient: true });
   const result = (await builder.buildShapesFromCode(source).finally(() => (buildModule = undefined))) as
     | BuiltShape[]
     | { error: true; message: string; stack?: unknown };
@@ -116,21 +191,49 @@ async function build(id: number, source: string): Promise<void> {
   }
   const broken = result.find((shape) => shape.error);
   if (broken) return fail({ message: broken.message ?? "Could not mesh the shape", line: undefined, kind: "mesh" });
-  const shapes: MeshedShape[] = result
-    .filter((shape) => shape.format !== "svg" && shape.mesh)
-    .map((shape) => ({ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh!, edges: shape.edges ?? undefined }));
+  // The evaluator keeps the order of what main returned; a body there makes its shape pickable.
+  const values = Array.isArray(returned) ? returned : [returned];
+  const shapes: MeshedShape[] = result.flatMap((shape, i) => {
+    if (shape.format === "svg" || !shape.mesh) return [];
+    const value = values[i];
+    const edges = shape.edges ?? undefined;
+    const pickable = value instanceof features.Body ? indices(value, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined };
+    return [{ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh, edges, ...pickable }];
+  });
+  lastTrace = [...currentTrace()];
   const timings: BuildTimings = { build: t2 - t1, total: performance.now() - t0 };
-  post({ type: "built", id, shapes, timings, heapBytes: heapBytes() });
+  post({ type: "built", id, shapes, trace: serialize(lastTrace, unusedBodies(values)), timings, heapBytes: heapBytes() });
+}
+
+function answer(request: Exclude<WorkerRequest, { type: "build" }>): void {
+  const bodies = bodiesOf(lastTrace);
+  if (request.type === "rollback") {
+    const entry = lastTrace.find((t) => t.name === request.feature);
+    if (!entry) throw new Error(`No feature ${request.feature} in the last build`);
+    post({ type: "rolledBack", id: request.id, shapes: entry.before.map(meshBody) });
+  } else {
+    const body = bodies.get(request.body);
+    if (!body) throw new Error(`No body ${request.body} in the last build`);
+    post({ type: "picked", id: request.id, code: pickCode(body, request.kind, request.index, lastTrace) });
+  }
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
-  if (request.type !== "build") return;
+  if (request.type !== "build") {
+    try {
+      answer(request);
+    } catch (error) {
+      post({ type: "requestFailed", id: request.id, message: String((error as Error)?.message ?? error) });
+    }
+    return;
+  }
   build(request.id, request.source).catch((error: unknown) =>
     post({
       type: "failed",
       id: request.id,
       error: { message: String((error as Error)?.message ?? error), line: lineFromStack((error as Error)?.stack), kind: "runtime" },
+      trace: serialize(currentTrace()),
       timings: { build: 0, total: 0 },
       heapBytes: heapBytes(),
     }),

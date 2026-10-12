@@ -10,6 +10,10 @@
     --cad-model-error-line: color-mix(in oklch, var(--studio-danger, red), var(--editor-fill, white) 85%);
     --cad-model-shape: color-mix(in oklch, var(--editor-fill, white), var(--editor-line, black) 25%);
     --cad-model-edge: var(--editor-line, black);
+    --cad-model-accent: var(--studio-accent, #2f6fde);
+    --cad-model-hover: color-mix(in oklch, var(--studio-accent, #2f6fde), var(--editor-fill, white) 45%);
+    --cad-model-warning: var(--studio-warning, #c77700);
+    --cad-model-panel: var(--editor-fill-offset-5, #f6f6f6);
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
     --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
   }
@@ -66,5 +70,311 @@
 
 .cad-model .cad-model__timings {
   margin-left: auto;
+  color: var(--cad-model-muted);
+}
+
+.cad-model--viewer,
+.cad-model--code {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cad-model--code {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.cad-model--code .cad-model__code {
+  border-right: none;
+}
+
+.cad-model .cad-model__focus {
+  background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
+}
+
+/* ---------- WYSIWYG editor ---------- */
+
+.cad-model--editor {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "toolbar" "stage" "timeline" "status";
+}
+
+.cad-model--editor.cad-model--with-code {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr);
+  grid-template-areas: "toolbar code" "stage code" "timeline timeline" "status status";
+}
+
+.cad-model--editor .cad-model__status {
+  grid-area: status;
+}
+
+.cad-editor__toolbar {
+  grid-area: toolbar;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-2xs, 4px);
+  padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
+  border-bottom: 1px solid var(--cad-model-border);
+}
+
+.cad-editor__spacer {
+  flex: 1;
+}
+
+.cad-editor__stage {
+  grid-area: stage;
+  position: relative;
+  min-height: 0;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.cad-editor__stage .cad-model__viewer {
+  grid-area: 1 / 1;
+}
+
+.cad-editor__code {
+  grid-area: code;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--cad-model-border);
+  font-family: var(--cad-model-family-code);
+  font-size: 13px;
+}
+
+.cad-editor__code .cad-model__code {
+  height: 100%;
+  border-right: none;
+}
+
+.cad-editor__banner {
+  position: absolute;
+  left: var(--studio-space-sm, 0.5rem);
+  bottom: var(--studio-space-sm, 0.5rem);
+  margin: 0;
+  padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
+  background: var(--cad-model-bg);
+  border: 1px solid var(--cad-model-danger);
+  font-size: 12px;
+}
+
+.cad-editor__dialog {
+  position: absolute;
+  top: var(--studio-space-sm, 0.5rem);
+  right: var(--studio-space-sm, 0.5rem);
+  width: min(22rem, calc(100% - 1rem));
+  max-height: calc(100% - 1rem);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-space-2xs, 4px);
+  padding: var(--studio-space-sm, 0.5rem);
+  background: var(--cad-model-bg);
+  border: 1px solid var(--cad-model-border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px color-mix(in oklch, var(--cad-model-fg), transparent 85%);
+  font-size: 12px;
+}
+
+.cad-editor__dialog-header,
+.cad-editor__dialog-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-editor__dialog-header .cad-editor__link {
+  margin-left: auto;
+}
+
+.cad-editor__field {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-editor__field > span {
+  padding-top: 3px;
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__input {
+  min-width: 0;
+  font: inherit;
+  font-family: var(--cad-model-family-code);
+  padding: 2px 4px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+}
+
+.cad-editor__refs,
+.cad-editor__profile {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-2xs, 4px);
+  align-items: center;
+}
+
+.cad-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--studio-space-2xs, 4px);
+  width: 100%;
+}
+
+.cad-editor__grid--segments {
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+}
+
+.cad-editor__subfield {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 4px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+}
+
+.cad-editor__chip code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cad-editor__chip[data-status="missing"],
+.cad-editor__chip[data-status="ambiguous"] {
+  border-color: var(--cad-model-warning);
+}
+
+.cad-editor__chip-status {
+  color: var(--cad-model-warning);
+}
+
+.cad-editor__problem {
+  margin: 0;
+  color: var(--cad-model-warning);
+}
+
+.cad-editor__problem[data-status="failed"] {
+  color: var(--cad-model-danger);
+}
+
+.cad-editor__muted {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__button,
+.cad-editor__link {
+  font: inherit;
+  cursor: pointer;
+  color: var(--cad-model-fg);
+}
+
+.cad-editor__button {
+  padding: 2px 8px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-panel);
+}
+
+.cad-editor__button[aria-pressed="true"] {
+  border-color: var(--cad-model-accent);
+  color: var(--cad-model-accent);
+}
+
+.cad-editor__button--danger {
+  border-color: var(--cad-model-danger);
+  color: var(--cad-model-danger);
+}
+
+.cad-editor__link {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  text-decoration: underline;
+}
+
+.cad-editor__timeline {
+  grid-area: timeline;
+  display: flex;
+  gap: var(--studio-space-2xs, 4px);
+  overflow-x: auto;
+  padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
+  border-top: 1px solid var(--cad-model-border);
+  background: var(--cad-model-panel);
+}
+
+.cad-editor__entry {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 12px;
+  font-family: var(--cad-model-family-code);
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  cursor: pointer;
+}
+
+.cad-editor__entry[aria-pressed="true"] {
+  border-color: var(--cad-model-accent);
+}
+
+.cad-editor__entry[data-status="broken"] {
+  border-color: var(--cad-model-warning);
+}
+
+.cad-editor__entry[data-status="failed"] {
+  border-color: var(--cad-model-danger);
+}
+
+.cad-editor__entry[data-status="not-run"],
+.cad-editor__entry[data-status="unused"],
+.cad-editor__ran[data-status="unused"] {
+  opacity: 0.5;
+}
+
+.cad-editor__entry[data-status="unused"] {
+  border-style: dotted;
+}
+
+.cad-editor__problem[data-status="unused"] {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__entry--script {
+  border-style: dashed;
+}
+
+.cad-editor__ran {
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--cad-model-panel);
+}
+
+.cad-editor__ran[data-status="broken"] {
+  color: var(--cad-model-warning);
+}
+
+.cad-editor__ran[data-status="failed"] {
+  color: var(--cad-model-danger);
+}
+
+.cad-editor__glyph {
   color: var(--cad-model-muted);
 }

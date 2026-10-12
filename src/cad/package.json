@@ -7,11 +7,13 @@
   "scripts": {
     "build": "vite build",
     "watch": "vite build --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@automerge/automerge-codemirror": "0.2.0",
     "@codemirror/lang-javascript": "6.2.5",
+    "@patchwork-cad/features": "workspace:*",
     "acorn": "8.19.0",
     "replicad": "1.1.0",
     "replicad-evaluator": "1.1.0",
@@ -21,6 +23,7 @@
     "three": "0.186.1"
   },
   "devDependencies": {
+    "@automerge/automerge": "3.4.1",
     "@automerge/automerge-repo": "2.6.0-subduction.48",
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.13.1",
@@ -29,9 +32,12 @@
     "@inkandswitch/patchwork-bootloader": "0.8.1",
     "@types/node": "24.19.2",
     "@types/three": "0.186.0",
+    "astring": "1.9.0",
+    "recast": "0.24.0",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "vite-plugin-css-injected-by-js": "5.0.2",
-    "vite-plugin-solid": "2.11.14"
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "5.0.3"
   }
 }

@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { HARNESS_DIR } from "./stack.ts";
-import { editor, pressMod } from "./ui.ts";
+import { createViaMenu, editor, pressMod } from "./ui.ts";
 
 /** The CAD tool package (src/cad), served as a static module. Build it first (`pnpm --filter patchwork-cad build`). */
 export const CAD_DIR = join(HARNESS_DIR, "..", "cad");
@@ -38,4 +39,139 @@ export async function replaceSource(page: Page, source: string): Promise<void> {
   await page.keyboard.press("Delete");
   // insertText skips CodeMirror's auto-indent and bracket closing, so the text arrives verbatim.
   await page.keyboard.insertText(source);
+}
+
+export type EntityKind = "face" | "edge";
+export interface Entity {
+  body: string;
+  kind: EntityKind;
+  index: number;
+}
+
+interface ViewerHook {
+  cadViewer: { screenPoint(e: Entity): { x: number; y: number } | undefined; entities(kind: EntityKind): Entity[] };
+}
+
+/** The open document's URL fragment parameters. */
+const hashParams = (page: Page) => new URLSearchParams(new URL(page.url()).hash.slice(1));
+
+/** Switches the open document to another tool, as the tool picker does (`#doc=…&tool=…`). */
+export async function openWithTool(page: Page, toolId: string): Promise<void> {
+  const params = hashParams(page);
+  params.set("tool", toolId);
+  await page.evaluate((hash) => (location.hash = hash), params.toString());
+}
+
+/** The tool with PoC 1's code editor; the default tool (`cad-model`) is the WYSIWYG editor. */
+export const CODE_TOOL = "cad-model-code-preview";
+
+/** Creates a CAD model through the create-new menu; it opens in the default tool, or then in `tool`. */
+export async function createModel(page: Page, tool?: string): Promise<void> {
+  await createViaMenu(page, "CAD Model");
+  if (tool) await openWithTool(page, tool);
+}
+
+/** The path that opens the current document, in `tool` if given. */
+export function docPathWith(page: Page, tool?: string): string {
+  const params = hashParams(page);
+  if (tool) params.set("tool", tool);
+  else params.delete("tool");
+  return `/#${params.toString()}`;
+}
+
+/** The open document's automerge URL. */
+export const docUrl = (page: Page) => hashParams(page).get("doc")!;
+
+/** The model source, read from the tab's repo. */
+export async function modelSource(page: Page): Promise<string> {
+  return page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { source: string } }> } }).repo;
+    return (await repo.find(url)).doc().source;
+  }, docUrl(page));
+}
+
+/**
+ * Changes the model source through the tab's repo. By default with `updateText`, which splices only
+ * the changed characters, as typing them would; "replace" assigns the string, which replaces the
+ * whole text object, as a tool rewriting the file might.
+ */
+export async function setModelSource(page: Page, source: string, how: "splice" | "replace" = "splice"): Promise<void> {
+  await page.evaluate(
+    async ([url, text, mode]) => {
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { source: string }) => void): void }> } }).repo;
+      // The page's importmap provides the same automerge as the repo's.
+      const specifier = "@automerge/automerge";
+      const { updateText } = (await import(specifier)) as { updateText(d: unknown, path: string[], text: string): void };
+      (await repo.find(url!)).change((d) => (mode === "replace" ? (d.source = text!) : updateText(d, ["source"], text!)));
+    },
+    [docUrl(page), source, how],
+  );
+}
+
+const viewer = (page: Page) => page.locator(".cad-model__viewer").first();
+
+/** The pickable entities the viewer shows. */
+export async function entities(page: Page, kind: EntityKind): Promise<Entity[]> {
+  return viewer(page).evaluate((el, k) => (el as unknown as ViewerHook).cadViewer.entities(k), kind);
+}
+
+/** Clicks the pixel where the viewer's raycasting finds the entity, as a user would. */
+export async function clickEntity(page: Page, entity: Entity): Promise<void> {
+  const point = await viewer(page).evaluate((el, e) => (el as unknown as ViewerHook).cadViewer.screenPoint(e), entity);
+  if (!point) throw new Error(`entity ${JSON.stringify(entity)} is not visible`);
+  await page.mouse.click(point.x, point.y);
+}
+
+/** Whether an entity is visible and clickable. */
+export async function isVisible(page: Page, entity: Entity): Promise<boolean> {
+  return viewer(page).evaluate((el, e) => (el as unknown as ViewerHook).cadViewer.screenPoint(e) !== undefined, entity);
+}
+
+export const editorView = (page: Page) => page.locator(".cad-model--editor");
+export const timelineEntry = (page: Page, name: string) => page.locator(`.cad-editor__entry[data-name="${name}"]`);
+export const dialog = (page: Page) => page.locator(".cad-editor__dialog");
+
+/** Picks the visible entity of `kind` whose centroid is nearest to `near`, by clicking it. */
+export async function pickNear(page: Page, kind: EntityKind, near: [number, number, number], body?: string): Promise<Entity> {
+  const candidates = (await entities(page, kind)).filter((e) => !body || e.body === body);
+  const scored: { e: Entity; d: number }[] = [];
+  for (const e of candidates) {
+    const c = await viewer(page).evaluate((el, x) => (el as unknown as { cadViewer: { centroid(e: Entity): number[] | undefined } }).cadViewer.centroid(x), e);
+    if (c) scored.push({ e, d: Math.hypot(c[0]! - near[0], c[1]! - near[1], c[2]! - near[2]) });
+  }
+  scored.sort((a, b) => a.d - b.d);
+  for (const { e } of scored) {
+    if (!(await isVisible(page, e))) continue;
+    await clickEntity(page, e);
+    return e;
+  }
+  throw new Error(`no visible ${kind} near ${near.join(", ")}`);
+}
+
+/** Types an expression into a dialog field and commits it. */
+export async function setField(page: Page, label: string, value: string): Promise<void> {
+  const input = dialog(page).getByLabel(label, { exact: true });
+  await input.fill(value);
+  await input.press("Enter");
+}
+
+export async function chooseField(page: Page, label: string, value: string): Promise<void> {
+  await dialog(page).getByLabel(label, { exact: true }).selectOption(value);
+}
+
+export const toolbarButton = (page: Page, label: string) => page.locator(".cad-editor__toolbar").getByRole("button", { name: label, exact: true });
+
+/** An example model of the feature library (src/features/examples), with `replace` applied to it. */
+export function exampleSource(name: "m1" | "m3", replace: [string, string][] = []): string {
+  let source = readFileSync(join(CAD_DIR, "..", "features", "examples", `${name}.js`), "utf8");
+  for (const [from, to] of replace) {
+    if (!source.includes(from)) throw new Error(`${name}.js has no ${from}`);
+    source = source.replace(from, to);
+  }
+  return source;
+}
+
+/** Orbits the viewer's camera to look at the model from `direction`. */
+export async function viewFrom(page: Page, direction: [number, number, number]): Promise<void> {
+  await viewer(page).evaluate((el, d) => (el as unknown as { cadViewer: { view(d: [number, number, number]): void } }).cadViewer.view(d), direction);
 }

@@ -1,3 +1,4 @@
+import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { ReplicadMeshedEdges, ReplicadMeshedFaces } from "replicad-threejs-helper";
 
 /** Milliseconds per phase, measured inside the worker with performance.now(). */
@@ -23,6 +24,33 @@ export interface MeshedShape {
   opacity: number | undefined;
   faces: ReplicadMeshedFaces;
   edges: ReplicadMeshedEdges | undefined;
+  /** The feature-library body this shape shows, if it is one; its faces and edges can be picked. */
+  body: string | undefined;
+  /** For each of `faces.faceGroups`, the face's index in the body (-1 if unknown). */
+  faceIndex: number[] | undefined;
+  /** For each of `edges.edgeGroups`, the edge's index in the body. */
+  edgeIndex: number[] | undefined;
+}
+
+/** One executed feature call, from the feature library's trace. */
+export interface FeatureTrace {
+  name: string;
+  type: string;
+  line: number | undefined;
+  variable: boolean;
+  status: "ok" | "broken" | "failed";
+  message: string | undefined;
+  refs: RefDiagnostic[];
+  /** Names of the bodies visible before the feature ran. */
+  before: string[];
+  result: string | undefined;
+  /** A sketch's profile as a closed polyline in world coordinates. */
+  outline: [number, number, number][] | undefined;
+  /** The feature's body is used by no later feature and not returned by main, so it doesn't show. */
+  unused: boolean;
+  /** Milliseconds the feature took, and the part spent naming faces and edges. */
+  ms: number;
+  namingMs: number;
 }
 
 export interface ModelError {
@@ -32,10 +60,18 @@ export interface ModelError {
   kind: "import" | "syntax" | "runtime" | "kernel" | "mesh";
 }
 
-export type WorkerRequest = { type: "build"; id: number; source: string };
+export type WorkerRequest =
+  | { type: "build"; id: number; source: string }
+  /** The bodies visible before feature `feature` of the last build, for picking while it is edited. */
+  | { type: "rollback"; id: number; feature: string }
+  /** The reference code for entity `index` of body `body` of the last build. */
+  | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number };
 
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
-  | { type: "built"; id: number; shapes: MeshedShape[]; timings: BuildTimings; heapBytes: number }
-  | { type: "failed"; id: number; error: ModelError; timings: BuildTimings; heapBytes: number };
+  | { type: "built"; id: number; shapes: MeshedShape[]; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
+  | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
+  | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
+  | { type: "picked"; id: number; code: string }
+  | { type: "requestFailed"; id: number; message: string };
