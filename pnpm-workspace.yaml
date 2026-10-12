@@ -1,4 +1,5 @@
 packages:
+  - src/cad
   - src/harness
 allowBuilds:
   cbor-extract: true

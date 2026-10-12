@@ -1,0 +1,70 @@
+@layer package {
+  :root,
+  :host,
+  [theme] {
+    --cad-model-bg: var(--editor-fill, white);
+    --cad-model-fg: var(--editor-line, black);
+    --cad-model-border: var(--editor-fill-offset-20, #ccc);
+    --cad-model-muted: var(--editor-line-offset-50, #888);
+    --cad-model-danger: var(--studio-danger, red);
+    --cad-model-error-line: color-mix(in oklch, var(--studio-danger, red), var(--editor-fill, white) 85%);
+    --cad-model-shape: color-mix(in oklch, var(--editor-fill, white), var(--editor-line, black) 25%);
+    --cad-model-edge: var(--editor-line, black);
+    --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
+    --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
+  }
+}
+
+.cad-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  font-family: var(--cad-model-family);
+}
+
+.cad-model .cad-model__code {
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--cad-model-border);
+  font-family: var(--cad-model-family-code);
+  font-size: 13px;
+}
+
+.cad-model .cad-model__error-line {
+  background: var(--cad-model-error-line);
+}
+
+.cad-model .cad-model__viewer {
+  position: relative;
+  min-height: 0;
+}
+
+.cad-model .cad-model__viewer canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.cad-model .cad-model__status {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-sm, 0.5rem);
+  padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
+  border-top: 1px solid var(--cad-model-border);
+  font-size: 12px;
+}
+
+.cad-model .cad-model__error {
+  color: var(--cad-model-danger);
+  white-space: pre-wrap;
+}
+
+.cad-model .cad-model__timings {
+  margin-left: auto;
+  color: var(--cad-model-muted);
+}

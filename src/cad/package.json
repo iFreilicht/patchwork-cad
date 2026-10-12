@@ -1,0 +1,37 @@
+{
+  "name": "patchwork-cad",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@automerge/automerge-codemirror": "0.2.0",
+    "@codemirror/lang-javascript": "6.2.5",
+    "acorn": "8.19.0",
+    "replicad": "1.1.0",
+    "replicad-evaluator": "1.1.0",
+    "replicad-opencascadejs": "1.1.0",
+    "replicad-threejs-helper": "1.0.0",
+    "solid-js": "1.9.17",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@automerge/automerge-repo": "2.6.0-subduction.48",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.14",
+    "@inkandswitch/patchwork-bootloader": "0.8.1",
+    "@types/node": "24.19.2",
+    "@types/three": "0.186.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vite-plugin-css-injected-by-js": "5.0.2",
+    "vite-plugin-solid": "2.11.14"
+  }
+}
