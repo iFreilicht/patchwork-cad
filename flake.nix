@@ -39,6 +39,12 @@
         }
       );
 
+      checks = forAllSystems (
+        _: pkgs: {
+          harness-vm-spike = import ./src/harness/vm/spike.nix { inherit pkgs; };
+        }
+      );
+
       formatter = forAllSystems (_: pkgs: pkgs.nixfmt-rfc-style);
     };
 }
