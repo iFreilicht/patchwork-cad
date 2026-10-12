@@ -1,0 +1,764 @@
+{
+  "browser": "firefox",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0.2) Gecko/20100101 Firefox/148.0.2",
+  "runs": [
+    {
+      "variant": "as-is",
+      "model": "inMain",
+      "importsPerBuild": [
+        2
+      ],
+      "topLevelRunsPerBuild": [
+        2
+      ],
+      "medianMs": 148
+    },
+    {
+      "variant": "as-is",
+      "model": "topLevel",
+      "importsPerBuild": [
+        2
+      ],
+      "topLevelRunsPerBuild": [
+        2
+      ],
+      "medianMs": 277
+    },
+    {
+      "variant": "memo",
+      "model": "inMain",
+      "importsPerBuild": [
+        1
+      ],
+      "topLevelRunsPerBuild": [
+        1
+      ],
+      "medianMs": 147
+    },
+    {
+      "variant": "memo",
+      "model": "topLevel",
+      "importsPerBuild": [
+        1
+      ],
+      "topLevelRunsPerBuild": [
+        1
+      ],
+      "medianMs": 147
+    }
+  ],
+  "retention": [
+    {
+      "variant": "as-is",
+      "model": "inMain",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "modulesAlive": 50,
+          "modulesTotal": 50,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 50,
+          "modulesAlive": 100,
+          "modulesTotal": 100,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 75,
+          "modulesAlive": 150,
+          "modulesTotal": 150,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 100,
+          "modulesAlive": 200,
+          "modulesTotal": 200,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 125,
+          "modulesAlive": 250,
+          "modulesTotal": 250,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 150,
+          "modulesAlive": 300,
+          "modulesTotal": 300,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 175,
+          "modulesAlive": 350,
+          "modulesTotal": 350,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 200,
+          "modulesAlive": 400,
+          "modulesTotal": 400,
+          "wasmMB": 199.1,
+          "collected": false,
+          "canary": false
+        }
+      ]
+    },
+    {
+      "variant": "as-is",
+      "model": "topLevel",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "modulesAlive": 50,
+          "modulesTotal": 50,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 50,
+          "modulesAlive": 100,
+          "modulesTotal": 100,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 75,
+          "modulesAlive": 150,
+          "modulesTotal": 150,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 100,
+          "modulesAlive": 200,
+          "modulesTotal": 200,
+          "wasmMB": 199.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 125,
+          "modulesAlive": 250,
+          "modulesTotal": 250,
+          "wasmMB": 238.9,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 150,
+          "modulesAlive": 300,
+          "modulesTotal": 300,
+          "wasmMB": 286.7,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 175,
+          "modulesAlive": 350,
+          "modulesTotal": 350,
+          "wasmMB": 344.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 200,
+          "modulesAlive": 400,
+          "modulesTotal": 400,
+          "wasmMB": 412.9,
+          "collected": false,
+          "canary": false
+        }
+      ]
+    },
+    {
+      "variant": "memo",
+      "model": "inMain",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "modulesAlive": 25,
+          "modulesTotal": 25,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 50,
+          "modulesAlive": 50,
+          "modulesTotal": 50,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 75,
+          "modulesAlive": 75,
+          "modulesTotal": 75,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 100,
+          "modulesAlive": 100,
+          "modulesTotal": 100,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 125,
+          "modulesAlive": 125,
+          "modulesTotal": 125,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 150,
+          "modulesAlive": 150,
+          "modulesTotal": 150,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 175,
+          "modulesAlive": 175,
+          "modulesTotal": 175,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 200,
+          "modulesAlive": 200,
+          "modulesTotal": 200,
+          "wasmMB": 199.1,
+          "collected": false,
+          "canary": false
+        }
+      ]
+    },
+    {
+      "variant": "memo",
+      "model": "topLevel",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "modulesAlive": 25,
+          "modulesTotal": 25,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 50,
+          "modulesAlive": 50,
+          "modulesTotal": 50,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 75,
+          "modulesAlive": 75,
+          "modulesTotal": 75,
+          "wasmMB": 100,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 100,
+          "modulesAlive": 100,
+          "modulesTotal": 100,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 125,
+          "modulesAlive": 125,
+          "modulesTotal": 125,
+          "wasmMB": 127.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 150,
+          "modulesAlive": 150,
+          "modulesTotal": 150,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 175,
+          "modulesAlive": 175,
+          "modulesTotal": 175,
+          "wasmMB": 163.1,
+          "collected": false,
+          "canary": false
+        },
+        {
+          "builds": 200,
+          "modulesAlive": 200,
+          "modulesTotal": 200,
+          "wasmMB": 199.1,
+          "collected": false,
+          "canary": false
+        }
+      ]
+    }
+  ],
+  "control": [
+    {
+      "mode": "build",
+      "gcEvery": 25,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    },
+    {
+      "mode": "build+mesh",
+      "gcEvery": 25,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    },
+    {
+      "mode": "build+mesh+delete",
+      "gcEvery": 25,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    },
+    {
+      "mode": "build",
+      "gcEvery": 1,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    },
+    {
+      "mode": "build+mesh",
+      "gcEvery": 1,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    },
+    {
+      "mode": "build+mesh+delete",
+      "gcEvery": 1,
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    }
+  ],
+  "bisection": [
+    {
+      "until": "extrude",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 100
+        },
+        {
+          "builds": 125,
+          "wasmMB": 100
+        },
+        {
+          "builds": 150,
+          "wasmMB": 100
+        },
+        {
+          "builds": 175,
+          "wasmMB": 100
+        },
+        {
+          "builds": 200,
+          "wasmMB": 100
+        }
+      ]
+    },
+    {
+      "until": "cut",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 100
+        },
+        {
+          "builds": 125,
+          "wasmMB": 100
+        },
+        {
+          "builds": 150,
+          "wasmMB": 100
+        },
+        {
+          "builds": 175,
+          "wasmMB": 100
+        },
+        {
+          "builds": 200,
+          "wasmMB": 100
+        }
+      ]
+    },
+    {
+      "until": "fillet",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 100
+        },
+        {
+          "builds": 125,
+          "wasmMB": 100
+        },
+        {
+          "builds": 150,
+          "wasmMB": 100
+        },
+        {
+          "builds": 175,
+          "wasmMB": 100
+        },
+        {
+          "builds": 200,
+          "wasmMB": 127.1
+        }
+      ]
+    },
+    {
+      "until": "chamfer",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 100
+        },
+        {
+          "builds": 125,
+          "wasmMB": 100
+        },
+        {
+          "builds": 150,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 127.1
+        }
+      ]
+    },
+    {
+      "until": "fuse",
+      "initialWasmMB": 100,
+      "samples": [
+        {
+          "builds": 25,
+          "wasmMB": 100
+        },
+        {
+          "builds": 50,
+          "wasmMB": 100
+        },
+        {
+          "builds": 75,
+          "wasmMB": 100
+        },
+        {
+          "builds": 100,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 125,
+          "wasmMB": 127.1
+        },
+        {
+          "builds": 150,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 175,
+          "wasmMB": 163.1
+        },
+        {
+          "builds": 200,
+          "wasmMB": 199.1
+        }
+      ]
+    }
+  ]
+}

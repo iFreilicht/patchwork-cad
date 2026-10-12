@@ -1,0 +1,21 @@
+{
+  "name": "module-evaluation-experiment",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "experiment": "vite build && playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "replicad": "1.1.0",
+    "replicad-evaluator": "1.1.0",
+    "replicad-opencascadejs": "1.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  }
+}

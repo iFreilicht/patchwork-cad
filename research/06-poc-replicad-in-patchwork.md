@@ -62,7 +62,7 @@ Use it as a dependency (1.1.0), but only its browser-safe entries:
 - **What's safe:** `replicad-evaluator/builder` (`createBuilder({ runtime, codeEvaluator })`: `main`/`defaultParams`, meshing, kernel error messages, `faceInfo`/`edgeInfo`) and `replicad-evaluator/evaluate/browser`, which imports the code from a blob URL and never fetches.
 - **What's excluded:** the main entry imports `node:fs`, `rollup` and the fetching `createUrlResolverPlugin`.
 - **Our layer, [`prepare.ts`](../src/cad/src/kernel/prepare.ts):** it parses the source with acorn, rejects every static import other than `replicad` and `replicad/shape-functions` (the browser would fetch any other from the blob module), and rewrites the replicad imports to globals over the same number of lines. The evaluator's own rewrite joins multi-line imports into one line (`rewriteNamedImports`: `.join(", ")`), which would shift the line numbers in error messages.
-- **The builder evaluates a module twice per build:** `buildShapesFromCode` runs `runCode(code, params)` and then `extractDefaultNameFromCode(code)`, which evaluates the module again. Top-level work in a model therefore runs twice.
+- **The builder evaluates a module twice per build:** `buildShapesFromCode` runs `runCode(code, params)` and then `extractDefaultNameFromCode(code)`, which evaluates the module again. Top-level work in a model therefore runs twice. Cost, fix and the memory findings that came with it: [08](08-module-evaluation.md).
 
 ### Re-run cost
 

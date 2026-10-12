@@ -1,0 +1,46 @@
+{
+  "browser": "webkit",
+  "initialWasmMB": 100,
+  "samples": [
+    {
+      "builds": 100,
+      "wasmMB": 127.1
+    },
+    {
+      "builds": 200,
+      "wasmMB": 199.1
+    },
+    {
+      "builds": 300,
+      "wasmMB": 286.7
+    },
+    {
+      "builds": 400,
+      "wasmMB": 412.9
+    },
+    {
+      "builds": 500,
+      "wasmMB": 495.5
+    },
+    {
+      "builds": 600,
+      "wasmMB": 594.6
+    },
+    {
+      "builds": 700,
+      "wasmMB": 594.6
+    },
+    {
+      "builds": 800,
+      "wasmMB": 713.6
+    },
+    {
+      "builds": 900,
+      "wasmMB": 811.1
+    },
+    {
+      "builds": 1000,
+      "wasmMB": 811.1
+    }
+  ]
+}

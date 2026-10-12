@@ -1,4 +1,5 @@
 packages:
+  - research/08-module-evaluation/experiment
   - src/cad
   - src/harness
 allowBuilds:

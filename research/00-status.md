@@ -9,6 +9,7 @@
 | [05-sandboxing.md](05-sandboxing.md) | Threat model and sandbox runner for model code; local test harness | In progress: [test harness](05-sandboxing.md#test-harness) done; sandbox runner to do |
 | [06-poc-replicad-in-patchwork.md](06-poc-replicad-in-patchwork.md) | PoC 1: replicad and OCCT in a Patchwork tool, code editor and 3D view | Done ([src/cad](../src/cad/), `pnpm dev`). Open: real-network and Safari load times, Firefox's slower OCCT |
 | [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | To do (abstract only) |
+| [08-module-evaluation.md](08-module-evaluation.md) | Model evaluations per build, their cost, module retention, OCCT memory | Done. Open: which objects fillet/chamfer/fuse leak |
 
 ## Not started
 
