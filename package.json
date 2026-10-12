@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "pnpm --filter patchwork-harness dev cad=../cad",
     "typecheck": "pnpm -r typecheck",
     "test:e2e": "pnpm --filter patchwork-harness test:e2e"
   },

@@ -4,6 +4,6 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["site", "e2e"],
+  "include": ["site", "e2e", "dev.ts"],
   "exclude": ["site/dist"]
 }

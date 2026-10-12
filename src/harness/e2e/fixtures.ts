@@ -11,6 +11,8 @@ export interface User {
 }
 
 interface WorkerFixtures {
+  /** Tool packages the site serves as static modules (see server.ts), by name. */
+  siteModules: Record<string, string>;
   localStack: Stack;
   /** Publishes a tool directory to the worker's sync server, once per directory. */
   publishModule: (dir: string) => Promise<AutomergeUrl>;
@@ -28,12 +30,14 @@ interface TestFixtures {
   installModule: (dir: string, ...users: User[]) => Promise<AutomergeUrl>;
 }
 
-const LOOPBACK = "localhost,127.0.0.1,[::1]";
+export const LOOPBACK = "localhost,127.0.0.1,[::1]";
 
 export const test = base.extend<TestFixtures, WorkerFixtures>({
+  siteModules: [{}, { option: true, scope: "worker" }],
+
   localStack: [
-    async ({}, use) => {
-      const stack = await startStack();
+    async ({ siteModules }, use) => {
+      const stack = await startStack({ modules: siteModules });
       await use(stack);
       await stack.stop();
     },

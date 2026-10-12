@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "build": "vite build site",
-    "test:e2e": "pnpm build && playwright test -c e2e/playwright.config.ts",
-    "typecheck": "tsc --noEmit"
+    "test:e2e": "pnpm build && pnpm --filter patchwork-cad build && playwright test -c e2e/playwright.config.ts",
+    "typecheck": "tsc --noEmit",
+    "dev": "node dev.ts"
   },
   "dependencies": {
     "@inkandswitch/patchwork": "0.8.4",

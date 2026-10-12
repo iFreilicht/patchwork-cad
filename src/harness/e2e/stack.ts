@@ -1,17 +1,30 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { constants } from "node:fs";
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { constants, existsSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLASSIC_SENTINEL, SUBDUCTION_SENTINEL } from "../site/sentinels.ts";
+import { startSiteServer, type SiteServer } from "./server.ts";
 
 export const HARNESS_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-const SITE_DIR = join(HARNESS_DIR, "site");
-const DIST_DIR = join(SITE_DIR, "dist");
-const VITE = join(HARNESS_DIR, "node_modules", ".bin", "vite");
+const DIST_DIR = join(HARNESS_DIR, "site", "dist");
+
+export interface StackOptions {
+  /**
+   * A directory that keeps Subduction's storage and key across runs. Without
+   * it, the stack uses a fresh temporary directory and removes it on stop.
+   */
+  root?: string;
+  /** Fixed ports; browser storage is per origin, so a persistent stack needs a fixed site port. */
+  sitePort?: number;
+  subductionPort?: number;
+  /** Tool packages served as static modules of the site (see server.ts). */
+  modules?: Record<string, string>;
+}
 
 export interface Stack {
   /** http://localhost:<port> */
@@ -22,6 +35,8 @@ export interface Stack {
   classicRequests: () => number;
   /** Connections to it that never sent anything, e.g. from <link rel=preconnect>. */
   classicPreconnects: () => number;
+  /** Requests the site server answered. */
+  siteRequests: SiteServer["requests"];
   stop: () => Promise<void>;
 }
 
@@ -113,13 +128,15 @@ function spawnLogged(name: string, command: string, args: string[], cwd: string,
 }
 
 /**
- * Starts a Subduction server and the built site on free ports, with fresh
- * storage. The site build must exist (`pnpm build`).
+ * Starts a Subduction server and the built site, by default on free ports
+ * with fresh storage. The site build must exist (`pnpm build`).
  */
-export async function startStack(): Promise<Stack & { log: string[] }> {
-  const root = await mkdtemp(join(tmpdir(), "patchwork-harness-"));
+export async function startStack(options: StackOptions = {}): Promise<Stack & { log: string[] }> {
+  const persistent = options.root !== undefined;
+  const root = options.root ?? (await mkdtemp(join(tmpdir(), "patchwork-harness-")));
   const log: string[] = [];
   const children: [string, ChildProcess][] = [];
+  let site: SiteServer | undefined;
 
   // Nothing speaks the classic protocol locally; this sink only counts attempts.
   let classicRequests = 0;
@@ -138,46 +155,44 @@ export async function startStack(): Promise<Stack & { log: string[] }> {
 
   const stop = async () => {
     await Promise.all(children.map(([name, child]) => kill(name, child, log)));
+    await site?.close();
     classicSink.close();
     for (const socket of classicSockets.keys()) socket.destroy();
-    await rm(root, { recursive: true, force: true });
+    if (!persistent) await rm(root, { recursive: true, force: true });
   };
 
   try {
-    const subductionPort = await freePort();
+    await mkdir(root, { recursive: true });
+    const subductionPort = options.subductionPort ?? (await freePort());
     const subductionUrl = `ws://127.0.0.1:${subductionPort}`;
+    let key = ["--ephemeral-key"];
+    if (persistent) {
+      const keyFile = join(root, "subduction.key");
+      if (!existsSync(keyFile)) await writeFile(keyFile, randomBytes(32).toString("hex"), { mode: 0o600 });
+      key = ["--key-file", keyFile];
+    }
     children.push([
       "subduction",
       spawnLogged(
         "subduction",
         "subduction_cli",
-        ["server", "--socket", `127.0.0.1:${subductionPort}`, "--data-dir", join(root, "subduction"), "--ephemeral-key"],
+        ["server", "--socket", `127.0.0.1:${subductionPort}`, "--data-dir", join(root, "subduction"), ...key],
         root,
         log,
       ),
     ]);
 
+    const siteDir = join(root, "site");
+    await rm(siteDir, { recursive: true, force: true });
     await patchedSite(
-      join(root, "site"),
+      siteDir,
       new Map([
         [host(SUBDUCTION_SENTINEL), host(subductionUrl)],
         [host(CLASSIC_SENTINEL), `127.0.0.1:${classicPort}`],
       ]),
     );
-    const sitePort = await freePort();
-    const siteUrl = `http://localhost:${sitePort}`;
-    children.push([
-      "site",
-      spawnLogged(
-        "site",
-        VITE,
-        ["preview", SITE_DIR, "--outDir", join(root, "site"), "--port", String(sitePort), "--strictPort", "--host", "localhost"],
-        HARNESS_DIR,
-        log,
-        // The patchwork plugin sets preview.port from PORT, overriding --port.
-        { PORT: String(sitePort) },
-      ),
-    ]);
+    site = await startSiteServer(options.sitePort ?? 0, { root: siteDir, modules: options.modules ?? {} });
+    const siteUrl = `http://localhost:${site.port}`;
 
     await waitFor("subduction", () => tcpOpen(subductionPort));
     await waitFor("site", () => httpOk(siteUrl));
@@ -186,6 +201,7 @@ export async function startStack(): Promise<Stack & { log: string[] }> {
       subductionUrl,
       classicRequests: () => classicRequests,
       classicPreconnects: () => [...classicSockets.values()].filter((sent) => !sent).length,
+      siteRequests: site.requests,
       stop,
       log,
     };
