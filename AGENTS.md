@@ -16,7 +16,7 @@ Documents only contain the current result. When something changes, edit the text
 
 This repository uses git for version control, nix (with flakes enabled) for meta-dependency management and pnpm for JS/TS dependencies. DO NOT rely on a system package manager! NEVER assume presence of packages (except for nix itself) on a bare system. All dependencies MUST be locked and reproducible! Other languages than JS/TS might be covered sufficiently by nix. If not, ask the user for a decision for an additional package manager.
 
-Enter the development environment (node, pnpm, python) with `nix develop` (see `flake.nix`).
+Enter the development environment (node, pnpm, python, `subduction_cli` and Playwright's browsers) with `nix develop` (see `flake.nix`). Its nixpkgs follows [patchwork-system](https://github.com/inkandswitch/patchwork-system)'s, so tool versions match Patchwork's.
 
 Bash is only allowed for very simple, ephemeral scripts. Python should be preferred at all times.
 
