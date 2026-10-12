@@ -71,8 +71,6 @@ Use it as a dependency (1.1.0), but only its browser-safe entries:
 | seed model (rounded plate, bore, fillet) | 28 ms | 122 ms | 44 ms |
 | M1 from [03](03-topological-naming.md) (cut, fillet, chamfer, fuse) | 35 ms | 169 ms | 51 ms |
 
-Why OCCT runs about four times slower in Firefox has not been investigated.
-
 Builds run one at a time, and while one runs only the newest source waits ([`engine.ts`](../src/cad/src/kernel/engine.ts)). Typing a 34-character comment into M1 at 40 ms per key ran all 34 builds in Chromium and WebKit and was done within 10 ms of the last key; Firefox ran 11 and settled 370 ms after it. At 10 ms per key, 17 (Chromium), 6 (Firefox) and 18 (WebKit) builds ran, and the view settled 120–220 ms after the last key. Models of this size need neither debouncing nor cancellation: the view is never more than about one build behind. Cancelling a running build means terminating the worker, and a new worker costs a warm OCCT load (100–200 ms, 0.9 s in Firefox), which matters for 05's watchdog rather than for typing.
 
 ### Errors
@@ -98,6 +96,7 @@ Kernel errors have no source line, because the exception comes from wasm. The li
 
 ## Open
 
+- **Firefox is much slower.** OCCT builds take about four times as long as in Chromium (M1: 169 vs. 35 ms, [re-run cost](#re-run-cost)), and loading OCCT costs about 0.8 s even from the cache, where Chromium needs 36–42 ms ([loading OCCT](#loading-occt)). The cause has not been investigated.
 - Load times over a real network, with compression.
 - Warm loads in real Safari, whose caches may behave differently from Playwright's WebKit.
 - The harness's egress check doesn't see loopback traffic ([VM plan](../src/harness/vm/PLAN.md)).
