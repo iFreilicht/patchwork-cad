@@ -23,7 +23,7 @@ A model is a plain ES module, `import { … } from "replicad"; export default fu
 
 One command (`pnpm dev` in `nix develop`) builds the tool and starts the local Subduction and Patchwork site from the [test harness](05-sandboxing.md#test-harness), with storage that survives restarts and the tool already installed, and prints the URL ([harness README](../src/harness/README.md)). A document created there reopens after a restart in a fresh browser profile, so it was loaded from Subduction's storage.
 
-The e2e specs `cad-basic` (render, edit, every error kind) and `cad-sync` (two profiles edit one model) pass in Chromium and WebKit. Each fails on any request that tries to leave the machine. They have not run in Firefox yet: in this environment's command sandbox Firefox doesn't start at all, including for the harness's own `boot` spec.
+The e2e specs `cad-basic` (render, edit, every error kind) and `cad-sync` (two profiles edit one model) pass in Chromium, Firefox and WebKit. Each fails on any request that tries to leave the machine.
 
 ## Results
 
@@ -33,15 +33,15 @@ Measured with `cad-measure.spec.ts` and `cad-pushwork.spec.ts` (`CAD_MEASURE=1`,
 
 The wasm is a hashed asset of the tool (`import wasmUrl from "replicad-opencascadejs/wasm?url"`): 22.98 MB, 7.3 MB gzipped. The worker passes it to `WebAssembly.compileStreaming` and hands the compiled module to OCCT's Emscripten loader through `instantiateWasm`. It also stores the response in the Cache API, keyed by the hashed URL, so a stored copy never goes stale.
 
-| | Chromium | WebKit |
-|---|---|---|
-| cold: fetch and compile | 116–164 ms | 238–306 ms |
-| warm, from the Cache API: compile | 36–42 ms | 119 ms |
-| instantiate and OCCT init | 60–65 ms | 81–97 ms |
-| doc opened in a fresh profile until shape shown (includes Patchwork's boot) | 1.4–1.5 s | 1.4–2.4 s |
-| reload until shape shown | 1.0 s | 0.95 s |
+| | Chromium | Firefox | WebKit |
+|---|---|---|---|
+| cold: fetch and compile | 116–164 ms | 806–958 ms | 238–306 ms |
+| warm, from the Cache API: compile | 36–42 ms | 758–793 ms | 119 ms |
+| instantiate and OCCT init | 60–65 ms | 140–155 ms | 81–97 ms |
+| doc opened in a fresh profile until shape shown (includes Patchwork's boot) | 1.4–1.5 s | 2.9–3.0 s | 1.4–2.4 s |
+| reload until shape shown | 1.0 s | 2.1 s | 0.95 s |
 
-A cold load fetches the wasm exactly once; warm loads don't fetch it. Without the Cache API, Chromium's warm compile took 77–91 ms from the HTTP cache.
+A cold load fetches the wasm exactly once; warm loads don't fetch it. Without the Cache API, Chromium's warm compile took 77–91 ms from the HTTP cache. Firefox's warm compile is barely faster than its cold one, so the cache saves Firefox the download but apparently not the compilation.
 
 Each Playwright context kind lacks one cache, which hides warm loads unless both kinds are measured ([harness caveats](../src/harness/README.md#caveats)):
 - Chromium's default contexts keep no 23 MB response in the HTTP cache.
@@ -50,7 +50,7 @@ Each Playwright context kind lacks one cache, which hides warm loads unless both
 
 The WebKit warm figure therefore comes from default contexts only. Real Safari has not been checked.
 
-**pushwork can carry the wasm.** Published as a normal pushwork module, the tool loads OCCT through the service-worker URL. The first load spends 1.4 s (Chromium) or 2.3 s (WebKit) fetching and compiling, against 0.12–0.3 s from the site server; with the Cache API, later loads compile in 32 or 159 ms.
+**pushwork can carry the wasm.** Published as a normal pushwork module, the tool loads OCCT through the service-worker URL. The first load spends 1.4 s (Chromium), 2.2 s (Firefox) or 2.3 s (WebKit) fetching and compiling, against 0.12–0.96 s from the site server; with the Cache API, later loads compile in 32, 655 or 159 ms.
 
 ### Getting the tool into Patchwork during development
 
@@ -66,12 +66,14 @@ Use it as a dependency (1.1.0), but only its browser-safe entries:
 
 ### Re-run cost
 
-| median build, edit to mesh | Chromium | WebKit |
-|---|---|---|
-| seed model (rounded plate, bore, fillet) | 28 ms | 44 ms |
-| M1 from [03](03-topological-naming.md) (cut, fillet, chamfer, fuse) | 35 ms | 51 ms |
+| median build, edit to mesh | Chromium | Firefox | WebKit |
+|---|---|---|---|
+| seed model (rounded plate, bore, fillet) | 28 ms | 122 ms | 44 ms |
+| M1 from [03](03-topological-naming.md) (cut, fillet, chamfer, fuse) | 35 ms | 169 ms | 51 ms |
 
-Builds run one at a time, and while one runs only the newest source waits ([`engine.ts`](../src/cad/src/kernel/engine.ts)). Typing a 34-character comment into M1 at 40 ms per key ran all 34 builds and was done within 10 ms of the last key. At 10 ms per key, 17 (Chromium) and 18 (WebKit) builds ran, and the view settled 120 ms after the last key. Models of this size need neither debouncing nor cancellation. Cancelling a running build means terminating the worker, and a new worker costs a warm OCCT load (100–200 ms), which matters for 05's watchdog rather than for typing.
+Why OCCT runs about four times slower in Firefox has not been investigated.
+
+Builds run one at a time, and while one runs only the newest source waits ([`engine.ts`](../src/cad/src/kernel/engine.ts)). Typing a 34-character comment into M1 at 40 ms per key ran all 34 builds in Chromium and WebKit and was done within 10 ms of the last key; Firefox ran 11 and settled 370 ms after it. At 10 ms per key, 17 (Chromium), 6 (Firefox) and 18 (WebKit) builds ran, and the view settled 120–220 ms after the last key. Models of this size need neither debouncing nor cancellation: the view is never more than about one build behind. Cancelling a running build means terminating the worker, and a new worker costs a warm OCCT load (100–200 ms, 0.9 s in Firefox), which matters for 05's watchdog rather than for typing.
 
 ### Errors
 
@@ -96,7 +98,6 @@ Kernel errors have no source line, because the exception comes from wasm. The li
 
 ## Open
 
-- Firefox runs of the CAD specs and measurements.
 - Load times over a real network, with compression.
 - Warm loads in real Safari, whose caches may behave differently from Playwright's WebKit.
 - The harness's egress check doesn't see loopback traffic ([VM plan](../src/harness/vm/PLAN.md)).

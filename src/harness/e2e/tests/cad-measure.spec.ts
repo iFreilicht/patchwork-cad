@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAD_MODULES, cadView, M1_SOURCE, replaceSource } from "../cad.ts";
+import { firefoxLaunchOptions } from "../firefox.ts";
 import { expect, LOOPBACK, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu, docPath, editor } from "../ui.ts";
 
@@ -75,6 +76,7 @@ test("CAD load, re-run and burst timings", async ({ users, localStack, browserNa
     const profile = await mkdtemp(join(tmpdir(), "cad-measure-profile-"));
     const launch = async () => {
       const context = await playwright[browserName].launchPersistentContext(profile, {
+        ...(browserName === "firefox" ? firefoxLaunchOptions() : {}),
         baseURL: localStack.siteUrl,
         serviceWorkers: "allow",
         proxy: { server: egress.proxyUrl, bypass: LOOPBACK },

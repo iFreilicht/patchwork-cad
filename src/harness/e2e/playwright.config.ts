@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { firefoxLaunchOptions } from "./firefox.ts";
 
 export default defineConfig({
   testDir: "./tests",
@@ -18,7 +19,7 @@ export default defineConfig({
   },
   projects: [
     { name: "chromium", use: devices["Desktop Chrome"] },
-    { name: "firefox", use: devices["Desktop Firefox"] },
+    { name: "firefox", use: { ...devices["Desktop Firefox"], launchOptions: firefoxLaunchOptions() } },
     { name: "webkit", use: devices["Desktop Safari"] },
   ],
 });
