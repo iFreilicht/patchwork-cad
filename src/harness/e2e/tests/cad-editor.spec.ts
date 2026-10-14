@@ -17,7 +17,7 @@ test("timeline, form edit and edge picking", async ({ users }) => {
   await createViaMenu(page, "CAD Model");
   const view = editorView(page);
   await expect(view).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
-  await expect(page.locator(".cad-editor__entry")).toHaveText(["✎sketch1", "⬆plate", "✎sketch2", "⬆bore", "◜fillet1"]);
+  await expect(page.locator(".cad-editor__entry")).toHaveText(["✎\uFE0Esketch1", "⬆\uFE0Eplate", "✎\uFE0Esketch2", "⬆\uFE0Ebore", "◜\uFE0Efillet1"]);
   for (const name of ["sketch1", "plate", "sketch2", "bore", "fillet1"]) await expect(timelineEntry(page, name)).toHaveAttribute("data-status", "ok");
   if (shots) await page.screenshot({ path: `${shots}/editor-1-timeline.png` });
 

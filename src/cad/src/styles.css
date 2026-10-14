@@ -8,12 +8,15 @@
     --cad-model-muted: var(--editor-line-offset-50, #888);
     --cad-model-danger: var(--studio-danger, red);
     --cad-model-error-line: color-mix(in oklch, var(--studio-danger, red), var(--editor-fill, white) 85%);
-    --cad-model-shape: color-mix(in oklch, var(--editor-fill, white), var(--editor-line, black) 25%);
+    /* Bodies stay white in every theme; the lighting shades them. */
+    --cad-model-shape: white;
     --cad-model-edge: var(--editor-line, black);
-    --cad-model-accent: var(--studio-accent, #2f6fde);
-    --cad-model-hover: color-mix(in oklch, var(--studio-accent, #2f6fde), var(--editor-fill, white) 45%);
+    --cad-model-accent: var(--studio-primary, #2f6fde);
+    /* The accent for text and borders: the primary color mixed towards the text color, so it stays readable. */
+    --cad-model-accent-text: var(--editor-primary-text, #2f6fde);
+    --cad-model-hover: color-mix(in oklch, var(--studio-primary, #2f6fde), var(--editor-fill, white) 45%);
     --cad-model-warning: var(--studio-warning, #c77700);
-    --cad-model-panel: var(--editor-fill-offset-5, #f6f6f6);
+    --cad-model-panel: var(--editor-fill-offset-10, #f0f0f0);
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
     --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
   }
@@ -289,8 +292,8 @@
 }
 
 .cad-editor__button[aria-pressed="true"] {
-  border-color: var(--cad-model-accent);
-  color: var(--cad-model-accent);
+  border-color: var(--cad-model-accent-text);
+  color: var(--cad-model-accent-text);
 }
 
 .cad-editor__button--danger {
@@ -312,7 +315,7 @@
   overflow-x: auto;
   padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
   border-top: 1px solid var(--cad-model-border);
-  background: var(--cad-model-panel);
+  background: var(--cad-model-bg);
 }
 
 .cad-editor__entry {
@@ -326,13 +329,13 @@
   font-family: var(--cad-model-family-code);
   border: 1px solid var(--cad-model-border);
   border-radius: 3px;
-  background: var(--cad-model-bg);
+  background: var(--cad-model-panel);
   color: var(--cad-model-fg);
   cursor: pointer;
 }
 
 .cad-editor__entry[aria-pressed="true"] {
-  border-color: var(--cad-model-accent);
+  border-color: var(--cad-model-accent-text);
 }
 
 .cad-editor__entry[data-status="broken"] {
@@ -376,5 +379,5 @@
 }
 
 .cad-editor__glyph {
-  color: var(--cad-model-muted);
+  color: var(--cad-model-fg);
 }

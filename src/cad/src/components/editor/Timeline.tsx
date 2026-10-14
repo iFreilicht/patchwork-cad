@@ -4,7 +4,8 @@ import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { Entry, FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { Editor } from "./state.ts";
 
-const GLYPHS: Record<string, string> = { sketch: "✎", extrude: "⬆", fillet: "◜", chamfer: "◸" };
+// U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
+const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E" };
 
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);

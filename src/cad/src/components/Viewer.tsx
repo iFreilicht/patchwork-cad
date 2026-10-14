@@ -52,11 +52,14 @@ export interface ViewerTestHook {
 function themeColor(element: Element, name: string): THREE.Color {
   const value = getComputedStyle(element).getPropertyValue(name).trim();
   const color = new THREE.Color();
-  // three.js parses rgb()/hex, not color-mix(); the canvas normalises any CSS colour.
-  const context = document.createElement("canvas").getContext("2d");
+  // three.js parses rgb()/hex only, and a canvas normalises color-mix() to oklch(), which it can't
+  // parse either. Painting a pixel converts any CSS colour to sRGB.
+  const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
   if (context && value) {
     context.fillStyle = value;
-    color.setStyle(context.fillStyle);
+    context.fillRect(0, 0, 1, 1);
+    const [r = 0, g = 0, b = 0] = context.getImageData(0, 0, 1, 1).data;
+    color.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
   }
   return color;
 }
@@ -96,14 +99,16 @@ export function Viewer(props: ViewerProps) {
     const faceMaterial = (color: THREE.Color) =>
       new THREE.MeshStandardMaterial({ color, roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 });
     const accent = themeColor(container, "--cad-model-accent");
+    // Thin lines need the contrast of the text variant, e.g. a sketch outline against a light background.
+    const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
     const faceMaterials = [faceMaterial(themeColor(container, "--cad-model-shape")), faceMaterial(accent), faceMaterial(hover)];
     const lineMaterials = [
       new THREE.LineBasicMaterial({ color: themeColor(container, "--cad-model-edge") }),
-      new THREE.LineBasicMaterial({ color: accent, linewidth: 3 }),
+      new THREE.LineBasicMaterial({ color: accentLine, linewidth: 3 }),
       new THREE.LineBasicMaterial({ color: hover, linewidth: 3 }),
     ];
-    const overlayMaterial = new THREE.LineBasicMaterial({ color: accent, depthTest: false });
+    const overlayMaterial = new THREE.LineBasicMaterial({ color: accentLine, depthTest: false });
     const group = new THREE.Group();
     const overlayGroup = new THREE.Group();
     overlayGroup.renderOrder = 1;

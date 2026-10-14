@@ -165,7 +165,7 @@ test("M3: ribs in a loop are a Custom Script; picks into it survive moving and a
   await allOk(a, ["sketch1", "base", "sketch2", "upright"]);
   const script = a.locator(".cad-editor__entry[data-kind=script]");
   // The loop's sketch has no variable, so it gets a fallback name from its line.
-  await expect(script.locator(".cad-editor__ran")).toHaveText(["✎ sketch@L13#3", "⬆ rib0"]);
+  await expect(script.locator(".cad-editor__ran")).toHaveText(["✎\uFE0E sketch@L13#3", "⬆\uFE0E rib0"]);
 
   await toolbarButton(a, "Fillet").click();
   await expect(dialog(a)).toHaveAttribute("data-feature", "fillet1");
