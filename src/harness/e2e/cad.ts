@@ -62,8 +62,12 @@ export async function openWithTool(page: Page, toolId: string): Promise<void> {
   await page.evaluate((hash) => (location.hash = hash), params.toString());
 }
 
-/** The tool with PoC 1's code editor; the default tool (`cad-model`) is the WYSIWYG editor. */
-export const CODE_TOOL = "cad-model-code-preview";
+/** Opens the code pane of the editor (the default tool), unless it is open. */
+export async function openCode(page: Page): Promise<void> {
+  const toggle = page.locator(".cad-editor__toolbar").getByRole("button", { name: "Code" });
+  if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click();
+  await page.locator(".cad-model__code .cm-content").waitFor();
+}
 
 /** Creates a CAD model through the create-new menu; it opens in the default tool, or then in `tool`. */
 export async function createModel(page: Page, tool?: string): Promise<void> {

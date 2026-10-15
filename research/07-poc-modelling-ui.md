@@ -41,16 +41,14 @@ export default function main({ w, d, h, a, r }) {
 
 The tool's [`prepare.ts`](../src/cad/src/kernel/prepare.ts) adds names in memory: `const extrude1 = extrude({…})` runs as `extrude({…}, { name: "extrude1", line: 9, variable: true })`, on the same line. A feature without its own `const` (in a loop, or reassigned) gets only its line; its fallback name is `extrude@L16#1`, or an explicit `{ name: \`rib${i}\` }`. Outside the tool, features are `extrude#1`, … and references still resolve, because they point to bodies within one evaluation ([portability test](../src/features/test/portability.test.ts)).
 
-### Four tools
+### Two tools
 
-Patchwork composes tools, so [src/cad](../src/cad/) registers four on the datatype `cad-model`. They share Solid components and one kernel worker per tool instance as modules, which is Patchwork's own rule for tools that share code ("When two tools want the same code: Make them one package", [AGENTS.md](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/AGENTS.md)). `<patchwork-view tool-id="…">` is how other tools embed them; it only carries a document and a tool id, not the picks and build data the editors exchange inside.
+[src/cad](../src/cad/) registers two tools on the datatype `cad-model`. They share Solid components and one kernel worker per tool instance as modules, which is Patchwork's own rule for tools that share code ("When two tools want the same code: Make them one package", [AGENTS.md](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/AGENTS.md)). Tools share nothing but the document: `<patchwork-view tool-id="…">`, which other tools embed them with, only carries a document and a tool id, and a frame may arrange tools in any way ([research/09](09-patchwork-26-features.md#tiling-frame)). So the code editor is a pane of the editor, which keeps the error line and the edited feature's code in sync with the GUI, and only the viewer is a separate tool, for embedding and for several views of one model.
 
 | Tool id | Name | What it is |
 |---|---|---|
 | `cad-model` | CAD Editor | The WYSIWYG editor: toolbar, 3D view with picking, timeline, feature dialogs, and the code editor on demand. It is the default because Patchwork opens a datatype's first listed tool by id (`@inkandswitch/patchwork-plugins`, `getFallbackTool`: `sortPlugins(plugins, "supportedDatatypes", type, "id")?.filter((tool) => !tool.unlisted)?.[0]`). |
-| `cad-model-code-preview` | CAD Code + Preview | PoC 1's code editor next to the 3D view. |
 | `cad-model-viewer` | CAD Viewer | The 3D view alone, for embedding a model. |
-| `cad-model-code` | CAD Code | The code editor alone, without a kernel; `unlisted`, a building block for other tools. |
 
 ### The editor
 
@@ -65,7 +63,7 @@ Patchwork composes tools, so [src/cad](../src/cad/) registers four on the dataty
 
 The "done when" scenario is the spec [`cad-collab`](../src/harness/e2e/tests/cad-collab.spec.ts), which passes in Chromium, Firefox and WebKit, with [`cad-editor`](../src/harness/e2e/tests/cad-editor.spec.ts), [`cad-tools`](../src/harness/e2e/tests/cad-tools.spec.ts) and PoC 1's specs:
 
-- User A builds M1 in the WYSIWYG editor while user B writes code in the code + preview tool. B writes the block and the notch. A adds the fillet, the chamfer, the sketch on the split front face and the boss through the toolbar, forms and picks, while B types above A's open dialog.
+- User A builds M1 in the WYSIWYG editor while user B writes code in the editor's code pane. B writes the block and the notch. A adds the fillet, the chamfer, the sketch on the split front face and the boss through the toolbar, forms and picks, while B types above A's open dialog.
 - B moves the notch and makes the block taller in code, and every reference still resolves. Then A deletes the notch: the fillet and the sketch report broken references, and the sketch's suggestion fixes it.
 - For M3, B writes the base, the upright and the ribs in a loop. A picks the inner corner edge's pieces between the ribs, the top edge and the merged back face. The references survive moving the rib and adding a second one.
 

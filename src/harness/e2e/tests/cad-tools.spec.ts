@@ -1,15 +1,15 @@
 /**
- * The four tools on one model document (research/07, "Tool structure"): the viewer only shows,
- * the unlisted code tool only edits and can be embedded with <patchwork-view>, and an open
- * feature dialog in the editor keeps its feature while another user renames it or edits above it.
+ * The two tools on one model document (research/07, "Two tools"): the viewer only shows and can be
+ * embedded with <patchwork-view>, and an open feature dialog in the editor keeps its feature while
+ * another user renames it or edits above it.
  */
-import { CAD_MODULES, CODE_TOOL, cadView, dialog, docPathWith, docUrl, editorView, modelSource, openWithTool, setModelSource, timelineEntry, vertices } from "../cad.ts";
+import { CAD_MODULES, cadView, dialog, docPathWith, docUrl, editorView, modelSource, openCode, openWithTool, setModelSource, timelineEntry, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
-test("viewer, code tool and an embedded code tool show one document", async ({ users }) => {
+test("the viewer and an embedded viewer show one document", async ({ users }) => {
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
   const { page } = a;
@@ -23,27 +23,28 @@ test("viewer, code tool and an embedded code tool show one document", async ({ u
   expect(await vertices(page)).toBeGreaterThan(0);
   await expect(viewer.locator("input, select, .cm-content, button")).toHaveCount(0);
 
-  await openWithTool(page, "cad-model-code");
-  await expect(page.locator(".cad-model--code .cm-content")).toContainText("const plate = extrude(");
-  await expect(page.locator(".cad-model--code canvas")).toHaveCount(0);
-
-  // Another tool embeds the code tool by id; inside a tool's DOM, it finds Patchwork's providers.
-  await openWithTool(page, "cad-model-viewer");
-  await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
+  // Another tool embeds the viewer by id; inside a tool's DOM, it finds Patchwork's providers.
+  await openWithTool(page, "cad-model");
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   await page.evaluate((url) => {
     const view = document.createElement("patchwork-view");
     view.setAttribute("doc-url", url);
-    view.setAttribute("tool-id", "cad-model-code");
+    view.setAttribute("tool-id", "cad-model-viewer");
     view.id = "embedded";
     view.style.cssText = "position: absolute; right: 0; bottom: 0; width: 400px; height: 200px; z-index: 10; display: block";
-    document.querySelector(".cad-model--viewer")!.append(view);
+    document.querySelector(".cad-model--editor")!.append(view);
   }, docUrl(page));
-  const embedded = page.locator("#embedded .cad-model--code .cm-content");
-  await expect(embedded).toContainText("const plate = extrude(");
-  await embedded.click();
+  const embedded = page.locator("#embedded .cad-model--viewer");
+  await expect(embedded).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
+  const before = Number(await embedded.getAttribute("data-builds-executed"));
+
+  // An edit in the editor's code pane rebuilds the embedded viewer too.
+  await openCode(page);
+  await page.locator(".cad-model__code .cm-content").click();
   await page.keyboard.press("End");
-  await page.keyboard.insertText(" // from the embed");
-  await expect.poll(() => modelSource(page)).toContain("// from the embed");
+  await page.keyboard.insertText(" // from the code pane");
+  await expect.poll(() => modelSource(page)).toContain("// from the code pane");
+  await expect.poll(async () => Number(await embedded.getAttribute("data-builds-executed"))).toBeGreaterThan(before);
 });
 
 test("an open dialog keeps its feature while another user renames it, edits above it or replaces the text", async ({ users }) => {
@@ -52,8 +53,9 @@ test("an open dialog keeps its feature while another user renames it, edits abov
   await bootToFrame(a.page);
   await createViaMenu(a.page, "CAD Model");
   await expect(editorView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
-  await bootToFrame(b.page, docPathWith(a.page, CODE_TOOL));
+  await bootToFrame(b.page, docPathWith(a.page));
   await expect(cadView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await openCode(b.page);
 
   await timelineEntry(a.page, "bore").click();
   await expect(dialog(a.page)).toHaveAttribute("data-feature", "bore");

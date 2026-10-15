@@ -24,7 +24,7 @@
 
 .cad-model {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   background: var(--cad-model-bg);
@@ -35,7 +35,6 @@
 .cad-model .cad-model__code {
   min-height: 0;
   overflow: hidden;
-  border-right: 1px solid var(--cad-model-border);
   font-family: var(--cad-model-family-code);
   font-size: 13px;
 }
@@ -74,19 +73,6 @@
 .cad-model .cad-model__timings {
   margin-left: auto;
   color: var(--cad-model-muted);
-}
-
-.cad-model--viewer,
-.cad-model--code {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.cad-model--code {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.cad-model--code .cad-model__code {
-  border-right: none;
 }
 
 .cad-model .cad-model__focus {
@@ -146,7 +132,6 @@
 
 .cad-editor__code .cad-model__code {
   height: 100%;
-  border-right: none;
 }
 
 .cad-editor__banner {

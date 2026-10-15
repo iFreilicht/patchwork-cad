@@ -2,7 +2,7 @@
  * The code editor takes its colors from the user's Patchwork theme: it loads the theming package's
  * `codemirror:extension` like Patchwork's own CodeMirror tool, in light and dark mode.
  */
-import { CAD_MODULES, CODE_TOOL, createModel } from "../cad.ts";
+import { CAD_MODULES, createModel, openCode } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -17,7 +17,8 @@ for (const colorScheme of ["light", "dark"] as const) {
       if (!a) throw new Error("users(1) returned no user");
       const { page } = a;
       await bootToFrame(page);
-      await createModel(page, CODE_TOOL);
+      await createModel(page);
+      await openCode(page);
       const code = page.locator(".cad-model__code");
       await expect(code.locator(".cm-content")).toContainText("const");
 

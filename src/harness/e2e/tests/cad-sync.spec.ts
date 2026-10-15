@@ -1,4 +1,4 @@
-import { CAD_MODULES, CODE_TOOL, cadView, createModel, replaceSource, vertices } from "../cad.ts";
+import { CAD_MODULES, cadView, createModel, openCode, replaceSource, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, docPath } from "../ui.ts";
 
@@ -14,7 +14,8 @@ test("CAD model edits sync and re-render between two profiles", async ({ users }
   if (!a || !b) throw new Error("users(2) returned fewer than two users");
 
   await bootToFrame(a.page);
-  await createModel(a.page, CODE_TOOL);
+  await createModel(a.page);
+  await openCode(a.page);
   await expect(cadView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await replaceSource(a.page, cylinder(30));
   await expect(cadView(a.page)).toHaveAttribute("data-state", "ready");
@@ -22,6 +23,7 @@ test("CAD model edits sync and re-render between two profiles", async ({ users }
 
   await bootToFrame(b.page, docPath(a.page));
   await expect(cadView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await openCode(b.page);
   await expect.poll(() => vertices(b.page), { timeout: 60_000 }).toBe(fromA);
 
   await replaceSource(b.page, box);

@@ -1,7 +1,7 @@
 /**
- * PoC 2's "done when" (research/07): two users build the benchmark parts M1 and M3 together, one
- * through the WYSIWYG editor's forms and picks (A, tool cad-model-editor), one in code (B, tool
- * cad-model), and the picked references survive upstream edits.
+ * PoC 2's "done when" (research/07): two users build the benchmark parts M1 and M3 together in the
+ * WYSIWYG editor, one through its forms and picks (A), one in its code pane (B), and the picked
+ * references survive upstream edits.
  */
 import {
   CAD_MODULES,
@@ -10,7 +10,7 @@ import {
   editorView,
   modelSource,
   docPathWith,
-  CODE_TOOL,
+  openCode,
   pickNear,
   replaceSource,
   setField,
@@ -60,15 +60,16 @@ export default function main({ w, d, t, H, ribs, ribT }) {
 }
 `;
 
-/** Both users on one new document: A in the WYSIWYG editor (the default tool), B in code + preview. */
+/** Both users on one new document in the editor: A uses the GUI, B its code pane. */
 async function twoUsers(users: (n: number) => Promise<{ page: Page }[]>) {
   const [a, b] = await users(2);
   if (!a || !b) throw new Error("users(2) returned fewer than two users");
   await bootToFrame(a.page);
   await createViaMenu(a.page, "CAD Model");
   await expect(editorView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
-  await bootToFrame(b.page, docPathWith(a.page, CODE_TOOL));
+  await bootToFrame(b.page, docPathWith(a.page));
   await expect(cadView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await openCode(b.page);
   return { a: a.page, b: b.page };
 }
 
@@ -89,7 +90,7 @@ async function allOk(page: Page, names: string[]) {
   await expect.poll(() => statuses(page), { timeout: 30_000 }).toEqual(names.map((n) => `${n}:ok`));
 }
 
-test("M1: forms and picks in the editor, code in the code tool, references survive edits", async ({ users }) => {
+test("M1: forms and picks in the editor, code in its code pane, references survive edits", async ({ users }) => {
   const { a, b } = await twoUsers(users);
 
   // B writes the block and the notch in code.

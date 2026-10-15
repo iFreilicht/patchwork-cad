@@ -3,14 +3,12 @@
 > [!CAUTION]
 > Model code runs **unsandboxed**, with the full authority of the Patchwork page. Use this tool only on the local stack (`pnpm dev`) and only with your own models. Never open shared documents with it and never install it on the public Patchwork instance. Sandboxing is [research/05](../../research/05-sandboxing.md).
 
-A Patchwork datatype `cad-model` and four tools for it. The document holds a model as code; every tool that shows it re-runs it on every change. Design and measurements: [research/06](../../research/06-poc-replicad-in-patchwork.md) (PoC 1) and [research/07](../../research/07-poc-modelling-ui.md) (PoC 2).
+A Patchwork datatype `cad-model` and two tools for it. The document holds a model as code; every tool that shows it re-runs it on every change. Design and measurements: [research/06](../../research/06-poc-replicad-in-patchwork.md) (PoC 1) and [research/07](../../research/07-poc-modelling-ui.md) (PoC 2).
 
 | Tool id | |
 |---|---|
-| `cad-model` | Fusion-like editor: toolbar, timeline, feature forms, picking faces and edges (the default) |
-| `cad-model-code-preview` | CodeMirror editor next to a 3D view |
+| `cad-model` | Fusion-like editor: toolbar, timeline, feature forms, picking faces and edges, and a code pane (the default) |
 | `cad-model-viewer` | the 3D view alone, for embedding |
-| `cad-model-code` | the code editor alone, without a kernel (unlisted) |
 
 ## Usage
 

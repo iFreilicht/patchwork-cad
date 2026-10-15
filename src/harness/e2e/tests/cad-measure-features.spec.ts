@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, CODE_TOOL, M1_SOURCE, cadView, createModel, exampleSource, replaceSource } from "../cad.ts";
+import { CAD_MODULES, M1_SOURCE, cadView, createModel, exampleSource, openCode, replaceSource } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -20,7 +20,8 @@ test("rebuild cost of models written with the feature library", async ({ users, 
   if (!user) throw new Error("users(1) returned no user");
   const { page } = user;
   await bootToFrame(page);
-  await createModel(page, CODE_TOOL);
+  await createModel(page);
+  await openCode(page);
   await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
 
   // Alternates between two variants, so that every edit is a real change.
