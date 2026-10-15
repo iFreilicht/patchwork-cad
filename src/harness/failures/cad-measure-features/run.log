@@ -1,0 +1,231 @@
+path '/Users/feuh/repos/patchwork-cad/src/harness' does not contain a 'flake.nix', searching up
+fetching git input 'git+file:///Users/feuh/repos/patchwork-cad'
+warning: Git tree '/Users/feuh/repos/patchwork-cad' is dirty
+
+Running 6 tests using 1 worker
+
+  ✘  1 [chromium] › e2e/tests/cad-measure-features.spec.ts:17:1 › rebuild cost of models written with the feature library (10.0m)
+{
+  "browser": "chromium",
+  "loads": {
+    "default cold": {
+      "shown": {
+        "median": 1336,
+        "min": 1312,
+        "max": 1418,
+        "n": 5
+      },
+      "compile": {
+        "median": 103,
+        "min": 85,
+        "max": 140,
+        "n": 5
+      },
+      "instantiate": {
+        "median": 65,
+        "min": 62,
+        "max": 70,
+        "n": 5
+      },
+      "wasmFetched": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "cached": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "default reload": {
+      "shown": {
+        "median": 967,
+        "min": 940,
+        "max": 1016,
+        "n": 5
+      },
+      "compile": {
+        "median": 46,
+        "min": 37,
+        "max": 52,
+        "n": 5
+      },
+      "instantiate": {
+        "median": 64,
+        "min": 60,
+        "max": 66,
+        "n": 5
+      },
+      "wasmFetched": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "cached": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "persistent cold": {
+      "shown": {
+        "median": 1495,
+        "min": 1394,
+        "max": 1810,
+        "n": 5
+      },
+      "compile": {
+        "median": 205,
+        "min": 182,
+        "max": 280,
+        "n": 5
+      },
+      "instantiate": {
+        "median": 71,
+        "min": 66,
+        "max": 83,
+        "n": 5
+      },
+      "wasmFetched": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "cached": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    },
+    "persistent reload": {
+      "shown": {
+        "median": 943,
+        "min": 940,
+        "max": 1300,
+        "n": 5
+      },
+      "compile": {
+        "median": 50,
+        "min": 42,
+        "max": 61,
+        "n": 5
+      },
+      "instantiate": {
+        "median": 64,
+        "min": 59,
+        "max": 86,
+        "n": 5
+      },
+      "wasmFetched": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "cached": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "persistent restart": {
+      "shown": {
+        "median": 1328,
+        "min": 1183,
+        "max": 1407,
+        "n": 5
+      },
+      "compile": {
+        "median": 46,
+        "min": 35,
+        "max": 56,
+        "n": 5
+      },
+      "instantiate": {
+        "median": 61,
+        "min": 61,
+        "max": 65,
+        "n": 5
+      },
+      "wasmFetched": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "cached": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    }
+  },
+  "rerun": {
+    "seed": {
+      "total": {
+        "median": 29,
+        "min": 26,
+        "max": 70,
+        "n": 10
+      },
+      "build": {
+        "median": 29,
+        "min": 26,
+        "max": 69,
+        "n": 10
+      }
+    },
+    "m1": {
+      "total": {
+        "median": 35,
+        "min": 31,
+        "max": 95,
+        "n": 10
+      },
+      "build": {
+        "median": 34,
+        "min": 31,
+        "max": 94,
+        "n": 10
+      }
+    }
+  },
+  "bursts": [
+    {
+      "delay": 40,
+      "keys": 34,
+      "requested": 34,
+      "executed": 34,
+      "typedMs": 1715,
+      "settledMs": 1731
+    },
+    {
+      "delay": 10,
+      "keys": 34,
+      "requested": 34,
+      "executed": 18,
+      "typedMs": 672,
+      "settledMs": 790
+    }
+  ]
+}
+  ✓  2 [chromium] › e2e/tests/cad-measure.spec.ts:38:1 › CAD load, re-run and burst timings (49.3s)
