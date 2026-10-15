@@ -4,7 +4,7 @@ import { firefoxLaunchOptions } from "./firefox.ts";
 export default defineConfig({
   testDir: "./tests",
   outputDir: "../test-results",
-  timeout: 300_000,
+  timeout: 120_000,
   expect: { timeout: 15_000 },
   // Every failure must be explained, so retries would only hide flakes.
   retries: 0,
@@ -14,6 +14,8 @@ export default defineConfig({
     // Saving a trace of a booted Patchwork page stalls until the test
     // timeout (Playwright 1.59.1, reproduced without harness fixtures).
     trace: "off",
+    // A click or keypress waits for its element at most this long, so a missing element fails fast instead of at the test timeout.
+    actionTimeout: 5_000,
     screenshot: "only-on-failure",
     serviceWorkers: "allow",
   },
