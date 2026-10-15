@@ -22,6 +22,7 @@
 - Add a "Move" feature that creates a copy of a body at a different location. Translating by a set number of mm in X, Y or Z axis is enough for now.
 - Allow disabling tangent selection of edges when creating fillet or chamfer
 - Allow toggling visibility of sketches
+- A build timer and an abort button in the status bar, in place of the fixed 10 s kernel timeout ([08](08-module-evaluation.md#conclusions)), for very complex models
 - Per-feature caching ([review, risk 4](01-basic-idea-and-literature.md#problems-and-risks)); not needed for PoC 2's parts ([07](07-poc-modelling-ui.md#rebuild-performance))
 - Licensing obligations for the OCCT wasm build (risk 6)
 - Embedding: decal, reference in a sketch, annotation (item 7)

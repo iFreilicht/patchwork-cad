@@ -425,6 +425,11 @@
   color: var(--cad-model-fg);
 }
 
+.cad-editor__input--invalid {
+  border-color: var(--cad-model-danger);
+  outline-color: var(--cad-model-danger);
+}
+
 .cad-editor__refs,
 .cad-editor__profile {
   display: flex;

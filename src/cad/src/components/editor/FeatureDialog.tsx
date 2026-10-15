@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show, type JSX } from "solid-js";
 import { schemas, type ParamSpec } from "@patchwork-cad/features/schema";
-import type { Expression } from "acorn";
+import { parseExpressionAt, type Expression } from "acorn";
 import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
@@ -8,31 +8,65 @@ import { addToReturn, elements, ensureImports, removeElement, removeProp, replac
 import type { FeatureEntry } from "../../model/timeline.ts";
 import { schemaOf, type Editor } from "./state.ts";
 
+/** Whether `text` is one expression that can replace a parameter's value, e.g. not `1,` or `1 // x`, which would break the code around it. */
+function isExpression(text: string): boolean {
+  try {
+    // As in the module it goes into, e.g. no legacy octal `01`.
+    const node = parseExpressionAt(text, 0, { ecmaVersion: "latest", sourceType: "module" });
+    return node.end === text.length && node.type !== "SequenceExpression";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A text field holding a JS expression (research/02, "Parameters are JS expressions"). It commits
- * on Enter or blur, and follows remote changes only while it isn't being edited.
+ * as it is typed, whenever the text is an expression, and follows remote changes only while it
+ * isn't being edited. Other text is marked and never reaches the code; leaving the field drops it,
+ * and Escape restores the value from before the edit. An empty field, only allowed with
+ * `allowEmpty`, commits on Enter or blur.
  */
-function ExpressionInput(props: { value: string; placeholder?: string; label: string; onCommit: (text: string) => void; disabled?: boolean }) {
+function ExpressionInput(props: { value: string; placeholder?: string; label: string; onCommit: (text: string) => boolean; disabled?: boolean; allowEmpty?: boolean }) {
   let input!: HTMLInputElement;
+  const [invalid, setInvalid] = createSignal(false);
+  /** The value when the field got the focus. */
+  let before = "";
   createEffect(() => {
     const value = props.value;
     if (document.activeElement !== input) input.value = value;
   });
-  const commit = () => {
-    if (input.value !== props.value) props.onCommit(input.value.trim());
+  const commit = (text: string, live: boolean) => {
+    const empty = text === "";
+    let valid = empty ? props.allowEmpty === true : isExpression(text);
+    // The edit itself checks that the code still parses with it.
+    if (valid && !(empty && live) && text !== props.value) valid = props.onCommit(text);
+    setInvalid(!valid && !empty);
   };
   return (
     <input
       ref={input}
       class="cad-editor__input"
+      classList={{ "cad-editor__input--invalid": invalid() }}
       aria-label={props.label}
+      aria-invalid={invalid()}
       placeholder={props.placeholder ?? ""}
       disabled={props.disabled}
+      onFocus={() => (before = props.value)}
+      onInput={() => commit(input.value.trim(), true)}
       onKeyDown={(e) => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") input.value = props.value;
+        if (e.key === "Enter") commit(input.value.trim(), false);
+        if (e.key === "Escape") {
+          input.value = before;
+          commit(before, false);
+        }
       }}
-      onBlur={commit}
+      onBlur={() => {
+        commit(input.value.trim(), false);
+        if (invalid() || (input.value.trim() === "" && !props.allowEmpty)) {
+          input.value = props.value;
+          setInvalid(false);
+        }
+      }}
     />
   );
 }
@@ -58,22 +92,22 @@ function propNode(call: FeatureCall, key: string): Expression | undefined {
 const textOf = (source: string, node: { start: number; end: number } | undefined) => (node ? source.slice(node.start, node.end) : "");
 
 /** Edits a value inside the open call's parameter, at `path` below it. */
-function editAt(editor: Editor, param: string, path: readonly Step[], text: string) {
-  editor.editOpen((call, analysis) => {
+function editAt(editor: Editor, param: string, path: readonly Step[], text: string): boolean {
+  return editor.editOpen((call, analysis) => {
     const node = at(propNode(call, param), path);
     if (!node) return [];
     return [{ ...span(node), text }, ...ensureImports(analysis, usedFunctions(text))];
   });
 }
 
-function setParam(editor: Editor, key: string, text: string, optional: boolean) {
-  editor.editOpen((call, analysis) => (text === "" && optional ? removeProp(call, key) : [...setProp(call, key, text), ...ensureImports(analysis, usedFunctions(text))]));
+function setParam(editor: Editor, key: string, text: string, optional: boolean): boolean {
+  return editor.editOpen((call, analysis) => (text === "" && optional ? removeProp(call, key) : [...setProp(call, key, text), ...ensureImports(analysis, usedFunctions(text))]));
 }
 
 function ScalarField(props: FieldProps) {
   const value = () => textOf(props.source, propNode(props.entry.call, props.name));
   const def = props.spec.kind === "length" || props.spec.kind === "number" ? props.spec.default : undefined;
-  return <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />;
+  return <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />;
 }
 
 function ChoiceField(props: FieldProps & { spec: Extract<ParamSpec, { kind: "choice" }> }) {
@@ -197,7 +231,7 @@ function PlaneField(props: FieldProps) {
     return n?.type === "CallExpression" ? textOf(props.source, n.arguments[1]) : "";
   };
   const diagnostic = () => props.entry.trace?.refs.find((d) => d.param === props.name);
-  const setPlane = (plane: string, off: string) =>
+  const setPlane = (plane: string, off: string): boolean =>
     props.editor.editOpen((call, analysis) => [
       ...setProp(call, props.name, `plane(${JSON.stringify(plane)}${off && off !== "0" ? `, ${off}` : ""})`),
       ...removeProp(call, "body"),
@@ -221,7 +255,7 @@ function PlaneField(props: FieldProps) {
         <select class="cad-editor__input" aria-label="Origin plane" disabled={props.disabled} value={name() ?? ""} onChange={(e) => setPlane(e.currentTarget.value, offset())}>
           <For each={PLANES}>{(p) => <option value={p}>{p}</option>}</For>
         </select>
-        <ExpressionInput label="Offset" value={offset()} placeholder="0" disabled={props.disabled} onCommit={(t) => setPlane(name() ?? "XY", t)} />
+        <ExpressionInput label="Offset" value={offset()} placeholder="0" disabled={props.disabled} allowEmpty onCommit={(t) => setPlane(name() ?? "XY", t)} />
       </Show>
       <Show when={!origin()}>
         <button class="cad-editor__button" disabled={props.disabled} onClick={() => setPlane("XY", "")}>

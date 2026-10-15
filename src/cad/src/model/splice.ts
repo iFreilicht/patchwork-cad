@@ -18,6 +18,11 @@ export interface Edit {
   text: string;
 }
 
+/** The text after non-overlapping edits computed against `source`. */
+export function applyToText(source: string, edits: Edit[]): string {
+  return [...edits].sort((a, b) => b.start - a.start).reduce((text, e) => text.slice(0, e.start) + e.text + text.slice(e.end), source);
+}
+
 /** Applies non-overlapping edits computed against the current source, in one change. */
 export function apply(handle: DocHandle<CadModelDoc>, edits: Edit[]): void {
   if (edits.length === 0) return;

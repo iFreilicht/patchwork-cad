@@ -52,6 +52,34 @@ test("the kernel worker restarts without losing builds", async ({ users }) => {
   await expect(cadView(page)).toHaveAttribute("data-init", /compile/);
 });
 
+// A worker that stops answering, here in an endless loop of model code, can't be interrupted: the
+// engine replaces it after a timeout, the build fails with a message, and the next edit builds.
+test("a build that doesn't finish restarts the kernel worker", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await page.addInitScript(() => void ((globalThis as { patchworkCadTimeout?: number }).patchworkCadTimeout = 2000));
+  await bootToFrame(page);
+  await createModel(page);
+  await openCode(page);
+  await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await replaceSource(page, boxes(1));
+  await expect(cadView(page)).toHaveAttribute("data-state", "ready");
+  const box = await vertices(page);
+  const before = await restarts(page);
+
+  await replaceSource(page, boxes(1).replace("return", "while (true) {}\n  return"));
+  await expect(cadView(page)).toHaveAttribute("data-state", "error", { timeout: 10_000 });
+  await expect(page.locator(".cad-model__status")).toContainText("didn't finish within 2 s, so the kernel was restarted");
+  expect(await restarts(page)).toBe(before + 1);
+  // The last good shapes stay.
+  expect(await vertices(page)).toBe(box);
+
+  await replaceSource(page, boxes(2));
+  await expect.poll(() => vertices(page), { timeout: 30_000 }).toBe(2 * box);
+  await expect(cadView(page)).toHaveAttribute("data-state", "ready");
+});
+
 /**
  * Resident memory of all of Playwright's browser processes, in MB. WebKit's
  * content, GPU and networking processes are its development builds

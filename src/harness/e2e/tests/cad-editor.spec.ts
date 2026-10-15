@@ -54,6 +54,62 @@ test("timeline, form edit and edge picking", async ({ users }) => {
   console.log(await modelSource(page));
 });
 
+// Form fields apply as they are typed, while their text is an expression and the code parses with it. Typing -10 into -20 passes
+// through -0: an extrusion by 0 hung the kernel in the cut after it; now it fails alone.
+test("form fields apply as they are typed, and an extrusion by 0 fails alone", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createViaMenu(page, "CAD Model");
+  const view = editorView(page);
+  await expect(view).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  const before = await modelSource(page);
+  const withDistance = (d: string) => before.replace("distance: height", `distance: ${d}`);
+
+  await timelineEntry(page, "plate").click();
+  const distance = dialog(page).getByLabel("Distance", { exact: true });
+  // End doesn't move the caret on macOS hosts, whichever platform the device emulates.
+  const caretToEnd = () => distance.evaluate((el: HTMLInputElement) => el.setSelectionRange(el.value.length, el.value.length));
+  await distance.fill("");
+  await page.keyboard.type("-10");
+  await expect.poll(() => modelSource(page)).toBe(withDistance("-10"));
+  await expect(timelineEntry(page, "fillet1")).toHaveAttribute("data-status", "ok");
+
+  await distance.press("ArrowLeft");
+  await distance.press("Backspace");
+  await expect.poll(() => modelSource(page)).toBe(withDistance("-0"));
+  await expect(timelineEntry(page, "plate")).toHaveAttribute("data-status", "failed");
+  await expect(timelineEntry(page, "plate")).toHaveAttribute("title", /distance: expected a finite length other than 0, got 0/);
+
+  await page.keyboard.type("2");
+  await expect.poll(() => modelSource(page)).toBe(withDistance("-20"));
+  await expect(timelineEntry(page, "plate")).toHaveAttribute("data-status", "ok");
+  await expect(view).toHaveAttribute("data-state", "ready");
+
+  // Text that isn't an expression is marked and stays out of the code; leaving the field drops it.
+  await caretToEnd();
+  await page.keyboard.type("+");
+  await expect(distance).toHaveAttribute("aria-invalid", "true");
+  expect(await modelSource(page)).toBe(withDistance("-20"));
+  await distance.blur();
+  await expect(distance).toHaveValue("-20");
+  await expect(distance).toHaveAttribute("aria-invalid", "false");
+  // Escape restores the value from before the edit.
+  await distance.focus();
+  await caretToEnd();
+  await page.keyboard.type("0");
+  await expect.poll(() => modelSource(page)).toBe(withDistance("-200"));
+  await distance.press("Escape");
+  await expect(distance).toHaveValue("-20");
+  await expect.poll(() => modelSource(page)).toBe(withDistance("-20"));
+  // An expression that the module wouldn't parse, a legacy octal, is invalid, too; the dialog stays.
+  await distance.fill("01");
+  await expect(distance).toHaveAttribute("aria-invalid", "true");
+  expect(await modelSource(page)).toBe(withDistance("-20"));
+  await expect(dialog(page)).toHaveAttribute("data-feature", "plate");
+});
+
 /** A plate with a chamfer around a filleted edge, and an extrusion joined to the body before the chamfer. */
 const branched = `import { sketch, plane, rect, circle, extrude, fillet, edge, chamfer } from "@patchwork-cad/features";
 

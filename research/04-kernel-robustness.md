@@ -9,6 +9,7 @@ What we already know:
 - **Fillet:** OCCT's own docs warn that "there may be instances where the algorithm fails … There is no initial analysis of errors and they only become evident at the construction stage" ([review, risk 5](01-basic-idea-and-literature.md#problems-and-risks)).
 - **Shell:** `MakeThickSolidByJoin` failed on a simple part once a slot split one of its faces ([kernel findings](03-topological-naming.md#kernel-findings)).
 - **History:** fillet and chamfer report inconsistent history (same section).
+- **Hangs:** a boolean with a prism of length 0 never returns: a cut `through` a plate extruded by 0 hangs in `BRepAlgoAPI_Cut` (`replicad-opencascadejs` 1.1.0, Node and all three browsers). `extrude` therefore rejects lengths that are 0 or not finite ([`extrude.test.ts`](../src/features/test/extrude.test.ts)), and the editor replaces a kernel worker that stops answering ([08](08-module-evaluation.md#conclusions)).
 
 ## Approach
 

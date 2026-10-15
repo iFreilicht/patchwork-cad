@@ -10,7 +10,7 @@ import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from
 import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
 import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Relation } from "../../model/deps.ts";
-import { apply, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
+import { apply, applyToText, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
 import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { FeatureTrace } from "../../kernel/protocol.ts";
@@ -38,8 +38,11 @@ export interface Editor {
   openFeature(entry: FeatureEntry | undefined): void;
   pickTarget: Accessor<PickTarget | undefined>;
   setPickTarget(target: PickTarget | undefined): void;
-  /** Edits the open feature's call; `edit` gets the call as it is in the current source. */
-  editOpen(edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]): void;
+  /**
+   * Edits the open feature's call; `edit` gets the call as it is in the current source. An edit
+   * after which the code wouldn't parse, e.g. a field's `01`, isn't made: whether it was is returned.
+   */
+  editOpen(edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]): boolean;
   /** Adds a feature with default parameters and opens it. */
   insert(type: InsertableType): void;
   deleteOpen(): void;
@@ -191,7 +194,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
 
   const editOpen = (edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]) => {
     const c = current();
-    if (c) apply(handle, edit(c.call, c.analysis, c.source));
+    if (!c) return false;
+    const edits = edit(c.call, c.analysis, c.source);
+    if (tryAnalyze(applyToText(c.source, edits)).error !== undefined) return false;
+    apply(handle, edits);
+    return true;
   };
 
   const insert = (type: InsertableType) => {
