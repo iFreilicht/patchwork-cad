@@ -16,7 +16,8 @@
 
 - Add timeline marker to enable creating features before existing features (consider implications of commenting out vs. just changing what gets returned. Might be complex enough for a research question)
 - Allow moving features in the timeline until directly after the feature they depend on with drag-and-drop
-- Always highlight face or edge when hovering over it 
+- Always highlight face or edge when hovering over it
+- Highlight features when hovering over them in the code or in the timeline. Decide whether features after the current timeline marker should be highlightable as well. Decide how to highlight which kind of feature; this might depend on OCCT capabilities
 - Collaboration features (seeing other people's cursors, highlights and selections in their respective color)
 - Allow adding comments on code, faces, edges and features. Look at other tools to see how to handle comments that reference deleted objects
 - Always display unused sketches (maybe by also returning them from the model function like "unused" features? Just a thought)
