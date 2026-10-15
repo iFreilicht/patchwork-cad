@@ -20,8 +20,6 @@
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
     --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
     --cad-viewcube-size: 96px;
-    /* The cube and its buttons. */
-    --cad-viewcube-width: calc(var(--cad-viewcube-size) + 28px);
   }
 }
 
@@ -58,18 +56,18 @@
   height: 100%;
 }
 
+/* The cube leaves its square's corners free, so the buttons sit there; the square's own margin is the cube's distance from the edges. */
 .cad-model .cad-viewcube {
   position: absolute;
-  top: var(--studio-space-sm, 0.5rem);
-  right: var(--studio-space-sm, 0.5rem);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--studio-space-2xs, 4px);
+  top: var(--studio-space-2xs, 4px);
+  right: var(--studio-space-2xs, 4px);
+  width: var(--cad-viewcube-size);
+  height: var(--cad-viewcube-size);
 }
 
 .cad-model .cad-viewcube__cube {
-  width: var(--cad-viewcube-size);
-  height: var(--cad-viewcube-size);
+  width: 100%;
+  height: 100%;
   cursor: pointer;
 }
 
@@ -84,27 +82,32 @@
   font-size: 12px;
 }
 
-.cad-model .cad-viewcube__buttons {
-  display: flex;
-  flex-direction: column;
-  gap: var(--studio-space-2xs, 4px);
-}
-
 .cad-model .cad-viewcube__button {
+  position: absolute;
+  z-index: 1;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  border: 1px solid var(--cad-model-border);
-  border-radius: 4px;
-  background: var(--cad-model-bg);
+  border: none;
+  background: none;
   color: var(--cad-model-fg);
   cursor: pointer;
 }
 
+.cad-model .cad-viewcube__button--home {
+  top: 0;
+  left: 0;
+}
+
+.cad-model .cad-viewcube__button--projection {
+  right: 0;
+  bottom: 0;
+}
+
+.cad-model .cad-viewcube__button:hover,
 .cad-model .cad-viewcube__button[aria-pressed="true"] {
-  border-color: var(--cad-model-accent-text);
   color: var(--cad-model-accent-text);
 }
 
@@ -141,16 +144,34 @@
   background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
 }
 
-.cad-model--view-doc {
+.cad-view-doc__stage {
   position: relative;
+  min-height: 0;
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 }
 
-.cad-view-doc__actions {
+/* As translucent as the ViewCube (ViewCube.ts, OPACITY), so they hide less of the model. */
+.cad-view-doc__save,
+.cad-view-doc__open {
   position: absolute;
-  top: var(--studio-space-sm, 0.5rem);
   left: var(--studio-space-sm, 0.5rem);
-  display: flex;
-  gap: var(--studio-space-2xs, 4px);
+  opacity: 0.7;
+}
+
+.cad-view-doc__save:hover,
+.cad-view-doc__save:focus-visible,
+.cad-view-doc__open:hover,
+.cad-view-doc__open:focus-visible {
+  opacity: 1;
+}
+
+.cad-view-doc__save {
+  top: var(--studio-space-sm, 0.5rem);
+}
+
+.cad-view-doc__open {
+  bottom: var(--studio-space-sm, 0.5rem);
 }
 
 /* ---------- WYSIWYG editor ---------- */
@@ -225,7 +246,7 @@
   /* Left, as in Onshape, clear of the ViewCube at the top right. */
   left: var(--studio-space-sm, 0.5rem);
   box-sizing: border-box;
-  width: min(22rem, calc(100% - var(--cad-viewcube-width) - 3 * var(--studio-space-sm, 0.5rem)));
+  width: min(22rem, calc(100% - var(--cad-viewcube-size) - 3 * var(--studio-space-sm, 0.5rem)));
   max-height: calc(100% - 1rem);
   overflow: auto;
   display: flex;

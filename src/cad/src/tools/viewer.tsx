@@ -63,14 +63,14 @@ function SavedView(props: { handle: DocHandle<CadModelViewDoc>; doc: () => CadMo
   const openModel = () => root.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url: props.model.url }, bubbles: true, composed: true }));
   return (
     <div class="cad-model cad-model--viewer cad-model--view-doc" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} view={props.doc()?.camera} onViewChange={setCurrent} createView={viewsOf(props.model)} />
-      <div class="cad-view-doc__actions">
+      <div class="cad-view-doc__stage">
+        <Viewer shapes={model.shapes()} view={props.doc()?.camera} onViewChange={setCurrent} createView={viewsOf(props.model)} />
         <Show when={changed()}>
-          <button class="cad-editor__button" onClick={save}>
+          <button class="cad-editor__button cad-view-doc__save" onClick={save}>
             Save view
           </button>
         </Show>
-        <button class="cad-editor__button" onClick={openModel}>
+        <button class="cad-editor__button cad-view-doc__open" onClick={openModel}>
           Open model
         </button>
       </div>

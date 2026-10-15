@@ -592,18 +592,17 @@ export function Viewer(props: ViewerProps) {
     <div class="cad-model__viewer" ref={container} data-hovered={hovered() ? `${hovered()!.body}:${hovered()!.kind}:${hovered()!.index}` : ""} data-projection={projection()}>
       <canvas ref={canvas} />
       <div class="cad-viewcube">
-        <div class="cad-viewcube__buttons">
-          <button class="cad-viewcube__button" aria-label="Home view" title="Home view" onClick={() => home()}>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5" />
-            </svg>
-          </button>
-          <button class="cad-viewcube__button" aria-label="Orthographic" title="Orthographic" aria-pressed={projection() === "orthographic"} onClick={() => toggleProjection()}>
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M3 5.5 8 3 13 5.5V11L8 13.5 3 11ZM3 5.5 8 8 13 5.5M8 8V13.5" />
-            </svg>
-          </button>
-        </div>
+        <button class="cad-viewcube__button cad-viewcube__button--home" aria-label="Home view" title="Home view" onClick={() => home()}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5" />
+          </svg>
+        </button>
+        <button class="cad-viewcube__button cad-viewcube__button--projection" aria-label="Orthographic" title="Orthographic" aria-pressed={projection() === "orthographic"} onClick={() => toggleProjection()}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M1.5 5.5H4L5.5 3.5H10.5L12 5.5H14.5V13H1.5Z" />
+            <circle cx="8" cy="9" r="2.5" />
+          </svg>
+        </button>
         <div class="cad-viewcube__cube" ref={cubeElement} draggable={props.createView ? "true" : undefined} />
       </div>
     </div>

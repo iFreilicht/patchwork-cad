@@ -6,6 +6,8 @@ import * as THREE from "three";
  */
 export type Region = [number, number, number];
 
+const OPACITY = 0.7;
+
 /** The share of a face's half-width that belongs to the edge and corner regions around it. */
 const BORDER = 0.3;
 
@@ -70,7 +72,7 @@ export interface ViewCubeColors {
  */
 export class ViewCube {
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.OrthographicCamera(-1.8, 1.8, 1.8, -1.8, 0.1, 10);
+  readonly camera = new THREE.OrthographicCamera(-1.9, 1.9, 1.9, -1.9, 0.1, 10);
   readonly #regions = new Map<string, THREE.Mesh[]>();
   readonly #pickable: THREE.Mesh[] = [];
   readonly #material: THREE.MeshBasicMaterial;
@@ -80,8 +82,10 @@ export class ViewCube {
   #hovered: string | undefined;
 
   constructor(colors: ViewCubeColors) {
-    this.#material = new THREE.MeshBasicMaterial({ color: colors.face, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-    this.#hoverMaterial = new THREE.MeshBasicMaterial({ color: colors.hover, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+    // Translucent, so that the cube doesn't hide the model behind it. Only front faces are drawn, so the back of the cube doesn't show through.
+    const face = (color: THREE.Color) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: OPACITY, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+    this.#material = face(colors.face);
+    this.#hoverMaterial = face(colors.hover);
     this.#disposables.push(this.#material, this.#hoverMaterial);
 
     for (const region of REGIONS) {
@@ -107,8 +111,11 @@ export class ViewCube {
 
     const box = new THREE.BoxGeometry(2, 2, 2);
     const edges = new THREE.EdgesGeometry(box);
-    const lineMaterial = new THREE.LineBasicMaterial({ color: colors.line });
-    this.scene.add(new THREE.LineSegments(edges, lineMaterial));
+    // Transparent too, so that it's drawn after the faces, whose depth hides the back edges.
+    const lineMaterial = new THREE.LineBasicMaterial({ color: colors.line, transparent: true });
+    const outline = new THREE.LineSegments(edges, lineMaterial);
+    outline.renderOrder = 2;
+    this.scene.add(outline);
     this.#disposables.push(box, edges, lineMaterial);
 
     for (const face of FACES) {
