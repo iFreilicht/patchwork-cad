@@ -311,6 +311,9 @@ function Field(props: FieldProps): JSX.Element {
       return <PlaneField {...props} />;
     case "profile":
       return <ProfileField {...props} />;
+    case "code":
+      // Code is edited in the code pane (research/11): body() entries have no dialog.
+      return null;
   }
 }
 
@@ -325,6 +328,17 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
   const schema = () => schemaOf(props.entry.type);
   const disabled = () => props.editor.syntaxError() !== undefined;
   const [confirmDelete, setConfirmDelete] = createSignal(false);
+  /**
+   * When the feature failed because a parameter holds a replicad shape, the variable and the Custom
+   * Script that makes it, which "Wrap in body()" can turn into a body (research/11).
+   */
+  const wrappable = () => {
+    const param = /^(\w+): a replicad shape, not a feature body/.exec(props.entry.trace?.message ?? "")?.[1];
+    const value = props.entry.call.props?.find((p) => p.key === param)?.node;
+    if (value?.type !== "Identifier") return undefined;
+    const index = props.editor.graph()?.declaredBy.get(value.name);
+    return index !== undefined && props.editor.timeline().entries[index]?.kind === "script" ? { name: value.name, index } : undefined;
+  };
   return (
     <section class="cad-editor__dialog" aria-label={`${schema().label} ${props.entry.name}`} data-feature={props.entry.name}>
       <header class="cad-editor__dialog-header">
@@ -337,6 +351,16 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
         <p class="cad-editor__problem" data-status={props.entry.trace!.status}>
           {props.entry.trace!.status === "broken" ? "Broken reference: " : "Failed: "}
           {props.entry.trace!.message}
+          <Show when={wrappable()}>
+            {(w) => (
+              <>
+                {" "}
+                <button class="cad-editor__link" disabled={disabled()} onClick={() => void props.editor.wrap(w().index).then(props.editor.setNotice)}>
+                  Wrap {w().name} in body()
+                </button>
+              </>
+            )}
+          </Show>
         </p>
       </Show>
       <Show when={props.entry.trace?.unused}>

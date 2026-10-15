@@ -59,7 +59,9 @@ export function prepare(source: string): string {
     edits.push({ start: node.start, end: node.end, text: bindings.join(" ") + "\n".repeat(lines - 1) });
   }
   for (const call of analysis.calls) {
-    const meta = call.variable ? `{ name: ${JSON.stringify(call.variable)}, line: ${call.line}, variable: true }` : `{ line: ${call.line} }`;
+    // A destructured body() names its bodies by the variables (research/11).
+    const names = call.destructured ? `, names: ${JSON.stringify(call.variables)}` : "";
+    const meta = call.variable ? `{ name: ${JSON.stringify(call.variable)}, line: ${call.line}, variable: true${names} }` : `{ line: ${call.line} }`;
     const [first, second] = call.args;
     // An explicit second argument (e.g. a name in a loop) wins over the injected line.
     if (second) {

@@ -62,13 +62,20 @@ let returned: unknown;
 /** The last successful build's trace, with its bodies, for rollback and picking. */
 let lastTrace: readonly TraceEntry[] = [];
 
-/** Wraps a model module so that its `main` result is recorded. */
+/** A body without faces, which a failed feature leaves behind; there is nothing to mesh. */
+const isEmptyBody = (v: unknown) => v instanceof features.Body && v.topo.faces.length === 0;
+
+/** Wraps a model module so that its `main` result is recorded, without empty bodies. */
 function recordMain(module: Record<string, unknown>): Record<string, unknown> {
   const main = module["default"];
   if (typeof main !== "function") return module;
   return {
     ...module,
-    default: (...args: unknown[]) => (returned = (main as (...a: unknown[]) => unknown)(...args)),
+    default: (...args: unknown[]) => {
+      const value = (main as (...a: unknown[]) => unknown)(...args);
+      returned = Array.isArray(value) ? value.filter((v) => !isEmptyBody(v)) : isEmptyBody(value) ? [] : value;
+      return returned;
+    },
   };
 }
 /**
@@ -131,8 +138,10 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body> = ne
     refs: t.refs,
     before: t.before.map((b) => b.name),
     result: t.result?.name,
+    results: t.results.map((b) => b.name),
+    names: t.names,
     outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
-    unused: t.result !== undefined && unused.has(t.result),
+    unused: t.results.length > 0 && t.results.every((b) => unused.has(b)),
     ms: t.ms,
     namingMs: t.namingMs,
   }));
@@ -140,7 +149,7 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body> = ne
 /** Bodies of a trace by name: results, and whatever was visible before each feature. */
 function bodiesOf(trace: readonly TraceEntry[]): Map<string, features.Body> {
   const out = new Map<string, features.Body>();
-  for (const t of trace) for (const b of [...t.before, ...(t.result ? [t.result] : [])]) out.set(b.name, b);
+  for (const t of trace) for (const b of [...t.before, ...t.results, ...t.after]) out.set(b.name, b);
   return out;
 }
 
@@ -232,7 +241,7 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
   if (request.type === "rollback") {
     const entry = lastTrace.find((t) => t.name === request.feature);
     if (!entry) throw new Error(`No feature ${request.feature} in the last build`);
-    post({ type: "rolledBack", id: request.id, shapes: entry.before.map(meshBody) });
+    post({ type: "rolledBack", id: request.id, shapes: (request.after ? entry.after : entry.before).filter((b) => b.topo.faces.length > 0).map(meshBody) });
   } else {
     const body = bodies.get(request.body);
     if (!body) throw new Error(`No body ${request.body} in the last build`);

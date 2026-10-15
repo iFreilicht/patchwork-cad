@@ -364,6 +364,8 @@ test("when another user moves the entry after the marker, the marker stays betwe
   await bootToFrame(b.page, docPathWith(a.page));
   await expect(timelineEntry(b.page, "extrude2")).toBeVisible({ timeout: 120_000 });
   await hideSidebars(b.page);
+  // Built, so that B's timeline has settled before the drag measures it.
+  await expect(editorView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   // B moves fillet1, which A's marker is anchored to, after chamfer1.
   await dragTo(b.page, timelineEntry(b.page, "fillet1"), 6);
   await expect.poll(() => names(a.page)).toEqual(["sketch1", "extrude1", "sketch2", "notch", "chamfer1", "fillet1", "sketch3", "extrude2"]);

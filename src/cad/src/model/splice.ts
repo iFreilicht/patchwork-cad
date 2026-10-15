@@ -9,6 +9,7 @@ import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
 import { FEATURES_MODULE, type Analysis, type FeatureCall, type Prop, type Span } from "./analyze.ts";
 import { graph, inputOf as consumedInput, type Graph } from "./deps.ts";
+import { span } from "./nodes.ts";
 import type { FeatureEntry, Timeline } from "./timeline.ts";
 
 export interface Edit {
@@ -99,7 +100,7 @@ export function ensureImports(analysis: Analysis, names: readonly string[]): Edi
 export const usedFunctions = (code: string): string[] =>
   ["sketch", "extrude", "fillet", "chamfer", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
 
-function indentOf(source: string, offset: number): string {
+export function indentOf(source: string, offset: number): string {
   const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
   return /^[ \t]*/.exec(source.slice(lineStart))![0];
 }
@@ -159,13 +160,13 @@ function inputOf(source: string, call: FeatureCall): string | undefined {
 }
 
 /** The whole lines a span covers, with the line break after them. */
-function lines(source: string, span: Span): Span {
+export function lines(source: string, span: Span): Span {
   const lineEnd = source.indexOf("\n", span.end);
   return { start: source.lastIndexOf("\n", span.start - 1) + 1, end: lineEnd < 0 ? span.end : lineEnd + 1 };
 }
 
 /** Replaces an identifier; a shorthand property (`{ body }`) keeps its key (`{ body: fillet1 }`). */
-const replaceIdentifier = (span: Span, text: string, shorthand: string | undefined): Edit => ({ start: span.start, end: span.end, text: shorthand ? `${shorthand}: ${text}` : text });
+export const replaceIdentifier = (span: Span, text: string, shorthand: string | undefined): Edit => ({ start: span.start, end: span.end, text: shorthand ? `${shorthand}: ${text}` : text });
 
 /**
  * Deletes a feature statement. Features that used its body (`body:`, `target:`) and the return use
@@ -175,8 +176,11 @@ const replaceIdentifier = (span: Span, text: string, shorthand: string | undefin
 export function deleteFeature(source: string, analysis: Analysis, entry: FeatureEntry): Edit[] {
   const edits: Edit[] = [{ ...lines(source, entry.span), text: "" }];
   const input = inputOf(source, entry.call);
+  const returned = returnedNames(analysis);
+  // Without an input to use instead (a new extrude, a body()), its bodies leave the result.
+  const leave = !input && returned && returned.names.some((n) => entry.names.includes(n));
   walk(analysis.program as Program, (node, ancestors) => {
-    if (node.type !== "Identifier" || node.name !== entry.name || node.start < entry.span.end) return;
+    if (node.type !== "Identifier" || !entry.names.includes(node.name) || node.start < entry.span.end) return;
     const parent = ancestors[ancestors.length - 1];
     if (parent?.type === "MemberExpression" && parent.property === node && !parent.computed) return;
     if (parent?.type === "Property" && parent.key === node && !parent.computed) return;
@@ -184,10 +188,12 @@ export function deleteFeature(source: string, analysis: Analysis, entry: Feature
     const shorthand = parent?.type === "Property" && parent.shorthand ? key : undefined;
     const asValue = key === "body" || key === "target";
     const inReturn = ancestors.some((a) => a.type === "ReturnStatement");
-    if (asValue || inReturn) {
-      if (input) edits.push(replaceIdentifier(node, input, shorthand));
-    } else edits.push(replaceIdentifier(node, `ref.${entry.name}`, shorthand));
+    if (inReturn && leave) return;
+    // Users get its input; without one, `ref.<name>`, which fails the user alone instead of throwing a ReferenceError.
+    if ((asValue || inReturn) && input) edits.push(replaceIdentifier(node, input, shorthand));
+    else edits.push(replaceIdentifier(node, `ref.${node.name}`, shorthand));
   });
+  if (leave && returned) edits.push({ ...span(returned.node), text: printReturn(returned.names.filter((n) => !entry.names.includes(n))) });
   if (edits.some((e) => e.text.startsWith("ref."))) edits.push(...ensureImports(analysis, ["ref"]));
   return edits;
 }

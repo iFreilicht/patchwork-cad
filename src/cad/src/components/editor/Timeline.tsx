@@ -1,12 +1,13 @@
 import { createEffect, createSignal, For, Index, Match, onCleanup, Show, Switch, type JSX } from "solid-js";
 import { schemas } from "@patchwork-cad/features/schema";
 import type { FeatureTrace } from "../../kernel/protocol.ts";
+import type { Span } from "../../model/analyze.ts";
 import type { Entry, FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { Editor } from "./state.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
-const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E" };
+const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", body: "◆\uFE0E" };
 
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);
@@ -16,21 +17,30 @@ const UNUSED = "\nUnused: no later feature uses its result, and the model doesn'
 /** Attributes and handlers every timeline entry gets from the timeline: position, drag and highlight state. */
 type ItemProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined>;
 
-function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemProps }) {
+/**
+ * A feature statement. Selecting it opens its dialog; a body() (research/11) has no form, so
+ * selecting it opens its code.
+ */
+function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemProps; onOpenCode: (span: Span) => void }) {
   const label = () => schemas[props.entry.type].label;
+  const names = () => props.entry.names.join(", ");
   return (
     <button
       {...props.item}
       class="cad-editor__entry"
       data-kind="feature"
+      data-type={props.entry.type}
       data-name={props.entry.name}
       data-status={status(props.entry.trace)}
       aria-pressed={props.editor.open()?.name === props.entry.name}
-      title={`${label()} ${props.entry.name}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
-      onClick={() => props.editor.openFeature(props.editor.open()?.name === props.entry.name ? undefined : props.entry)}
+      title={`${label()} ${names()}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
+      onClick={() => {
+        if (props.entry.type === "body") return props.onOpenCode(props.entry.span);
+        props.editor.openFeature(props.editor.open()?.name === props.entry.name ? undefined : props.entry);
+      }}
     >
       <span class="cad-editor__glyph">{GLYPHS[props.entry.type]}</span>
-      <span>{props.entry.name}</span>
+      <span>{names()}</span>
     </button>
   );
 }
@@ -39,7 +49,7 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
  * Code the timeline doesn't recognize as features (research/02, "Custom Script"). It lists the
  * feature calls the last build ran inside it, which is how references into it can be followed.
  */
-function ScriptItem(props: { entry: ScriptEntry; onOpen: (entry: ScriptEntry) => void; item: ItemProps }) {
+function ScriptItem(props: { entry: ScriptEntry; onOpen: (span: Span) => void; item: ItemProps }) {
   const broken = () => props.entry.features.find((f) => status(f) !== "ok");
   return (
     <button
@@ -49,7 +59,7 @@ function ScriptItem(props: { entry: ScriptEntry; onOpen: (entry: ScriptEntry) =>
       data-lines={props.entry.lines.join("-")}
       data-status={broken() ? status(broken()) : "ok"}
       title={`Custom Script, lines ${props.entry.lines.join("–")}`}
-      onClick={() => props.onOpen(props.entry)}
+      onClick={() => props.onOpen(props.entry.span)}
     >
       <span class="cad-editor__glyph">{"{ }"}</span>
       <span>
@@ -92,7 +102,7 @@ interface Drop {
  * them within the range their dependencies allow ("Reordering"); hovering, dragging or opening one
  * marks what it depends on and what depends on it.
  */
-export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEntry) => void }) {
+export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void }) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -103,6 +113,93 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
   /** Where the marker is being dragged to. */
   const [markerDrag, setMarkerDrag] = createSignal<number>();
   const markerAt = () => markerDrag() ?? editor.marker();
+
+  /** The open context menu: whose, and where it was asked for. */
+  const [menu, setMenu] = createSignal<{ index: number; x: number; y: number }>();
+  /** The entry that has the keyboard focus. */
+  const [keyboard, setKeyboard] = createSignal<number>();
+  /** The Custom Script or body() last selected, which has no dialog to show that it is. */
+  const [picked, setPicked] = createSignal<number>();
+  /**
+   * The selected entry, which shows the ⋯ button of its context menu: the one whose menu is open,
+   * that has the keyboard focus, or that was selected, a feature by its open dialog.
+   */
+  const active = () => {
+    const open = editor.timeline().entries.findIndex((e) => e === editor.open());
+    return menu()?.index ?? keyboard() ?? picked() ?? (open < 0 ? undefined : open);
+  };
+  // Using the pointer ends a selection by keyboard focus, and selecting anything else unselects a
+  // Custom Script or a body().
+  const unpick = (event: PointerEvent) => {
+    const target = event.target as Element | null;
+    if (!target?.closest(".cad-editor__more, .cad-editor__menu")) setKeyboard(undefined);
+    if (!target?.closest(".cad-editor__entry, .cad-editor__more, .cad-editor__menu")) setPicked(undefined);
+  };
+  document.addEventListener("pointerdown", unpick, true);
+  onCleanup(() => document.removeEventListener("pointerdown", unpick, true));
+  /** The variable being renamed in place. */
+  const [renaming, setRenaming] = createSignal<{ index: number; from: string }>();
+  /** An entry whose deletion waits for a second Delete. */
+  let pendingDelete: number | undefined;
+  const entryAt = (index: number) => editor.timeline().entries[index];
+  const entryLabel = (index: number) => {
+    const e = entryAt(index);
+    return !e ? "" : e.kind === "feature" ? e.names.join(", ") : `the Custom Script at lines ${e.lines.join("–")}`;
+  };
+  const entryElement = (index: number) => nav.querySelector<HTMLElement>(`.cad-editor__entry[data-index="${index}"]`);
+  const openMenu = (index: number, x: number, y: number) => setMenu({ index, x, y });
+  /** Closes the menu, and gives the focus back to its entry if it was operated with the keyboard. */
+  const closeMenu = (refocus: boolean) => {
+    const m = menu();
+    setMenu(undefined);
+    if (refocus && m) entryElement(m.index)?.focus();
+  };
+  const startRename = (index: number, from: string) => void setRenaming({ index, from });
+  const endRename = (index: number) => {
+    setRenaming(undefined);
+    queueMicrotask(() => entryElement(index)?.focus());
+  };
+  /** Runs an action of the editor and shows why it didn't happen, if it didn't. */
+  const report = (action: Promise<string | undefined>) => void action.then(editor.setNotice);
+
+  /** The context menu's actions for an entry: secondary ones; selecting the entry opens it. */
+  const menuItems = (index: number): MenuItem[] => {
+    const e = entryAt(index);
+    if (!e) return [];
+    const items: MenuItem[] = [];
+    if (e.kind === "feature" && e.type !== "body") items.push({ label: "Edit", run: () => editor.openFeature(e) });
+    items.push({ label: "Edit code", run: () => props.onOpenCode(e.span) });
+    items.push({ label: "Roll back to here", run: () => editor.setMarker(index + 1) });
+    if (e.kind === "feature") for (const name of e.names) items.push({ label: e.names.length > 1 ? `Rename ${name}` : "Rename", run: () => startRename(index, name) });
+    if (e.kind === "script") items.push({ label: "Wrap in body()", run: () => report(editor.wrap(index)) });
+    if (e.kind === "feature" && e.type === "body") items.push({ label: "Unwrap", run: () => report(editor.unwrap(index)) });
+    items.push({ label: "Delete", confirm: `Delete ${entryLabel(index)}`, danger: true, run: () => report(editor.remove(index)) });
+    return items;
+  };
+
+  /** Keys on a focused entry: its context menu, F2 to rename, Delete twice to delete. */
+  const entryKeys = (index: number, event: KeyboardEvent & { currentTarget: HTMLElement }) => {
+    const e = entryAt(index);
+    if (!e) return;
+    if (event.key !== "Delete") pendingDelete = undefined;
+    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+      event.preventDefault();
+      const r = event.currentTarget.getBoundingClientRect();
+      openMenu(index, r.left, r.top);
+    } else if (event.key === "F2" && e.kind === "feature") {
+      event.preventDefault();
+      startRename(index, e.name);
+    } else if (event.key === "Delete") {
+      event.preventDefault();
+      if (pendingDelete === index) {
+        pendingDelete = undefined;
+        report(editor.remove(index));
+      } else {
+        pendingDelete = index;
+        editor.setNotice(`Press Delete again to delete ${entryLabel(index)}.`);
+      }
+    }
+  };
 
   const entryElements = () => [...nav.querySelectorAll<HTMLElement>(".cad-editor__entry[data-index]")];
   const middle = (el: Element) => {
@@ -159,9 +256,24 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
     },
     onPointerEnter: () => editor.setHovered(index),
     onPointerLeave: () => editor.setHovered(undefined),
-    onFocus: () => editor.setHovered(index),
-    onBlur: () => editor.setHovered(undefined),
+    onFocus: (event) => {
+      editor.setHovered(index);
+      // Only keyboard focus: a click focuses a button in some browsers, and selects in its own way.
+      if (event.currentTarget.matches(":focus-visible")) setKeyboard(index);
+    },
+    onBlur: () => {
+      editor.setHovered(undefined);
+      setKeyboard(undefined);
+      pendingDelete = undefined;
+    },
+    onKeyDown: (event) => entryKeys(index, event),
+    onContextMenu: (event) => {
+      event.preventDefault();
+      openMenu(index, event.clientX, event.clientY);
+    },
     onPointerDown: (event) => {
+      const e = entryAt(index);
+      setPicked(e && (e.kind === "script" || e.type === "body") ? index : undefined);
       if (event.button !== 0) return;
       suppressClick = false;
       press = { index, x: event.clientX };
@@ -174,7 +286,7 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
         if (Math.abs(event.clientX - press.x) < DRAG_THRESHOLD) return;
         layout = { scroll: nav.scrollLeft, middles: entryElements().map(middle), marker: middle(markerEl) };
         editor.setDragging(press.index);
-        editor.setMoveError(undefined);
+        editor.setNotice(undefined);
       }
       setDrop(dropAt(press.index, event.clientX));
     },
@@ -185,8 +297,8 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
       if (dragged === undefined) return;
       suppressClick = true;
       if (!d) return;
-      if (d.blocked) editor.setMoveError(d.blocked);
-      else void editor.move(dragged, d.position, d.pastMarker).then(editor.setMoveError);
+      if (d.blocked) editor.setNotice(d.blocked);
+      else void editor.move(dragged, d.position, d.pastMarker).then(editor.setNotice);
     },
     onPointerCancel: endDrag,
   });
@@ -221,8 +333,10 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
   };
 
   // The marker in the timeline is an invisible slot as wide as the drawing's stem; the drawing is
-  // anchored to it above the layout, where the scrolling timeline doesn't clip its head.
+  // anchored to it above the layout, where the scrolling timeline doesn't clip its head. The ⋯
+  // button of the selected entry floats above it the same way, so that it shifts no entries.
   const [anchor, setAnchor] = createSignal<{ x: number; bottom: number }>();
+  const [moreAt, setMoreAt] = createSignal<{ right: number; top: number }>();
   const place = () => {
     if (!markerEl || !nav || !wrap) return;
     const slot = markerEl.getBoundingClientRect();
@@ -230,10 +344,16 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
     const scroller = nav.getBoundingClientRect();
     const x = slot.left + slot.width / 2;
     setAnchor(x >= scroller.left && x <= scroller.right ? { x: x - box.left, bottom: slot.bottom - box.top } : undefined);
+    const index = active();
+    const entry = index === undefined || renaming() ? null : entryElement(index);
+    const r = entry?.getBoundingClientRect();
+    setMoreAt(r && r.right > scroller.left && r.right <= scroller.right ? { right: r.right - box.left, top: r.top - box.top } : undefined);
   };
   createEffect(() => {
     markerAt();
     drop();
+    active();
+    renaming();
     editor.timeline();
     requestAnimationFrame(place);
   });
@@ -262,11 +382,13 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
         <Index each={editor.timeline().entries}>
           {(entry: () => Entry, index) => (
             <Switch>
-              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} />}</Match>
-              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} onOpen={props.onOpenScript} item={item(index)} />}</Match>
+              <Match when={renaming()?.index === index && renaming()}>{(r) => <RenameField editor={editor} index={index} from={r().from} onDone={() => endRename(index)} />}</Match>
+              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onOpenCode={props.onOpenCode} />}</Match>
+              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} onOpen={props.onOpenCode} item={item(index)} />}</Match>
             </Switch>
           )}
         </Index>
+
         {/* One element, placed with CSS order, so that it keeps focus while it moves. */}
         <button
           ref={markerEl}
@@ -315,6 +437,135 @@ export function Timeline(props: { editor: Editor; onOpenScript: (entry: ScriptEn
           />
         )}
       </Show>
+      <Show when={moreAt() !== undefined && active() !== undefined && active()! < count()}>
+        <button
+          class="cad-editor__more"
+          aria-label={`Actions for ${entryLabel(active()!)}`}
+          aria-haspopup="menu"
+          aria-expanded={menu()?.index === active()}
+          title={`Actions for ${entryLabel(active()!)}`}
+          style={{ left: `${moreAt()!.right}px`, top: `${moreAt()!.top}px` }}
+          onClick={(event) => {
+            const r = event.currentTarget.getBoundingClientRect();
+            openMenu(active()!, r.left, r.top);
+          }}
+        >
+          ⋯
+        </button>
+      </Show>
+      <Show when={menu()}>{(m) => <Menu items={menuItems(m().index)} label={`Actions for ${entryLabel(m().index)}`} at={m()} wrap={wrap} onClose={closeMenu} />}</Show>
     </div>
+  );
+}
+
+interface MenuItem {
+  label: string;
+  /** Runs the action; a message is why it didn't happen. */
+  run: () => void | Promise<string | undefined>;
+  danger?: boolean;
+  /** Asks again before running, e.g. to delete. */
+  confirm?: string;
+}
+
+/**
+ * The context menu of a timeline entry (research/11, "Context menu"): opened with a right-click, the
+ * ⋯ button or the context-menu key or Shift+F10, operated with the arrow keys, Enter and Escape.
+ */
+function Menu(props: { items: MenuItem[]; label: string; at: { x: number; y: number }; wrap: HTMLElement; onClose: (refocus: boolean) => void }) {
+  let el!: HTMLDivElement;
+  const [confirming, setConfirming] = createSignal<string>();
+  const box = props.wrap.getBoundingClientRect();
+  const focusItem = (delta: number | "first" | "last") => {
+    const items = [...el.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = delta === "first" ? 0 : delta === "last" ? items.length - 1 : (at + delta + items.length) % items.length;
+    items[next]?.focus();
+  };
+  const outside = (event: PointerEvent) => {
+    if (!el.contains(event.target as Node)) props.onClose(false);
+  };
+  queueMicrotask(() => {
+    focusItem("first");
+    document.addEventListener("pointerdown", outside, true);
+  });
+  // WebKit sometimes moves the focus back after the key that opened the menu: focus again once it has rendered.
+  requestAnimationFrame(() => el.isConnected && !el.contains(document.activeElement) && focusItem("first"));
+  onCleanup(() => document.removeEventListener("pointerdown", outside, true));
+  const keys: Record<string, () => void> = {
+    ArrowDown: () => focusItem(1),
+    ArrowUp: () => focusItem(-1),
+    Home: () => focusItem("first"),
+    End: () => focusItem("last"),
+    Escape: () => props.onClose(true),
+    Tab: () => props.onClose(false),
+  };
+  return (
+    <div
+      ref={el}
+      class="cad-editor__menu"
+      role="menu"
+      aria-label={props.label}
+      // It opens upwards from where it was asked for: the timeline is at the bottom.
+      style={{ left: `${Math.max(0, props.at.x - box.left)}px`, bottom: `${box.bottom - props.at.y}px` }}
+      onKeyDown={(event) => {
+        const key = keys[event.key];
+        if (!key) return;
+        event.preventDefault();
+        key();
+      }}
+    >
+      <For each={props.items}>
+        {(item) => (
+          <button
+            role="menuitem"
+            tabIndex={-1}
+            class="cad-editor__menu-item"
+            data-danger={item.danger ? "true" : undefined}
+            onClick={() => {
+              if (item.confirm && confirming() !== item.label) {
+                setConfirming(item.label);
+                return;
+              }
+              props.onClose(true);
+              void item.run();
+            }}
+          >
+            {item.confirm && confirming() === item.label ? item.confirm : item.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** Renames a variable of an entry in place; Enter renames, Escape or leaving the field doesn't. */
+function RenameField(props: { editor: Editor; index: number; from: string; onDone: () => void }) {
+  let busy = false;
+  return (
+    <input
+      class="cad-editor__rename"
+      aria-label={`New name for ${props.from}`}
+      value={props.from}
+      spellcheck={false}
+      style={{ order: ORDER.entry(props.index) }}
+      ref={(el) =>
+        queueMicrotask(() => {
+          el.focus();
+          el.select();
+        })
+      }
+      onKeyDown={(event) => {
+        if (event.key === "Escape") return props.onDone();
+        if (event.key !== "Enter" || busy) return;
+        busy = true;
+        const to = event.currentTarget.value.trim();
+        void props.editor.rename(props.index, props.from, to).then((why) => {
+          busy = false;
+          props.editor.setNotice(why);
+          if (!why) props.onDone();
+        });
+      }}
+      onBlur={() => !busy && props.onDone()}
+    />
   );
 }

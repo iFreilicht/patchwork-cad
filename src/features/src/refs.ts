@@ -3,7 +3,7 @@
  * history names, with split indices cross-checked by geometry.
  */
 import { describe, dist, type Vec } from "./geom.ts";
-import { isDescendant, key, lastLevel, piece, printAll, type Name } from "./names.ts";
+import { chain, isDescendant, key, lastLevel, piece, printAll, type Name } from "./names.ts";
 import type { Kind, Shape } from "./oc.ts";
 import { entities, histOf, indexOf, type Topo } from "./topo.ts";
 
@@ -77,6 +77,12 @@ export class Named {
   face(edge: Ref): Ref {
     return new Ref("face", [{ t: "blend", feature: this.name, edge: [...edge.names] }]);
   }
+
+  /** The face of a shape adopted with `body()` whose centroid was nearest to `near` (research/11). */
+  faceAt(near: readonly number[]): Ref {
+    const [x = 0, y = 0, z = 0] = near;
+    return new Ref("face", [{ t: "at", feature: this.name, near: [x, y, z] }]);
+  }
 }
 
 /**
@@ -125,15 +131,73 @@ function splitGroups(t: Topo, kind: Kind, parent: Name, op: string): Map<number,
   return groups;
 }
 
+type At = Extract<Name, { t: "at" }>;
+
+/** The names of adopted faces in a topology, by the body that adopted them. */
+function adoptedNames(t: Topo): Map<string, At[]> {
+  const out = new Map<string, At[]>();
+  for (const hist of t.faceHist)
+    for (const n of hist.values()) {
+      const base = chain(n).base;
+      if (base.t !== "at") continue;
+      const list = out.get(base.feature) ?? [];
+      if (!list.some((x) => key(x) === key(base))) list.push(base);
+      out.set(base.feature, list);
+    }
+  return out;
+}
+
+/**
+ * Replaces the adopted-face names in `n` by the nearest one the topology has: an adopted body's
+ * faces move when the code that made it changes. A face is taken only if it is clearly the
+ * nearest, unless `forceNearest`; otherwise `why` says which faces compete.
+ */
+function snap(n: Name, adopted: Map<string, At[]>, why: string[], forceNearest: boolean): Name {
+  switch (n.t) {
+    case "at": {
+      const ranked = (adopted.get(n.feature) ?? []).map((c) => ({ c, d: dist(c.near, n.near) })).sort((a, b) => a.d - b.d);
+      const [best, second] = ranked;
+      if (!best) return n;
+      if (!forceNearest && best.d > 1e-6 && second && second.d < 2 * best.d) {
+        why.push(`${printAll([best.c])} and ${printAll([second.c])} are about as near to ${printAll([n])}`);
+        return n;
+      }
+      return best.c;
+    }
+    case "piece":
+      return { ...n, of: snap(n.of, adopted, why, forceNearest) };
+    case "edge":
+      return { ...n, sides: n.sides.map((side) => side.map((x) => snap(x, adopted, why, forceNearest))) };
+    case "blend":
+      return { ...n, edge: n.edge.map((x) => snap(x, adopted, why, forceNearest)) };
+    default:
+      return n;
+  }
+}
+
 /**
  * Resolves a reference against a body's topology. `multi`: whether the parameter accepts several
- * entities (fillet edges: yes; a sketch plane: no).
+ * entities (fillet edges: yes; a sketch plane: no). Names of adopted faces have no history: they
+ * are first matched by geometry (`snap`).
+ */
+export function resolve(t: Topo, ref: Ref, multi: boolean): Resolution {
+  const adopted = adoptedNames(t);
+  if (adopted.size === 0) return resolveNames(t, ref, multi);
+  const why: string[] = [];
+  const snapped = new Ref(ref.kind, ref.names.map((n) => snap(n, adopted, why, false)), ref.near);
+  if (why.length === 0) return resolveNames(t, snapped, multi);
+  const nearest = resolveNames(t, new Ref(ref.kind, ref.names.map((n) => snap(n, adopted, [], true)), ref.near), multi);
+  return "ok" in nearest ? { ambiguous: nearest.ok, why: why.join("; "), suggestion: nearest.ok } : { missing: why.join("; ") };
+}
+
+/**
+ * Resolves a reference by its history names.
  *
  * The cross-check differs from the benchmark's S5 in what it compares: the code keeps only the
  * picked piece's centroid (`near`), not those of all its siblings, so the check takes the piece
  * nearest to it instead of a one-to-one matching of all pieces.
  */
-export function resolve(t: Topo, ref: Ref, multi: boolean): Resolution {
+function resolveNames(t: Topo, ref: Ref, multi: boolean): Resolution {
   const { kind } = ref;
   const pool = entities(t, kind);
   const found = pool.filter((_, i) => ref.names.some((w) => named(t, kind, i, w)));

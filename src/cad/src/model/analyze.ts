@@ -33,6 +33,13 @@ export interface FeatureCall {
    * module or in `main`, outside of loops and nested functions.
    */
   variable: string | undefined;
+  /**
+   * All variables the call initializes: `[variable]`, or the names of a destructured result
+   * (`const [left, right] = body(…)`) under the same conditions as `variable`.
+   */
+  variables: string[];
+  /** Whether the result is destructured as an array, even of one name. */
+  destructured: boolean;
   /** The statement of `main` (or the module) that contains the call. */
   statement: Statement | ModuleDeclaration | undefined;
 }
@@ -115,10 +122,14 @@ function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNod
   const loop = ancestors.slice(fnIndex + 1).some((a) => LOOPS.has(a.type));
   const parent = ancestors[ancestors.length - 1];
   const declaration = ancestors[ancestors.length - 2];
-  const variable =
-    inScope && !loop && parent?.type === "VariableDeclarator" && parent.init === call && parent.id.type === "Identifier" && declaration?.type === "VariableDeclaration" && declaration.kind === "const"
-      ? parent.id.name
-      : undefined;
+  const declared = inScope && !loop && parent?.type === "VariableDeclarator" && parent.init === call && declaration?.type === "VariableDeclaration" && declaration.kind === "const" ? parent.id : undefined;
+  const variables =
+    declared?.type === "Identifier"
+      ? [declared.name]
+      : declared?.type === "ArrayPattern" && declared.elements.length > 0 && declared.elements.every((e) => e?.type === "Identifier")
+        ? declared.elements.map((e) => (e as { name: string }).name)
+        : [];
+  const variable = variables[0];
 
   const inMain = mainFn !== undefined && mainFn.start <= call.start && call.end <= mainFn.end;
   const mainBody = inMain && mainFn.body.type === "BlockStatement" ? mainFn.body.body : undefined;
@@ -132,6 +143,8 @@ function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNod
     props,
     object: object ? { start: object.start, end: object.end } : undefined,
     variable,
+    variables,
+    destructured: declared?.type === "ArrayPattern" && variables.length > 0,
     statement,
   };
 }

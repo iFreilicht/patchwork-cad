@@ -17,6 +17,8 @@ export interface FeatureMeta {
   line?: number;
   /** Whether `name` is a variable in scope, so references can be printed with it. */
   variable?: boolean;
+  /** The variables a destructured result is declared as (`const [left, right] = body(…)`), which name its bodies. */
+  names?: string[];
 }
 
 // ---------- bodies ----------
@@ -101,8 +103,14 @@ export interface TraceEntry {
   refs: RefDiagnostic[];
   /** Bodies visible before this feature ran (the rollback state for picking). */
   before: Body[];
-  /** The feature's result, if it is a body. */
+  /** The feature's result, if it is a body; the first of several bodies. */
   result?: Body;
+  /** All bodies the feature made, e.g. several adopted with `body()`. */
+  results: Body[];
+  /** Bodies visible after this feature ran. */
+  after: Body[];
+  /** The variables its bodies are declared as, if several. */
+  names?: string[];
   /** The feature's result, if it is a sketch. */
   sketch?: Sketch;
   /** Milliseconds the feature took, and how many of them went into naming its result's faces and edges. */
@@ -126,7 +134,7 @@ let context = newContext(false);
 /** Starts a build: resets names and the trace. The tool calls it before every evaluation. */
 export function beginBuild(options: { lenient: boolean }): void {
   context = newContext(options.lenient);
-  setFeaturePrinter((feature) => (context.trace.some((t) => t.name === feature && t.variable) ? feature : refForm(feature)));
+  setFeaturePrinter((feature) => (context.trace.some((t) => t.variable && (t.name === feature || t.names?.includes(feature))) ? feature : refForm(feature)));
 }
 
 export function currentTrace(): readonly TraceEntry[] {
@@ -196,19 +204,20 @@ export interface FeatureDefinition<P extends Record<string, unknown>, R> {
   /** Bodies this call consumes; one of them is passed through when the feature fails in a lenient build. */
   inputs?(params: P): (Body | undefined)[];
   /** The result in a lenient build when the feature fails and has no input body to pass through. */
-  fallback?(params: P, name: string, message: string): R;
-  build(params: P, ctx: FeatureContext): R;
+  fallback?(params: P, name: string, message: string, meta: FeatureMeta): R;
+  build(params: P, ctx: FeatureContext, meta: FeatureMeta): R;
 }
 
 export type Feature<P extends Record<string, unknown>, R> = ((params: P, meta?: FeatureMeta) => R) & { readonly definition: FeatureDefinition<P, R> };
 
-export function defineFeature<P extends Record<string, unknown>, R extends Body | Sketch>(def: FeatureDefinition<P, R>): Feature<P, R> {
+export function defineFeature<P extends Record<string, unknown>, R extends Body | Sketch | Body[]>(def: FeatureDefinition<P, R>): Feature<P, R> {
   const call = (params: P, meta: FeatureMeta = {}): R => {
     const count = (context.counts.get(def.type) ?? 0) + 1;
     context.counts.set(def.type, count);
     const name = meta.name ?? `${def.type}${meta.line !== undefined ? `@L${meta.line}` : ""}#${count}`;
-    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], ms: 0, namingMs: 0 };
+    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], results: [], after: [], ms: 0, namingMs: 0 };
     if (meta.line !== undefined) entry.line = meta.line;
+    if (meta.names) entry.names = meta.names;
     context.trace.push(entry);
     const inputs = (def.inputs?.(params) ?? []).filter((b): b is Body => b instanceof Body);
     const t0 = performance.now();
@@ -219,21 +228,25 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
     };
     let result: R;
     try {
-      result = def.build(params, makeContext(name, entry.refs));
+      result = def.build(params, makeContext(name, entry.refs), meta);
       timed();
     } catch (error) {
       timed();
       entry.status = error instanceof FeatureError && error.refs.some((r) => r.status !== "ok") ? "broken" : "failed";
       entry.message = error instanceof Error ? error.message : String(error);
-      const passThrough = inputs[0] ?? def.fallback?.(params, name, entry.message);
+      const passThrough = inputs[0] ?? def.fallback?.(params, name, entry.message, meta);
+      entry.after = [...context.live];
       if (!context.lenient || !passThrough) throw error;
       return passThrough as R;
     }
     if (result instanceof Sketch) entry.sketch = result;
-    if (result instanceof Body) {
-      entry.result = result;
-      context.live = [...context.live.filter((b) => !inputs.includes(b)), result];
+    const bodies = Array.isArray(result) ? result : result instanceof Body ? [result] : [];
+    if (bodies.length > 0) {
+      entry.result = bodies[0];
+      entry.results = bodies;
+      context.live = [...context.live.filter((b) => !inputs.includes(b)), ...bodies];
     }
+    entry.after = [...context.live];
     return result;
   };
   return Object.assign(call, { definition: def });

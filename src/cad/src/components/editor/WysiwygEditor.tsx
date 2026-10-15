@@ -2,7 +2,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import type { MeshedShape } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
-import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
+import type { Entry, FeatureEntry } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, modelAttributes } from "../createModel.ts";
@@ -40,28 +40,40 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     editor.pick(entity).catch((error: unknown) => setPickError(String((error as Error)?.message ?? error)));
   };
 
-  /** The first feature the last build ran at or after the timeline marker, if the marker isn't at the end. */
-  const firstPastMarker = (): string | undefined => {
-    for (const entry of editor.timeline().entries.slice(editor.marker())) {
-      const name = entry.kind === "feature" ? entry.trace?.name : entry.features[0]?.name;
-      if (name) return name;
-    }
-    return undefined;
+  /** The names of the features the last build ran in timeline entries. */
+  const ran = (entry: Entry) => (entry.kind === "feature" ? (entry.trace ? [entry.trace.name] : []) : entry.features.map((f) => f.name));
+  /**
+   * The state at the timeline marker, if it isn't at the end: the bodies visible before the first
+   * feature that runs after it, or else after the last one before it, or else none.
+   */
+  const atMarker = (): { feature: string; after: boolean } | "nothing" | undefined => {
+    const entries = editor.timeline().entries;
+    const marker = editor.marker();
+    if (marker >= entries.length) return undefined;
+    const next = entries.slice(marker).flatMap(ran)[0];
+    if (next) return { feature: next, after: false };
+    const previous = entries.slice(0, marker).flatMap(ran).at(-1);
+    return previous ? { feature: previous, after: true } : "nothing";
   };
   // While a reference is picked, the view rolls back to the bodies the feature works on, as in
   // Fusion's timeline; the feature's resolved references are highlighted there. Otherwise it shows
   // the model at the timeline marker.
   const rollbackTo = () => {
     const entry = editor.open();
-    return editor.pickTarget() && entry?.trace ? entry.trace.name : firstPastMarker();
+    return editor.pickTarget() && entry?.trace ? { feature: entry.trace.name, after: false } : atMarker();
   };
+  const rollbackKey = () => JSON.stringify(rollbackTo() ?? null);
   const [rolledBack, setRolledBack] = createSignal<MeshedShape[]>();
   createEffect(() => {
-    const name = rollbackTo();
+    const to = rollbackTo();
+    const key = rollbackKey();
     model.last();
-    if (!name) return setRolledBack(undefined);
-    model.engine.rollback(name).then(
-      (shapes) => rollbackTo() === name && setRolledBack(shapes),
+    if (!to || to === "nothing") {
+      setRolledBack(to ? [] : undefined);
+      return;
+    }
+    model.engine.rollback(to.feature, to.after).then(
+      (shapes) => rollbackKey() === key && setRolledBack(shapes),
       () => setRolledBack(undefined),
     );
   });
@@ -92,9 +104,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     return sketch?.outline ? [{ points: sketch.outline, closed: true }] : [];
   };
 
-  const openScript = (entry: ScriptEntry) => {
+  /** Opens the code pane at an entry's code: a Custom Script's or a body()'s, which have no dialog. */
+  const openCode = (span: Span) => {
     editor.openFeature(undefined);
-    setCodeFocus({ ...entry.span });
+    setCodeFocus({ ...span });
     setCodeOpen(true);
   };
   const editCode = () => {
@@ -123,11 +136,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       </div>
       <Show when={codeOpen()}>
         <div class="cad-editor__code">
-          <CodeEditor handle={props.handle} errorLine={model.error()?.line} focus={codeFocus()} past={pastMarker()} related={relatedCode()} />
+          <CodeEditor handle={props.handle} errorLine={model.error()?.line} focus={codeFocus()} onFocusDone={() => setCodeFocus(undefined)} past={pastMarker()} related={relatedCode()} />
         </div>
       </Show>
-      <Timeline editor={editor} onOpenScript={openScript} />
-      <StatusBar model={model} notice={editor.moveError()} />
+      <Timeline editor={editor} onOpenCode={openCode} />
+      <StatusBar model={model} notice={editor.notice()} />
     </div>
   );
 }

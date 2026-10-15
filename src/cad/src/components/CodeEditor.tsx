@@ -148,14 +148,30 @@ async function patchworkExtensions(): Promise<Extension[]> {
 export function CodeEditor(props: {
   handle: DocHandle<CadModelDoc>;
   errorLine: number | undefined;
-  /** A source span to mark and scroll to, e.g. the timeline entry being edited. */
+  /**
+   * A source span to mark, e.g. the timeline entry whose code was asked for: the editor takes the
+   * focus, puts the cursor at its start and scrolls to it. The mark goes with the next click, key or
+   * loss of focus in the editor, and `onFocusDone` says so.
+   */
   focus?: { start: number; end: number } | undefined;
+  onFocusDone?: () => void;
   /** The code past the timeline marker. */
   past?: { start: number; end: number } | undefined;
   /** Code to mark as related to the focused timeline entry. */
   related?: RelatedSpan[];
 }) {
   const patchwork = new Compartment();
+  /** Whether the `focus` span is marked. */
+  let marked = false;
+  /** Removes the mark, after the event or update that asked for it: nothing here may interfere with CodeMirror's input handling. */
+  const unmark = () =>
+    marked &&
+    queueMicrotask(() => {
+      if (!marked || disposed) return;
+      marked = false;
+      view.dispatch({ effects: setFocus.of(undefined) });
+      props.onFocusDone?.();
+    });
   const view = new EditorView({
     doc: props.handle.doc()?.source ?? "",
     extensions: [
@@ -178,12 +194,17 @@ export function CodeEditor(props: {
       Prec.lowest(related),
       relationBars,
       relationGutter,
+      // Losing the focus removes the mark; clicks and keys do through listeners on the DOM below.
+      EditorView.updateListener.of((update) => update.focusChanged && !update.view.hasFocus && unmark()),
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
     ],
   });
 
   let disposed = false;
+  // Capturing listeners, which see clicks and keys before CodeMirror handles and possibly stops them.
+  view.dom.addEventListener("mousedown", unmark, true);
+  view.dom.addEventListener("keydown", unmark, true);
   patchworkExtensions().then(
     (extensions) => disposed || view.dispatch({ effects: patchwork.reconfigure(extensions) }),
     (error: unknown) => console.warn("[cad-model] couldn't load CodeMirror extensions", error),
@@ -192,8 +213,16 @@ export function CodeEditor(props: {
   createEffect(() => view.dispatch({ effects: setErrorLine.of(props.errorLine) }));
   createEffect(() => {
     const span = props.focus;
-    const range = span ? { from: span.start, to: span.end } : undefined;
-    view.dispatch({ effects: range ? [setFocus.of(range), EditorView.scrollIntoView(range.from, { y: "center" })] : [setFocus.of(undefined)] });
+    const range = span && span.end <= view.state.doc.length ? { from: span.start, to: span.end } : undefined;
+    if (!range) {
+      marked = false;
+      view.dispatch({ effects: setFocus.of(undefined) });
+      return;
+    }
+    view.dispatch({ selection: { anchor: range.from }, effects: [setFocus.of(range), EditorView.scrollIntoView(range.from, { y: "center" })] });
+    // Focusing may blur the editor's previous focus first: mark only once it has the focus.
+    view.focus();
+    marked = true;
   });
   // Both follow the source, which changes inside CodeMirror's own update when the user types here
   // (the sync plugin writes to the document then), and a dispatch during an update throws: dispatch after it.

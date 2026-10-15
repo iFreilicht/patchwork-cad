@@ -34,7 +34,7 @@ test("M1's timeline is a list of features", () => {
 
 test("M3's rib loop is a Custom Script entry with the features it ran", () => {
   const source = example("m3");
-  const trace = [16, 16].map((line, i): FeatureTrace => ({ name: `rib${i}`, type: "extrude", line, variable: false, status: "ok", message: undefined, refs: [], before: [], result: `rib${i}`, outline: undefined, unused: false, ms: 0, namingMs: 0 }));
+  const trace = [16, 16].map((line, i): FeatureTrace => ({ name: `rib${i}`, type: "extrude", line, variable: false, status: "ok", message: undefined, refs: [], before: [], result: `rib${i}`, results: [`rib${i}`], names: undefined, outline: undefined, unused: false, ms: 0, namingMs: 0 }));
   const tl = timeline(source, analyze(source), trace);
   expect(tl.entries.map((e) => (e.kind === "feature" ? e.name : `script ${e.lines.join("-")}`))).toEqual(["sketch1", "base", "sketch2", "upright", "script 12-18", "fillet1", "chamfer1", "sketch3", "extrude1"]);
   const script = tl.entries[4]!;

@@ -10,8 +10,10 @@ import type { Analysis, FeatureCall, Span } from "./analyze.ts";
 
 export interface FeatureEntry {
   kind: "feature";
-  /** The variable name: the identity references use. */
+  /** The variable name: the identity references use; the first of several. */
   name: string;
+  /** All its variables: several for a destructured `body()` (research/11). */
+  names: string[];
   type: FeatureType;
   call: FeatureCall;
   /** The whole statement. */
@@ -54,7 +56,7 @@ export function timeline(source: string, analysis: Analysis, trace: readonly Fea
     if (call && call.variable) {
       script = undefined;
       const traced = trace.find((t) => t.variable && t.name === call.variable);
-      entries.push({ kind: "feature", name: call.variable, type: call.type, call, span: { start: statement.start, end: statement.end }, trace: traced });
+      entries.push({ kind: "feature", name: call.variable, names: call.variables, type: call.type, call, span: { start: statement.start, end: statement.end }, trace: traced });
       continue;
     }
     if (!script) {

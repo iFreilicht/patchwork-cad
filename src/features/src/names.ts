@@ -15,7 +15,12 @@ export type Name =
   /** An edge without history, named by the names of its adjacent faces (one side for seams); `n` tells apart several edges between the same faces. */
   | { t: "edge"; sides: Name[][]; n: number }
   /** Piece `k` (1-based, in OCCT's order) of a name that feature `op` split into several pieces. */
-  | { t: "piece"; of: Name; op: string; k: number };
+  | { t: "piece"; of: Name; op: string; k: number }
+  /**
+   * A face of a shape adopted with `body()`, which has no history: named by its centroid when it
+   * was adopted, `cut_plate.faceAt([50, 20, 12])`. It resolves to the nearest such face (research/11).
+   */
+  | { t: "at"; feature: string; near: Vec };
 
 const IDENT = /^[A-Za-z_$][\w$]*$/;
 
@@ -58,6 +63,8 @@ export function print(n: Name, hint?: Vec): string {
     }
     case "piece":
       return `${print(n.of)}.piece(${printFeature(n.op)}, ${n.k}${hint ? `, { near: ${printVec(hint)} }` : ""})`;
+    case "at":
+      return `${printFeature(n.feature)}.faceAt(${printVec(n.near)})`;
   }
 }
 

@@ -11,7 +11,7 @@
 | [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | Done ([src/features](../src/features/), tool `cad-model`; [ViewCube](07-poc-modelling-ui.md#the-viewcube), [timeline marker](07-poc-modelling-ui.md#the-timeline-marker), [reordering](07-poc-modelling-ui.md#reordering)). Open: other mental models of bodies, committing the marker, same-argument conflicts, names of features in loops |
 | [08-module-evaluation.md](08-module-evaluation.md) | Model evaluations per build, their cost, module retention, OCCT memory | Done. Open: which objects fillet/chamfer/fuse leak |
 | [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity; view documents | Done. Open: orphan views of cancelled drags, the UX of listing and editing views |
-| [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Designed, not implemented. Touch deferred |
+| [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Done. Open: history of adopted library bodies, scalar calculations; touch deferred |
 
 ## Not started
 

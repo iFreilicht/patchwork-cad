@@ -10,7 +10,9 @@ export type ParamSpec =
   /** Face or edge references; `multi`: an array of references. */
   | { kind: "faces" | "edges"; multi: boolean; label: string; optional?: boolean }
   /** An origin plane (`plane("XY")`) or a planar face reference. */
-  | { kind: "plane"; label: string; optional?: boolean };
+  | { kind: "plane"; label: string; optional?: boolean }
+  /** Code that makes shapes, e.g. a function with replicad calls; edited as code, not in a form. */
+  | { kind: "code"; label: string; optional?: boolean };
 
 export interface FeatureSchema {
   label: string;
@@ -56,6 +58,13 @@ export const schemas = {
       body: { kind: "body", label: "Body" },
       edges: { kind: "edges", label: "Edges", multi: true },
       distance: { kind: "length", label: "Distance" },
+    },
+  },
+  body: {
+    label: "Body",
+    icon: "Box",
+    params: {
+      source: { kind: "code", label: "Shapes" },
     },
   },
 } as const satisfies Record<string, FeatureSchema>;

@@ -11,6 +11,7 @@ import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
 import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Relation } from "../../model/deps.ts";
 import { apply, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
+import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
 import type { Model } from "../createModel.ts";
@@ -39,7 +40,7 @@ export interface Editor {
   /** Edits the open feature's call; `edit` gets the call as it is in the current source. */
   editOpen(edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]): void;
   /** Adds a feature with default parameters and opens it. */
-  insert(type: FeatureType): void;
+  insert(type: InsertableType): void;
   deleteOpen(): void;
   /** Fills the pick target with the picked entity's reference. */
   pick(entity: Entity): Promise<void>;
@@ -58,9 +59,17 @@ export interface Editor {
   focused: Accessor<number | undefined>;
   /** The focused entry's dependencies and dependents, by entry index. */
   related: Accessor<Map<number, Relation>>;
-  /** Why the last drop in the timeline didn't move anything; the status bar shows it. */
-  moveError: Accessor<string | undefined>;
-  setMoveError(message: string | undefined): void;
+  /** Why the last action in the timeline didn't happen, e.g. a drop or a rename; the status bar shows it. */
+  notice: Accessor<string | undefined>;
+  setNotice(message: string | undefined): void;
+  /** Renames variable `from` of entry `index` to `to`; resolves to why not. */
+  rename(index: number, from: string, to: string): Promise<string | undefined>;
+  /** Wraps the Custom Script at `index` in body() if a trial build allows it (research/11); resolves to why not. */
+  wrap(index: number): Promise<string | undefined>;
+  /** Unwraps the body() at `index`; resolves to why not. */
+  unwrap(index: number): Promise<string | undefined>;
+  /** Deletes the entry at `index`: a feature, rewiring its users, or a Custom Script nothing uses; resolves to why not. */
+  remove(index: number): Promise<string | undefined>;
   /** Why entry `index` can't move to `position` (before entry `position`), or undefined if it can. */
   blocked(index: number, position: number): string | undefined;
   /**
@@ -79,7 +88,10 @@ function tryAnalyze(source: string): { analysis?: Analysis; error?: string } {
 }
 
 /** Default code of a new feature; `body` is the body it works on, `sketch` the last sketch. */
-const DEFAULTS: Record<FeatureType, (d: { sketch: string; body: string }) => string> = {
+/** The features the toolbar adds; body() adopts code, so it is written, not added. */
+export type InsertableType = Exclude<FeatureType, "body">;
+
+const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => string> = {
   sketch: () => `sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) })`,
   extrude: ({ sketch }) => `extrude({ sketch: ${sketch}, distance: 10 })`,
   fillet: ({ body }) => `fillet({ body: ${body}, edges: [], radius: 1 })`,
@@ -87,7 +99,7 @@ const DEFAULTS: Record<FeatureType, (d: { sketch: string; body: string }) => str
 };
 
 /** A label of an entry for messages. */
-const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.name : `the Custom Script at lines ${entry.lines.join("–")}`);
+const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.names.join(", ") : `the Custom Script at lines ${entry.lines.join("–")}`);
 
 export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: Pick<UiState, "marker" | "setMarker">): Editor {
   const [source, setSource] = createSignal(handle.doc()?.source ?? "");
@@ -160,7 +172,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (c) apply(handle, edit(c.call, c.analysis, c.source));
   };
 
-  const insert = (type: FeatureType) => {
+  const insert = (type: InsertableType) => {
     const text = doc().source;
     const { analysis: a } = tryAnalyze(text);
     if (!a) return;
@@ -260,7 +272,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
   const setMarker = (position: number) => (syntaxError() ? undefined : setMarkerIn(tl(), position));
 
-  const [moveError, setMoveError] = createSignal<string>();
+  const [notice, setNotice] = createSignal<string>();
   const [hovered, setHovered] = createSignal<number>();
   const [dragging, setDragging] = createSignal<number>();
   const focused = () => {
@@ -285,6 +297,59 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const name = labelOf(entries[index]);
     if (position < range.min) return `${name} can't move before ${labelOf(entries[range.minBy ?? 0])}, which it uses.`;
     return `${name} can't move after ${labelOf(entries[range.maxBy ?? entries.length])}, which uses it.`;
+  };
+
+  /**
+   * Why `edits` of `text` would break the model, from a trial build without meshing (`check`): it
+   * fails where the current build doesn't, or more features fail. `doing` starts the message.
+   */
+  const breaks = async (doing: string, text: string, edits: Edit[]): Promise<string | undefined> => {
+    let changed = text;
+    for (const e of [...edits].sort((x, y) => y.start - x.start)) changed = changed.slice(0, e.start) + e.text + changed.slice(e.end);
+    const result = await model.engine.check(changed);
+    if (result.error && !model.error()) return `${doing} breaks the model: ${result.error.message}`;
+    const problems = model.trace().filter((t) => t.status !== "ok").length;
+    const broken = result.problems - problems;
+    return broken > 0 ? `${doing} breaks ${broken} feature${broken === 1 ? "" : "s"}.` : undefined;
+  };
+
+  /**
+   * Applies a refactoring of entry `index` of the shown timeline, computed on the document as it is
+   * now; with `trial`, only if a trial build says it doesn't break the model. `doing` starts the
+   * message of why not, which it resolves to.
+   */
+  const refactorEntry = async (index: number, make: (text: string, a: Analysis, fresh: Timeline, i: number) => Refactoring, doing: string, trial = false): Promise<string | undefined> => {
+    const text = doc().source;
+    const { analysis: a } = tryAnalyze(text);
+    if (!a) return "The code doesn't parse.";
+    const fresh = timeline(text, a, []);
+    const i = freshIndex(fresh, index);
+    if (i < 0) return "The timeline changed meanwhile.";
+    const r = make(text, a, fresh, i);
+    if ("error" in r) return `${doing} doesn't work: ${r.error}.`;
+    if (trial) {
+      const why = await breaks(doing, text, r.edits);
+      if (why) return why;
+      if (doc().source !== text) return "The model changed meanwhile; try again.";
+    }
+    apply(handle, r.edits);
+    return undefined;
+  };
+
+  const renameEntry = (index: number, from: string, to: string) => refactorEntry(index, (_, a, fresh, i) => rename(a, fresh, i, from, to), `Renaming ${from} to ${to}`);
+  const wrap = (index: number) => refactorEntry(index, wrapInBody, `Wrapping ${labelOf(tl().entries[index])} in body()`, true);
+  const unwrap = (index: number) => refactorEntry(index, unwrapBody, `Unwrapping ${labelOf(tl().entries[index])}`);
+  const remove = (index: number) => {
+    const entry = tl().entries[index];
+    if (entry?.kind === "feature" && open() === entry) openFeature(undefined);
+    return refactorEntry(
+      index,
+      (text, a, fresh, i) => {
+        const e = fresh.entries[i]!;
+        return e.kind === "feature" ? { edits: deleteFeature(text, a, e) } : deleteScript(text, a, fresh, i);
+      },
+      `Deleting ${labelOf(entry)}`,
+    );
   };
 
   /** The entry in a fresh timeline that is entry `index` of the shown one. */
@@ -314,15 +379,9 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       if (!a) return "The code doesn't parse.";
       const fresh = timeline(text, a, []);
       const edits = moveEntry(text, a, fresh, freshIndex(fresh, index), freshIndex(fresh, position));
-      let moved = text;
-      for (const e of [...edits].sort((x, y) => y.start - x.start)) moved = moved.slice(0, e.start) + e.text + moved.slice(e.end);
-      const result = await model.engine.check(moved);
       const target = tl().entries[position];
-      const where = target ? `before ${labelOf(target)}` : "to the end";
-      if (result.error && !model.error()) return `Moving ${labelOf(entry)} ${where} breaks the model: ${result.error.message}`;
-      const problems = model.trace().filter((t) => t.status !== "ok").length;
-      const broken = result.problems - problems;
-      if (broken > 0) return `Moving ${labelOf(entry)} ${where} breaks ${broken} feature${broken === 1 ? "" : "s"}.`;
+      const why = await breaks(`Moving ${labelOf(entry)} ${target ? `before ${labelOf(target)}` : "to the end"}`, text, edits);
+      if (why) return why;
     }
     const text = doc().source;
     const { analysis: a } = tryAnalyze(text);
@@ -361,9 +420,13 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     focused,
     related,
     blocked,
-    moveError,
-    setMoveError,
+    notice,
+    setNotice,
     move,
+    rename: renameEntry,
+    wrap,
+    unwrap,
+    remove,
   };
 }
 

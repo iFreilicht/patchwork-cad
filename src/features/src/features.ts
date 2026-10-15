@@ -1,14 +1,15 @@
 /**
  * The built-in feature subset of PoC 2 (research/07): sketch, extrude (new, join, cut), fillet and
  * chamfer. The modelling operations are ported from research/03's prototype (model.ts), because
- * replicad doesn't expose OCCT's history.
+ * replicad doesn't expose OCCT's history. And `body`, which adopts shapes made with replicad (research/11).
  */
-import { add, cross, dot, scale, sub, unit, type Vec } from "./geom.ts";
+import { Shape as ReplicadShape, type AnyShape } from "replicad";
+import { add, cross, describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
 import { key, type Name } from "./names.ts";
 import { listToArray, oc, progress, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
 import { propagate, withTopology, type Hist, type History } from "./topo.ts";
-import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type Frame, type Profile } from "./feature.ts";
+import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
 import { schemas } from "./schema.ts";
 
 // ---------- planes and profiles ----------
@@ -63,13 +64,34 @@ function frameOnFace(face: Shape): Frame {
 
 const isFrame = (x: unknown): x is Frame => typeof x === "object" && x !== null && "normal" in x && "xDir" in x;
 
+/**
+ * Checks that parameter `param` is a body of this library. A replicad shape is the likely mistake:
+ * it has no history to name its faces by, and `body()` adopts it (research/11).
+ */
+function expectBody(value: unknown, param: string): asserts value is Body {
+  if (value instanceof Body) return;
+  if (value instanceof ReplicadShape) throw new FeatureError(`${param}: a replicad shape, not a feature body; wrap it with body(…)`);
+  throw new FeatureError(`${param}: expected a body, got ${value === undefined ? "nothing" : typeof value}`);
+}
+
+/** A body without faces: what a feature that made no body gives in a lenient build, so that the build goes on. */
+export function emptyBody(name: string): Body {
+  const o = oc();
+  const compound = new o.TopoDS_Compound();
+  const builder = new o.TopoDS_Builder();
+  builder.MakeCompound(compound);
+  builder.delete();
+  return new Body(name, withTopology(compound, [], []));
+}
+
 export const sketch = defineFeature<{ plane: Frame | Ref; profile: Profile; body?: Body }, Sketch>({
   type: "sketch",
   ...schemas.sketch,
   fallback: (p, name, message) => new Sketch(name, PLANES["XY"]!, p.profile, message),
   build({ plane, profile, body }, ctx) {
     if (isFrame(plane)) return new Sketch(ctx.name, plane, profile);
-    if (!(body instanceof Body)) throw new FeatureError("a sketch on a face needs the face's body");
+    if (body === undefined) throw new FeatureError("a sketch on a face needs the face's body");
+    expectBody(body, "body");
     const [face] = ctx.resolve(body, "plane", plane, false);
     return new Sketch(ctx.name, frameOnFace(face!), profile);
   },
@@ -118,10 +140,15 @@ export const extrude = defineFeature<
   type: "extrude",
   ...schemas.extrude,
   inputs: ({ target, operation }) => (operation && operation !== "new" ? [target] : []),
+  // A join or cut without a valid target has nothing to pass through: it gives an empty body, so that only it and its users fail.
+  fallback: (_, name) => emptyBody(name),
   build({ sketch: sk, distance = 10, operation = "new", target, extent = "distance" }, ctx) {
     if (!(sk instanceof Sketch)) throw new FeatureError("sketch: expected a sketch");
     if (sk.broken) throw new FeatureError(`sketch ${sk.name} is broken: ${sk.broken}`);
-    if (operation !== "new" && !(target instanceof Body)) throw new FeatureError(`a ${operation} needs a target body`);
+    if (operation !== "new") {
+      if (target === undefined) throw new FeatureError(`a ${operation} needs a target body`);
+      expectBody(target, "target");
+    }
     const o = oc();
     const { face, segments } = profileFace(sk.profile, sk.frame);
     const through = extent === "through";
@@ -159,7 +186,7 @@ export const extrude = defineFeature<
 });
 
 function blend(type: "fillet" | "chamfer", body: Body, refs: Ref[], size: number, ctx: FeatureContext): Body {
-  if (!(body instanceof Body)) throw new FeatureError("body: expected a body");
+  expectBody(body, "body");
   const t = body.topo;
   const picked = ctx.resolve(body, "edges", refs, true);
   if (picked.length === 0) throw new FeatureError("no edges selected");
@@ -189,3 +216,51 @@ export const chamfer = defineFeature<{ body: Body; edges: Ref[]; distance: numbe
   inputs: ({ body }) => [body],
   build: ({ body, edges, distance }, ctx) => blend("chamfer", body, edges, distance, ctx),
 });
+
+// ---------- adopting shapes ----------
+
+type Adoptable = AnyShape | Body;
+
+/** What `body()` adopts: a shape, a body, several of them, or a function that returns those, like a model's `main`. */
+export type BodySource = Adoptable | readonly Adoptable[] | (() => Adoptable | readonly Adoptable[]);
+
+/**
+ * A body from a shape without history. Each face is named by its centroid (`cut_plate.faceAt([…])`),
+ * each edge by its adjacent faces. A body of this library is treated the same: its history is not
+ * kept (research/11, "Open").
+ */
+function adoptOne(value: unknown, name: string): Body {
+  const shape = value instanceof Body ? value.topo.shape : value instanceof ReplicadShape ? (value.wrapped as Shape) : undefined;
+  if (!shape) throw new FeatureError(`expected a shape, got ${value === undefined ? "nothing" : typeof value}`);
+  const faces = subShapes(shape, "face");
+  const hist: Hist[] = faces.map((f) => {
+    const n: Name = { t: "at", feature: name, near: describeFace(f).centroid };
+    return new Map([[key(n), n]]);
+  });
+  return new Body(name, withTopology(shape, faces, hist));
+}
+
+const adopt = defineFeature<{ source: BodySource }, Body | Body[]>({
+  type: "body",
+  ...schemas.body,
+  // A failing function makes empty bodies, as many as are declared, so that only it and its users fail.
+  fallback: (_, name, _message, meta) => (meta.names ? meta.names.map((n) => emptyBody(n)) : emptyBody(name)),
+  build({ source }, ctx, meta: FeatureMeta) {
+    const value = typeof source === "function" ? source() : source;
+    if (Array.isArray(value)) return value.map((v, i) => adoptOne(v, meta.names?.[i] ?? `${ctx.name}[${i}]`));
+    if (meta.names) throw new FeatureError(`${meta.names.length} bodies are declared, but it made one shape`);
+    return adoptOne(value, ctx.name);
+  },
+});
+
+/**
+ * Adopts shapes made with replicad as bodies that features can use, e.g.
+ * `const cut_plate = body(() => plate.cut(bore))` or `const [left, right] = body(() => [a, b])`
+ * (research/11). It returns a body for a shape and an array of bodies for an array, as `main` does.
+ */
+export function body(source: Adoptable | (() => Adoptable), meta?: FeatureMeta): Body;
+export function body(source: readonly Adoptable[] | (() => readonly Adoptable[]), meta?: FeatureMeta): Body[];
+export function body(source: BodySource, meta?: FeatureMeta): Body | Body[];
+export function body(source: BodySource, meta?: FeatureMeta): Body | Body[] {
+  return adopt({ source }, meta);
+}

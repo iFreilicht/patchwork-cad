@@ -49,7 +49,7 @@ function children(node: AnyNode): AnyNode[] {
 }
 
 /** Identifiers that a pattern binds. */
-function bound(pattern: Pattern | null | undefined, out: AnyNode[] = []): AnyNode[] {
+export function bound(pattern: Pattern | null | undefined, out: AnyNode[] = []): AnyNode[] {
   if (!pattern) return out;
   if (pattern.type === "Identifier") out.push(pattern);
   else if (pattern.type === "ObjectPattern") for (const p of pattern.properties) bound(p.type === "RestElement" ? p.argument : (p.value as Pattern), out);
@@ -77,22 +77,44 @@ function bindings(node: AnyNode): Set<AnyNode> {
 }
 
 /** Names a statement declares in the scope it is in. */
-function declared(statement: Statement): string[] {
+export function declared(statement: Statement): string[] {
   if (statement.type === "VariableDeclaration") return statement.declarations.flatMap((d) => bound(d.id).map((id) => (id as { name: string }).name));
   if ((statement.type === "FunctionDeclaration" || statement.type === "ClassDeclaration") && statement.id) return [statement.id.name];
   return [];
 }
 
+/** Names that scope `node` declares: a function's name and parameters, a block's declarations, a loop's or a catch clause's variables. */
+function scopeNames(node: AnyNode): string[] {
+  const names = (ids: AnyNode[]) => ids.map((id) => (id as { name: string }).name);
+  switch (node.type) {
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+      return [...(node.type === "FunctionExpression" && node.id ? [node.id.name] : []), ...node.params.flatMap((p) => names(bound(p)))];
+    case "BlockStatement":
+    case "StaticBlock":
+      return node.body.flatMap((s) => declared(s as Statement));
+    case "ForStatement":
+      return node.init?.type === "VariableDeclaration" ? declared(node.init) : [];
+    case "ForInStatement":
+    case "ForOfStatement":
+      return node.left.type === "VariableDeclaration" ? declared(node.left) : [];
+    case "CatchClause":
+      return names(bound(node.param));
+    default:
+      return [];
+  }
+}
+
 /**
- * Identifiers of `names` that `statement` reads or writes, with their property keys if they are a
- * feature call's version parameter. Names that a nested scope of the statement declares again are
- * left out (shadowing is resolved by name, not by scope).
+ * Identifiers of `names` that `statement` (one of `main`) reads or writes. Names that a scope inside
+ * the statement declares again, e.g. a function's own variable, are other variables and left out.
  */
-function usesIn(statement: AnyNode, names: Set<string>, visit: (id: AnyNode & { name: string }, ancestors: AnyNode[]) => void): void {
+export function usesIn(statement: AnyNode, names: Set<string>, visit: (id: AnyNode & { name: string }, ancestors: AnyNode[]) => void): void {
   const binding = bindings(statement);
-  const own = new Set(statement.type === "VariableDeclaration" || statement.type === "FunctionDeclaration" || statement.type === "ClassDeclaration" ? declared(statement as Statement) : []);
-  const shadowed = new Set([...binding].map((id) => (id as { name: string }).name).filter((n) => !own.has(n)));
-  const walk = (node: AnyNode, ancestors: AnyNode[]) => {
+  const walk = (node: AnyNode, ancestors: AnyNode[], shadowed: ReadonlySet<string>) => {
+    const declares = scopeNames(node).filter((n) => names.has(n));
+    if (declares.length > 0) shadowed = new Set([...shadowed, ...declares]);
     if (node.type === "Identifier" && !binding.has(node) && names.has(node.name) && !shadowed.has(node.name)) {
       const parent = ancestors[ancestors.length - 1];
       const isKey = (parent?.type === "MemberExpression" && parent.property === node && !parent.computed) || (parent?.type === "Property" && parent.key === node && !parent.computed && !parent.shorthand);
@@ -100,9 +122,9 @@ function usesIn(statement: AnyNode, names: Set<string>, visit: (id: AnyNode & { 
       const isShorthandKey = parent?.type === "Property" && parent.shorthand && parent.key === node;
       if (!isKey && !isShorthandKey && !(parent?.type === "MethodDefinition" || parent?.type === "PropertyDefinition" || parent?.type === "LabeledStatement" || parent?.type === "BreakStatement" || parent?.type === "ContinueStatement")) visit(node as AnyNode & { name: string }, ancestors);
     }
-    for (const child of children(node)) walk(child, [...ancestors, node]);
+    for (const child of children(node)) walk(child, [...ancestors, node], shadowed);
   };
-  walk(statement, []);
+  walk(statement, [], new Set());
 }
 
 export function graph(analysis: Analysis, tl: Timeline): Graph {

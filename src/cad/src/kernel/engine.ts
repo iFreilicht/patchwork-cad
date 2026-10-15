@@ -60,9 +60,9 @@ export class Engine {
     else this.#start(source);
   }
 
-  /** The bodies visible before `feature` in the last build, meshed for picking. */
-  async rollback(feature: string): Promise<MeshedShape[]> {
-    const answer = await this.#request({ type: "rollback", id: this.#nextId++, feature });
+  /** The bodies visible before `feature` (or after it) in the last build, meshed for picking. */
+  async rollback(feature: string, after = false): Promise<MeshedShape[]> {
+    const answer = await this.#request({ type: "rollback", id: this.#nextId++, feature, after });
     return answer.type === "rolledBack" ? answer.shapes : [];
   }
 

@@ -1,10 +1,10 @@
 import { For } from "solid-js";
 import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
-import type { Editor } from "./state.ts";
+import type { Editor, InsertableType } from "./state.ts";
 
-/** Adds features at the end of the timeline. */
+/** Adds features at the timeline marker; body() adopts code, so it is written, not added (research/11). */
 export function Toolbar(props: { editor: Editor; codeOpen: boolean; onToggleCode: () => void }) {
-  const types = Object.keys(schemas) as FeatureType[];
+  const types = (Object.keys(schemas) as FeatureType[]).filter((t): t is InsertableType => t !== "body");
   return (
     <div class="cad-editor__toolbar" role="toolbar">
       <For each={types}>

@@ -44,6 +44,10 @@ export interface FeatureTrace {
   /** Names of the bodies visible before the feature ran. */
   before: string[];
   result: string | undefined;
+  /** All bodies it made: several for a destructured `body()` (research/11). */
+  results: string[];
+  /** The variables of a destructured `body()`. */
+  names: string[] | undefined;
   /** A sketch's profile as a closed polyline in world coordinates. */
   outline: [number, number, number][] | undefined;
   /** The feature's body is used by no later feature and not returned by main, so it doesn't show. */
@@ -62,8 +66,8 @@ export interface ModelError {
 
 export type WorkerRequest =
   | { type: "build"; id: number; source: string }
-  /** The bodies visible before feature `feature` of the last build, for picking while it is edited. */
-  | { type: "rollback"; id: number; feature: string }
+  /** The bodies visible before feature `feature` of the last build (or after it), for picking while it is edited and for the timeline marker. */
+  | { type: "rollback"; id: number; feature: string; after?: boolean }
   /** The reference code for entity `index` of body `body` of the last build. */
   | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
