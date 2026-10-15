@@ -9,12 +9,21 @@ import { regionDirection, regionName, ViewCube, type Region } from "./ViewCube.t
 
 export type EntityKind = "face" | "edge";
 
-/** Entities of a body to highlight, by index in the body. */
+/**
+ * Entities of a body to highlight, by index in the body. Highlights are drawn translucently through
+ * the model, so that they show also where other faces hide them (research/12).
+ */
 export interface Highlight {
   body: string;
   kind: EntityKind;
   indices: number[];
+  /** `hover`: what is hovered, e.g. a feature's faces; `accent`: what is selected, or what a reference resolves to. */
+  style: HighlightStyle;
+  /** The body's mesh, if it isn't shown, e.g. a feature's result past the timeline marker. */
+  shape?: MeshedShape;
 }
+
+export type HighlightStyle = "hover" | "accent";
 
 export interface Entity {
   body: string;
@@ -30,9 +39,16 @@ export interface Overlay {
 
 export interface ViewerProps {
   shapes: MeshedShape[] | undefined;
-  /** Which entities hover and click pick; nothing is pickable without it. */
+  /** Which entities hover and click pick; nothing is pickable without it, and hover takes edges, else faces. */
   pick?: EntityKind | undefined;
   onPick?: (entity: Entity) => void;
+  /** The hovered face or edge of a feature-library body, if any. */
+  onHover?: (entity: Entity | undefined) => void;
+  /**
+   * Makes faces and edges selectable while nothing is picked: a click selects the one under the
+   * pointer, a click elsewhere in the view clears it. Called with the selection as it changes.
+   */
+  onSelect?: (entity: Entity | undefined) => void;
   highlight?: Highlight[] | undefined;
   overlays?: Overlay[] | undefined;
   /** A camera to show, e.g. the one the user last left; it applies whenever it changes. */
@@ -57,6 +73,8 @@ export interface ViewerTestHook {
   screenPoint(entity: Entity): { x: number; y: number } | undefined;
   /** The pickable entities of the shown shapes. */
   entities(kind: EntityKind): Entity[];
+  /** The highlighted entities of `style`, e.g. a hovered face or the faces of a feature hovered in the timeline. */
+  highlighted(style: HighlightStyle): Entity[];
   /** The mean of an entity's mesh vertices. */
   centroid(entity: Entity): [number, number, number] | undefined;
   /** Where on the screen a ViewCube region can be clicked, if it faces the camera. */
@@ -88,24 +106,47 @@ function themeColor(element: Element, name: string): THREE.Color {
   return color;
 }
 
-/** Material indices of face and edge groups. */
-const NORMAL = 0;
-const SELECTED = 1;
-const HOVER = 2;
-
 interface Rendered {
   shape: MeshedShape;
+  /** The body's name, or `#<index>` for a shape that isn't a feature-library body, which hovers but isn't picked. */
+  id: string;
   mesh: THREE.Mesh;
   lines: THREE.LineSegments | undefined;
 }
 
+/** The entity of each mesh group: the body's index of it, or the group's own index for shapes that aren't bodies. */
+const groupEntity = (indexOf: number[] | undefined, group: number) => (indexOf ? (indexOf[group] ?? -1) : group);
+
+/** An entity as `body:kind:index`, for tests. */
+const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
+
 const same = (a: Entity | undefined, b: Entity | undefined) => !!a && !!b && a.body === b.body && a.kind === b.kind && a.index === b.index;
+
+/**
+ * A copy of the triangles or segments of the mesh groups whose entity is in `indices`, as a
+ * non-indexed geometry of its own (a geometry that shares attributes would free them on dispose).
+ */
+function subset(source: THREE.BufferGeometry, indexOf: number[] | undefined, indices: number[]): THREE.BufferGeometry {
+  const wanted = new Set(indices);
+  const position = source.getAttribute("position");
+  const index = source.getIndex();
+  const values: number[] = [];
+  source.groups.forEach((g, gi) => {
+    if (!wanted.has(groupEntity(indexOf, gi))) return;
+    for (let i = g.start; i < g.start + g.count; i++) {
+      const v = index ? index.getX(i) : i;
+      values.push(position.getX(v), position.getY(v), position.getZ(v));
+    }
+  });
+  return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(values, 3));
+}
 
 export function Viewer(props: ViewerProps) {
   let container!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
   let cubeElement!: HTMLDivElement;
   const [hovered, setHovered] = createSignal<Entity>();
+  const [selected, setSelected] = createSignal<Entity>();
   const [projection, setProjection] = createSignal<Projection>("perspective");
   const [collapsed, setCollapsed] = createSignal(props.collapseViewCube ?? false);
   let home = () => {};
@@ -130,23 +171,26 @@ export function Viewer(props: ViewerProps) {
     light.position.set(1, -1, 2);
     scene.add(light);
 
-    const faceMaterial = (color: THREE.Color) =>
-      new THREE.MeshStandardMaterial({ color, roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 });
+    const faceMaterial = new THREE.MeshStandardMaterial({ color: themeColor(container, "--cad-model-shape"), roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 });
+    const lineMaterial = new THREE.LineBasicMaterial({ color: themeColor(container, "--cad-model-edge") });
     const accent = themeColor(container, "--cad-model-accent");
     // Thin lines need the contrast of the text variant, e.g. a sketch outline against a light background.
     const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
-    const faceMaterials = [faceMaterial(themeColor(container, "--cad-model-shape")), faceMaterial(accent), faceMaterial(hover)];
-    const lineMaterials = [
-      new THREE.LineBasicMaterial({ color: themeColor(container, "--cad-model-edge") }),
-      new THREE.LineBasicMaterial({ color: accentLine, linewidth: 3 }),
-      new THREE.LineBasicMaterial({ color: hover, linewidth: 3 }),
-    ];
     const overlayMaterial = new THREE.LineBasicMaterial({ color: accentLine, depthTest: false });
+    // Highlights show through the model, so that they also show what other faces hide.
+    const highlightFace = (color: THREE.Color, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+    const highlightLine = (color: THREE.Color) => new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false });
+    const highlightMaterials: Record<HighlightStyle, { face: THREE.Material; line: THREE.Material }> = {
+      hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine) },
+      accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine) },
+    };
     const group = new THREE.Group();
     const overlayGroup = new THREE.Group();
     overlayGroup.renderOrder = 1;
-    scene.add(group, overlayGroup);
+    const highlightGroup = new THREE.Group();
+    highlightGroup.renderOrder = 2;
+    scene.add(group, overlayGroup, highlightGroup);
     let rendered: Rendered[] = [];
 
     const cube = new ViewCube({
@@ -356,50 +400,66 @@ export function Viewer(props: ViewerProps) {
       for (const child of objects) if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) child.geometry.dispose();
     };
 
+    /** Counts renders of the shapes, which the highlights are drawn from. */
+    const [renders, setRenders] = createSignal(0);
     createEffect(() => {
       const shapes = props.shapes;
       if (!shapes) return;
       dispose([...group.children]);
       group.clear();
       let vertices = 0;
-      rendered = shapes.map((shape) => {
+      rendered = shapes.map((shape, i) => {
         const faces = new THREE.BufferGeometry();
         syncFaces(faces, shape.faces);
-        const mesh = new THREE.Mesh(faces, faceMaterials);
+        const mesh = new THREE.Mesh(faces, faceMaterial);
         group.add(mesh);
         vertices += shape.faces.vertices.length / 3;
         let lines: THREE.LineSegments | undefined;
         if (shape.edges) {
           const geometry = new THREE.BufferGeometry();
           syncLines(geometry, shape.edges);
-          lines = new THREE.LineSegments(geometry, lineMaterials);
+          lines = new THREE.LineSegments(geometry, lineMaterial);
           group.add(lines);
         }
-        return { shape, mesh, lines };
+        return { shape, id: shape.body ?? `#${i}`, mesh, lines };
       });
       container.dataset["vertices"] = String(vertices);
+      // Indices may name other entities in the new shapes.
+      setHovered(undefined);
+      setSelected(undefined);
       frame();
-      applyHighlights();
+      setRenders((n) => n + 1);
     });
 
-    const applyHighlights = () => {
-      const highlight = props.highlight ?? [];
-      const hover = hovered();
-      for (const { shape, mesh, lines } of rendered) {
-        const paint = (geometry: THREE.BufferGeometry, kind: EntityKind, indexOf: number[] | undefined) => {
-          const selected = new Set(highlight.filter((h) => h.body === shape.body && h.kind === kind).flatMap((h) => h.indices));
-          geometry.groups.forEach((g, i) => {
-            const index = indexOf?.[i] ?? -1;
-            const material = same(hover, { body: shape.body ?? "", kind, index }) ? HOVER : selected.has(index) ? SELECTED : NORMAL;
-            // three.js reads the groups on every render.
-            g.materialIndex = material;
-          });
-        };
-        paint(mesh.geometry, "face", shape.faceIndex);
-        if (lines) paint(lines.geometry, "edge", shape.edgeIndex);
+    /** The highlighted entities by style, for tests. */
+    let highlighted: { style: HighlightStyle; entity: Entity }[] = [];
+    createEffect(() => {
+      renders();
+      dispose([...highlightGroup.children]);
+      highlightGroup.clear();
+      const own = (entity: Entity | undefined, style: HighlightStyle): Highlight[] => (entity ? [{ body: entity.body, kind: entity.kind, indices: [entity.index], style }] : []);
+      const all = [...(props.highlight ?? []), ...own(selected(), "accent"), ...own(hovered(), "hover")];
+      highlighted = all.flatMap((h) => h.indices.map((index) => ({ style: h.style, entity: { body: h.body, kind: h.kind, index } })));
+      for (const h of all) {
+        const r = h.shape ? undefined : rendered.find((x) => x.id === h.body);
+        const shape = h.shape ?? r?.shape;
+        if (!shape) continue;
+        const indexOf = h.kind === "face" ? shape.faceIndex : shape.edgeIndex;
+        // A shape that isn't shown is meshed for this highlight only.
+        let source = h.kind === "face" ? r?.mesh.geometry : r?.lines?.geometry;
+        let temporary: THREE.BufferGeometry | undefined;
+        if (!source) {
+          temporary = new THREE.BufferGeometry();
+          if (h.kind === "face") syncFaces(temporary, shape.faces);
+          else if (shape.edges) syncLines(temporary, shape.edges);
+          source = temporary;
+        }
+        const geometry = subset(source, indexOf, h.indices);
+        temporary?.dispose();
+        const { face, line } = highlightMaterials[h.style];
+        highlightGroup.add(h.kind === "face" ? new THREE.Mesh(geometry, face) : new THREE.LineSegments(geometry, line));
       }
-    };
-    createEffect(applyHighlights);
+    });
 
     createEffect(() => {
       dispose([...overlayGroup.children]);
@@ -424,34 +484,44 @@ export function Viewer(props: ViewerProps) {
       const faceHit = raycaster.intersectObjects(rendered.map((r) => r.mesh), false)[0];
       if (kind === "face") {
         const r = faceHit && rendered.find((x) => x.mesh === faceHit.object);
-        if (!r?.shape.body || faceHit?.faceIndex == null) return undefined;
-        const index = r.shape.faceIndex?.[getFaceIndex(faceHit.faceIndex, r.mesh.geometry)] ?? -1;
-        return index < 0 ? undefined : { body: r.shape.body, kind, index };
+        if (!r || faceHit?.faceIndex == null) return undefined;
+        const index = groupEntity(r.shape.faceIndex, getFaceIndex(faceHit.faceIndex, r.mesh.geometry));
+        return index < 0 ? undefined : { body: r.id, kind, index };
       }
       const lineHit = raycaster.intersectObjects(rendered.flatMap((r) => (r.lines ? [r.lines] : [])), false)[0];
       if (!lineHit || lineHit.index == null) return undefined;
       // An edge behind a face is hidden; the threshold lets edges on the face's border through.
       if (faceHit && faceHit.distance < lineHit.distance - radius * 0.01) return undefined;
       const r = rendered.find((x) => x.lines === lineHit.object);
-      if (!r?.shape.body || !r.lines) return undefined;
-      const index = r.shape.edgeIndex?.[getEdgeIndex(lineHit.index, r.lines.geometry)] ?? -1;
-      return index < 0 ? undefined : { body: r.shape.body, kind, index };
+      if (!r?.lines) return undefined;
+      const index = groupEntity(r.shape.edgeIndex, getEdgeIndex(lineHit.index, r.lines.geometry));
+      return index < 0 ? undefined : { body: r.id, kind, index };
     };
+    /** What hovering at a position shows: the pick kind's entity, or else an edge if one is there, else a face. */
+    const hoverAt = (clientX: number, clientY: number): Entity | undefined =>
+      props.pick ? entityAt(clientX, clientY, props.pick) : (entityAt(clientX, clientY, "edge") ?? entityAt(clientX, clientY, "face"));
+    /** Whether an entity is of a feature-library body, which can be picked and named. */
+    const isBody = (entity: Entity | undefined): entity is Entity => !!entity && rendered.some((r) => r.shape.body === entity.body);
 
     let down: { x: number; y: number } | undefined;
     const onPointerMove = (event: PointerEvent) => {
-      if (!props.pick || event.buttons) return;
-      const entity = entityAt(event.clientX, event.clientY, props.pick);
+      if (event.buttons) return;
+      const entity = hoverAt(event.clientX, event.clientY);
       if (!same(entity, hovered())) setHovered(entity);
     };
     const onPointerDown = (event: PointerEvent) => (down = { x: event.clientX, y: event.clientY });
     const onPointerUp = (event: PointerEvent) => {
       const start = down;
       down = undefined;
-      // A drag orbits the camera; only a click picks.
-      if (!props.pick || !start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
-      const entity = entityAt(event.clientX, event.clientY, props.pick);
-      if (entity) props.onPick?.(entity);
+      // A drag orbits the camera; only a click picks or selects.
+      if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+      if (props.pick) {
+        const entity = entityAt(event.clientX, event.clientY, props.pick);
+        if (isBody(entity)) props.onPick?.(entity);
+      } else if (props.onSelect) {
+        const entity = hoverAt(event.clientX, event.clientY);
+        setSelected(isBody(entity) ? entity : undefined);
+      }
     };
     const onPointerLeave = () => setHovered(undefined);
 
@@ -507,9 +577,16 @@ export function Viewer(props: ViewerProps) {
     canvas.addEventListener("pointerup", onPointerUp);
     canvas.addEventListener("pointerleave", onPointerLeave);
     createEffect(() => {
-      if (!props.pick) setHovered(undefined);
+      // Hover changes kind with the pick target, and picking ends a selection.
       container.dataset["pick"] = props.pick ?? "";
+      setHovered(undefined);
+      if (props.pick) setSelected(undefined);
     });
+    createEffect(() => {
+      const entity = hovered();
+      props.onHover?.(isBody(entity) ? entity : undefined);
+    });
+    createEffect(() => props.onSelect?.(selected()));
 
     const toScreen = (p: THREE.Vector3) => {
       const v = p.clone().project(camera);
@@ -523,6 +600,7 @@ export function Viewer(props: ViewerProps) {
           const indices = (kind === "face" ? r.shape.faceIndex : r.shape.edgeIndex) ?? [];
           return body ? indices.filter((i) => i >= 0).map((index) => ({ body, kind, index })) : [];
         }),
+      highlighted: (style) => highlighted.filter((h) => h.style === style).map((h) => h.entity),
       centroid(entity) {
         const r = rendered.find((x) => x.shape.body === entity.body);
         const geometry = entity.kind === "face" ? r?.mesh.geometry : r?.lines?.geometry;
@@ -608,14 +686,14 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
       cubeElement.removeEventListener("dragstart", onCubeDragStart);
       cube.dispose();
-      dispose([...group.children, ...overlayGroup.children]);
-      for (const m of [...faceMaterials, ...lineMaterials, overlayMaterial]) m.dispose();
+      dispose([...group.children, ...overlayGroup.children, ...highlightGroup.children]);
+      for (const m of [faceMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line])]) m.dispose();
       renderer.dispose();
     });
   });
 
   return (
-    <div class="cad-model__viewer" ref={container} data-hovered={hovered() ? `${hovered()!.body}:${hovered()!.kind}:${hovered()!.index}` : ""} data-projection={projection()}>
+    <div class="cad-model__viewer" ref={container} data-hovered={entityKey(hovered())} data-selected={entityKey(selected())} data-projection={projection()}>
       <canvas ref={canvas} />
       <div class="cad-viewcube" data-collapsed={collapsed() ? "true" : "false"}>
         <button class="cad-viewcube__button cad-viewcube__button--toggle" aria-label="ViewCube" title={collapsed() ? "Show ViewCube" : "Hide ViewCube"} aria-expanded={!collapsed()} onClick={() => setCollapsed(!collapsed())}>

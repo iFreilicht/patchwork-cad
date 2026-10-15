@@ -1,4 +1,4 @@
-import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
+import type { Owned, RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { ReplicadMeshedEdges, ReplicadMeshedFaces } from "replicad-threejs-helper";
 
 /** Milliseconds per phase, measured inside the worker with performance.now(). */
@@ -30,6 +30,8 @@ export interface MeshedShape {
   faceIndex: number[] | undefined;
   /** For each of `edges.edgeGroups`, the edge's index in the body. */
   edgeIndex: number[] | undefined;
+  /** The body's faces and edges by the feature that created or split them (research/12). */
+  features: Owned | undefined;
 }
 
 /** One executed feature call, from the feature library's trace. */
@@ -70,6 +72,8 @@ export type WorkerRequest =
   | { type: "rollback"; id: number; feature: string; after?: boolean }
   /** The reference code for entity `index` of body `body` of the last build. */
   | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number }
+  /** Body `body` of the last build, meshed, e.g. a feature's result past the timeline marker. */
+  | { type: "result"; id: number; body: string }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
   | { type: "check"; id: number; source: string };
 
@@ -80,6 +84,7 @@ export type WorkerResponse =
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
   | { type: "picked"; id: number; code: string }
+  | { type: "resultMeshed"; id: number; shape: MeshedShape | undefined }
   /** The trial build's error, or how many of its features are broken or failed. */
   | { type: "checked"; id: number; error: ModelError | undefined; problems: number }
   | { type: "requestFailed"; id: number; message: string };

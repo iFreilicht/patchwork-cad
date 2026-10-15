@@ -5,7 +5,7 @@ export type BuildResult =
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "checked" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "checked" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -72,6 +72,12 @@ export class Engine {
     return answer.type === "picked" ? answer.code : "";
   }
 
+  /** Body `body` of the last build, meshed, if there is one, e.g. a feature's result past the timeline marker. */
+  async result(body: string): Promise<MeshedShape | undefined> {
+    const answer = await this.#request({ type: "result", id: this.#nextId++, body });
+    return answer.type === "resultMeshed" ? answer.shape : undefined;
+  }
+
   /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
   async check(source: string): Promise<{ error: ModelError | undefined; problems: number }> {
     const answer = await this.#request({ type: "check", id: this.#nextId++, source });
@@ -100,7 +106,7 @@ export class Engine {
         loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "checked" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "checked" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));

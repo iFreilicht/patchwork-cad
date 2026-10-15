@@ -130,3 +130,9 @@ export function isDescendant(n: Name, of: Name): boolean {
 export function lastLevel(n: Name): { parent: Name; op: string; k: number } | undefined {
   return n.t === "piece" ? { parent: n.of, op: n.op, k: n.k } : undefined;
 }
+
+/** The features that own an entity of this name (research/12): the one that created it, and those that split it. */
+export function owningFeatures(n: Name): string[] {
+  const { base, levels } = chain(n);
+  return [...("feature" in base ? [base.feature] : []), ...levels.map((l) => l.op)];
+}

@@ -15,6 +15,8 @@
     /* The accent for text and borders: the primary color mixed towards the text color, so it stays readable. */
     --cad-model-accent-text: var(--editor-primary-text, #2f6fde);
     --cad-model-hover: color-mix(in oklch, var(--studio-primary, #2f6fde), var(--editor-fill, white) 45%);
+    /* Behind code and timeline entries whose features made what the 3D view hovers: pale, so that text keeps its contrast. */
+    --cad-model-cross-hover: color-mix(in oklch, var(--studio-primary, #2f6fde), var(--editor-fill, white) 70%);
     --cad-model-warning: var(--studio-warning, #c77700);
     --cad-model-panel: var(--editor-fill-offset-10, #f0f0f0);
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
@@ -155,6 +157,38 @@
   color: var(--cad-model-muted);
 }
 
+/* One line that shrinks instead of wrapping: a taller status bar would shrink the view under the pointer that hovers. */
+.cad-model .cad-model__reference {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  gap: var(--studio-space-xs, 0.25rem);
+}
+
+.cad-model .cad-model__reference code {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--cad-model-family-code);
+  font-size: inherit;
+  line-height: inherit;
+  color: var(--cad-model-accent-text);
+  user-select: all;
+}
+
+/* As tall as the text, so that it doesn't grow the status bar either. */
+.cad-model .cad-model__copy {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--cad-model-accent-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .cad-model .cad-model__focus {
   background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
 }
@@ -167,8 +201,13 @@
   box-shadow: inset 3px 0 var(--cad-model-muted);
 }
 
-.cad-model .cad-model__past-marker span:not(.cad-model__related) {
+.cad-model .cad-model__past-marker span:not(.cad-model__related, .cad-model__cross-hover) {
   filter: grayscale(1);
+}
+
+/* The code of the features that made the face or edge hovered in the 3D view. */
+.cad-model .cad-model__cross-hover {
+  background: var(--cad-model-cross-hover);
 }
 
 /* Themes set the tokens' font style, so it is set on them too. */
@@ -593,6 +632,11 @@
 
 .cad-editor__entry[data-link="hard"] {
   border-style: solid;
+}
+
+/* Entries whose features made what the 3D view hovers, or the code hovered in the code pane. */
+.cad-editor__entry[data-cross-hover="true"] {
+  background: var(--cad-model-cross-hover);
 }
 
 .cad-editor__entry[data-dragging="true"] {

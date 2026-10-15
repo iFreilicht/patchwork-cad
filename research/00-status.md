@@ -12,11 +12,10 @@
 | [08-module-evaluation.md](08-module-evaluation.md) | Model evaluations per build, their cost, module retention, OCCT memory | Done. Open: which objects fillet/chamfer/fuse leak |
 | [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity; view documents | Done. Open: orphan views of cancelled drags, the UX of listing and editing views |
 | [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Done. Open: history of adopted library bodies, scalar calculations; touch deferred |
+| [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
 
 ## Not started
 
-- Always highlight face or edge when hovering over it
-- Highlight features when hovering over them in the code or in the timeline. Decide whether features after the current timeline marker should be highlightable as well. Decide how to highlight which kind of feature; this might depend on OCCT capabilities
 - Collaboration features (seeing other people's cursors, highlights, selections and timeline markers in their respective color)
 - Allow adding comments on code, faces, edges and features. Look at other tools to see how to handle comments that reference deleted objects
 - Always display unused sketches (maybe by also returning them from the model function like "unused" features? Just a thought)

@@ -7,7 +7,7 @@ export type { Topo } from "./topo.ts";
 export { describe } from "./geom.ts";
 import { body, chamfer, extrude, fillet, sketch } from "./features.ts";
 import { pick as pickRef, type Body, type TraceEntry } from "./feature.ts";
-import { refForm, setFeaturePrinter } from "./names.ts";
+import { owningFeatures, refForm, setFeaturePrinter } from "./names.ts";
 import { oc, type Kind } from "./oc.ts";
 import { entities } from "./topo.ts";
 
@@ -18,6 +18,23 @@ export const builtins = { sketch, extrude, fillet, chamfer, body } as const;
 export function meshIds(b: Body, kind: Kind): number[] {
   const hasher = oc().ReplicadShapeHasher;
   return entities(b.topo, kind).map((e) => hasher.HashCode(e, 2147483647));
+}
+
+/** Indices of a body's faces and edges, by the feature that owns them. */
+export type Owned = Record<string, { faces: number[]; edges: number[] }>;
+
+/** The faces each feature created or split in `b` (`owningFeatures`), and the edges along them, e.g. to highlight a feature (research/12). */
+export function owners(b: Body): Owned {
+  const { faceHist, edgeFaces } = b.topo;
+  const out: Owned = {};
+  faceHist.forEach((hist, face) => {
+    for (const feature of new Set([...hist.values()].flatMap(owningFeatures))) (out[feature] ??= { faces: [], edges: [] }).faces.push(face);
+  });
+  for (const owned of Object.values(out)) {
+    const faces = new Set(owned.faces);
+    edgeFaces.forEach((adjacent, edge) => adjacent.some((f) => faces.has(f)) && owned.edges.push(edge));
+  }
+  return out;
 }
 
 /** The code for picking entity `index` of `b`, with feature names printed as variables where `trace` (that build's) has them. */

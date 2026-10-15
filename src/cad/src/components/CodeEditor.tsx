@@ -117,6 +117,24 @@ const relationBars = StateField.define<RangeSet<GutterMarker>>({
 
 const relationGutter = gutter({ class: "cad-model__relation-gutter", markers: (view) => view.state.field(relationBars) });
 
+const setCrossHover = StateEffect.define<{ start: number; end: number }[]>();
+const crossHoverMark = Decoration.mark({ class: "cad-model__cross-hover" });
+
+/** Marks the code of the features that made the face or edge hovered in the 3D view (research/12). */
+const crossHover = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setCrossHover)) continue;
+      const spans = effect.value.filter((s) => s.end <= tr.state.doc.length && s.start < s.end).sort((a, b) => a.start - b.start);
+      value = Decoration.set(spans.map((s) => crossHoverMark.range(s.start, s.end)));
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 /** Marks the line of the current model error. */
 const errorLine = StateField.define<DecorationSet>({
   create: () => Decoration.none,
@@ -159,7 +177,25 @@ export function CodeEditor(props: {
   past?: { start: number; end: number } | undefined;
   /** Code to mark as related to the focused timeline entry. */
   related?: RelatedSpan[];
+  /** The code position under the pointer, as it moves. */
+  onHover?: (offset: number | undefined) => void;
+  /** The cursor's position while the editor has focus, else undefined. */
+  onCursor?: (offset: number | undefined) => void;
+  /** Code to mark as the origin of what the 3D view hovers. */
+  crossHover?: { start: number; end: number }[];
 }) {
+  let hovered: number | undefined;
+  const hover = (offset: number | undefined) => {
+    if (offset === hovered) return;
+    hovered = offset;
+    props.onHover?.(offset);
+  };
+  let cursor: number | undefined;
+  const reportCursor = (offset: number | undefined) => {
+    if (offset === cursor) return;
+    cursor = offset;
+    props.onCursor?.(offset);
+  };
   const patchwork = new Compartment();
   /** Whether the `focus` span is marked. */
   let marked = false;
@@ -196,6 +232,15 @@ export function CodeEditor(props: {
       relationGutter,
       // Losing the focus removes the mark; clicks and keys do through listeners on the DOM below.
       EditorView.updateListener.of((update) => update.focusChanged && !update.view.hasFocus && unmark()),
+      Prec.lowest(crossHover),
+      EditorView.domEventHandlers({
+        // Precise: only over text, not in the empty space after a line.
+        mousemove: (event, view) => hover(view.posAtCoords({ x: event.clientX, y: event.clientY }) ?? undefined),
+        mouseleave: () => hover(undefined),
+      }),
+      EditorView.updateListener.of((update) => {
+        if (update.selectionSet || update.focusChanged || update.docChanged) reportCursor(update.view.hasFocus ? update.state.selection.main.head : undefined);
+      }),
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
     ],
@@ -235,7 +280,13 @@ export function CodeEditor(props: {
     const spans = props.related ?? [];
     dispatchSoon({ effects: setRelated.of(spans) });
   });
+  createEffect(() => {
+    const spans = props.crossHover ?? [];
+    dispatchSoon({ effects: setCrossHover.of(spans) });
+  });
   onCleanup(() => {
+    hover(undefined);
+    reportCursor(undefined);
     disposed = true;
     view.destroy();
   });

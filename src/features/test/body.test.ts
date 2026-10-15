@@ -5,7 +5,7 @@
 import { drawCircle, drawRoundedRectangle, measureVolume, type Shape3D } from "replicad";
 import { beforeAll, expect, test } from "vitest";
 import { body, Body, edge, extrude, fillet, plane, rect, sketch } from "../src/index.ts";
-import { beginBuild, currentTrace, describe, pick } from "../src/runtime.ts";
+import { beginBuild, currentTrace, describe, owners, pick } from "../src/runtime.ts";
 import type { Vec } from "../src/geom.ts";
 import { loadOC } from "./oc.ts";
 
@@ -72,6 +72,9 @@ test("an array becomes several bodies, named by the declared variables", () => {
   const [entry] = currentTrace();
   expect(entry!.results).toEqual([left, right]);
   expect(entry!.after).toEqual([left, right]);
+  // Each body owns its faces under its own name, which the editor highlights an entry's bodies by (research/12).
+  expect(Object.keys(owners(left!))).toEqual(["left"]);
+  expect(owners(right!)["right"]!.faces).toHaveLength(right!.topo.faces.length);
   // A bare shape and a library body are adopted as well; a body loses its history.
   const bare = body(plate(80), { name: "bare" });
   const again = body(bare, { name: "again" });

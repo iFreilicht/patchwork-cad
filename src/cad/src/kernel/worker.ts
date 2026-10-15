@@ -5,7 +5,7 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, currentTrace, liveBodies, meshIds, outline, pickCode, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, currentTrace, liveBodies, meshIds, outline, owners, pickCode, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
 import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
@@ -170,6 +170,7 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
     body: body.name,
     faceIndex: faces.faceGroups?.map((g) => faceIds.indexOf(g.faceId)),
     edgeIndex: edges?.edgeGroups?.map((g) => edgeIds.indexOf(g.edgeId)),
+    features: owners(body),
   };
 }
 
@@ -206,7 +207,7 @@ async function build(id: number, source: string): Promise<void> {
     if (shape.format === "svg" || !shape.mesh) return [];
     const value = values[i];
     const edges = shape.edges ?? undefined;
-    const pickable = value instanceof features.Body ? indices(value, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined };
+    const pickable = value instanceof features.Body ? indices(value, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
     return [{ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh, edges, ...pickable }];
   });
   lastTrace = [...currentTrace()];
@@ -242,6 +243,9 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
     const entry = lastTrace.find((t) => t.name === request.feature);
     if (!entry) throw new Error(`No feature ${request.feature} in the last build`);
     post({ type: "rolledBack", id: request.id, shapes: (request.after ? entry.after : entry.before).filter((b) => b.topo.faces.length > 0).map(meshBody) });
+  } else if (request.type === "result") {
+    const result = bodies.get(request.body);
+    post({ type: "resultMeshed", id: request.id, shape: result && meshBody(result) });
   } else {
     const body = bodies.get(request.body);
     if (!body) throw new Error(`No body ${request.body} in the last build`);

@@ -13,6 +13,7 @@ import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Rela
 import { apply, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
 import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
+import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { CadModelDoc } from "../../types.ts";
 import type { Model } from "../createModel.ts";
 import type { UiState } from "../uiState.ts";
@@ -59,6 +60,16 @@ export interface Editor {
   focused: Accessor<number | undefined>;
   /** The focused entry's dependencies and dependents, by entry index. */
   related: Accessor<Map<number, Relation>>;
+  /** The code position under the pointer in the code pane. */
+  setCodeHover(offset: number | undefined): void;
+  /** The cursor's position in the code pane while it has focus. */
+  setCodeCursor(offset: number | undefined): void;
+  /** The features of the timeline entry being hovered or dragged, else of the code under the pointer or at the cursor (whichever moved last), by owner name (`ownersOf`); the 3D view highlights what they made. */
+  hoveredFeatures: Accessor<string[]>;
+  /** The owner names of the face or edge hovered in the 3D view. */
+  setViewHover(features: string[]): void;
+  /** Entries whose features are hovered in the 3D view, or in the code or at its cursor, by entry index. */
+  crossHovered: Accessor<Set<number>>;
   /** Why the last action in the timeline didn't happen, e.g. a drop or a rename; the status bar shows it. */
   notice: Accessor<string | undefined>;
   setNotice(message: string | undefined): void;
@@ -97,6 +108,17 @@ const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => 
   fillet: ({ body }) => `fillet({ body: ${body}, edges: [], radius: 1 })`,
   chamfer: ({ body }) => `chamfer({ body: ${body}, edges: [], distance: 1 })`,
 };
+
+/** The owner names of what an entry made (see `ownerNames`): a feature's, or those of the features a Custom Script ran. */
+export const ownersOf = (entry: Entry | undefined): string[] => (!entry ? [] : entry.kind === "feature" ? (entry.trace ? [entry.trace] : []) : entry.features).flatMap(ownerNames);
+
+/**
+ * The names that the faces a traced feature made carry as their owner (`owners` in the feature
+ * library): the feature's, and its bodies', which differ for a body() that adopts several (research/11).
+ */
+const ownerNames = (t: FeatureTrace) => [...new Set([t.name, ...t.results])];
+
+const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** A label of an entry for messages. */
 const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.names.join(", ") : `the Custom Script at lines ${entry.lines.join("–")}`);
@@ -287,6 +309,48 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     return new Map(index === undefined || !graph ? [] : relations(graph, index).map((r) => [r.index, r]));
   });
 
+  const [codeHover, setCodeHoverOffset] = createSignal<number>();
+  const [codeCursor, setCodeCursorOffset] = createSignal<number>();
+  /** Which of the two moved last: it wins while both are in the code pane, e.g. typing with the pointer parked over other code. */
+  const [codeLast, setCodeLast] = createSignal<"hover" | "cursor">("hover");
+  const setCodeHover = (offset: number | undefined) => {
+    setCodeHoverOffset(offset);
+    if (offset !== undefined) setCodeLast("hover");
+  };
+  const setCodeCursor = (offset: number | undefined) => {
+    setCodeCursorOffset(offset);
+    if (offset !== undefined) setCodeLast("cursor");
+  };
+  /** The features at a code position: its feature statement's, or in a Custom Script those that ran on its line, e.g. each rib of a loop. */
+  const featuresAt = (offset: number): string[] => {
+    const entry = tl().entries.find((e) => e.span.start <= offset && offset < e.span.end);
+    if (entry?.kind !== "script") return ownersOf(entry);
+    const line = source().slice(0, offset).split("\n").length;
+    return entry.features.filter((f) => f.line === line).flatMap(ownerNames);
+  };
+  /** The features of the code under the pointer or at the cursor of the focused code pane, whichever moved last. */
+  const codeFeatures = createMemo(
+    () => {
+      const offset = codeLast() === "hover" ? (codeHover() ?? codeCursor()) : (codeCursor() ?? codeHover());
+      return offset === undefined || syntaxError() ? [] : featuresAt(offset);
+    },
+    [],
+    { equals: sameNames },
+  );
+  const hoveredFeatures = createMemo(
+    () => {
+      const index = dragging() ?? hovered();
+      return index !== undefined ? ownersOf(tl().entries[index]) : codeFeatures();
+    },
+    [],
+    { equals: sameNames },
+  );
+  const [viewHover, setViewHover] = createSignal<string[]>([], { equals: sameNames });
+  const crossHovered = createMemo(() => {
+    const names = new Set([...viewHover(), ...codeFeatures()]);
+    return new Set(tl().entries.flatMap((e, i) => (ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
+  });
+
   const blocked = (index: number, position: number): string | undefined => {
     const graph = g();
     const entries = tl().entries;
@@ -419,6 +483,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     dragging,
     focused,
     related,
+    setCodeHover,
+    setCodeCursor,
+    hoveredFeatures,
+    setViewHover,
+    crossHovered,
     blocked,
     notice,
     setNotice,
