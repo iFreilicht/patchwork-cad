@@ -73,6 +73,17 @@
   cursor: pointer;
 }
 
+.cad-model .cad-viewcube__drag {
+  position: absolute;
+  top: -100px;
+  padding: 2px 6px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 4px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  font-size: 12px;
+}
+
 .cad-model .cad-viewcube__buttons {
   display: flex;
   flex-direction: column;
@@ -128,6 +139,18 @@
 
 .cad-model .cad-model__focus {
   background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
+}
+
+.cad-model--view-doc {
+  position: relative;
+}
+
+.cad-view-doc__actions {
+  position: absolute;
+  top: var(--studio-space-sm, 0.5rem);
+  left: var(--studio-space-sm, 0.5rem);
+  display: flex;
+  gap: var(--studio-space-2xs, 4px);
 }
 
 /* ---------- WYSIWYG editor ---------- */

@@ -13,6 +13,7 @@ import { createEditor } from "./state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
+import { viewsOf } from "../viewDoc.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -88,6 +89,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           overlays={overlays()}
           view={ui.view(EDITOR_TOOL_ID)}
           onViewChange={(view) => ui.setView(EDITOR_TOOL_ID, view)}
+          createView={viewsOf(props.handle)}
         />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>

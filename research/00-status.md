@@ -10,11 +10,10 @@
 | [06-poc-replicad-in-patchwork.md](06-poc-replicad-in-patchwork.md) | PoC 1: replicad and OCCT in a Patchwork tool, code editor and 3D view | Done ([src/cad](../src/cad/), `pnpm dev`). Open: real-network and Safari load times, Firefox's slower OCCT |
 | [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | Done ([src/features](../src/features/), tool `cad-model`; [ViewCube](07-poc-modelling-ui.md#the-viewcube)). Open: bodies as versions vs. the timeline's order, same-argument conflicts, names of features in loops |
 | [08-module-evaluation.md](08-module-evaluation.md) | Model evaluations per build, their cost, module retention, OCCT memory | Done. Open: which objects fillet/chamfer/fuse leak |
-| [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity | In progress: code pane and camera per user, model and tool done; view documents to do |
+| [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity; view documents | Done. Open: orphan views of cancelled drags, the UX of listing and editing views |
 
 ## Not started
 
-- View documents (`cad-model-view`: a model reference and a camera) for embeddings and several views of one model ([10](10-view-state.md#instance-identity)); created by dragging a ViewCube region into another document, saved with "Save view" in the viewer
 - Add timeline marker to enable creating features before existing features (consider implications of commenting out vs. just changing what gets returned. Might be complex enough for a research question)
 - Allow moving features in the timeline until directly after the feature they depend on with drag-and-drop
 - Always highlight face or edge when hovering over it 

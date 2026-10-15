@@ -3,8 +3,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape } from "../kernel/protocol.ts";
+import type { AutomergeUrl } from "@automerge/automerge-repo";
 import type { CameraState } from "../types.ts";
-import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
+import { regionDirection, regionName, ViewCube, type Region } from "./ViewCube.ts";
 
 export type EntityKind = "face" | "edge";
 
@@ -38,7 +39,13 @@ export interface ViewerProps {
   view?: CameraState | undefined;
   /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
   onViewChange?: (view: CameraState) => void;
+  /** Makes ViewCube regions draggable: a drag creates a view document from the region (e.g. "Front") with this and drags it. */
+  createView?: (view: CameraState, name: string) => { url: AutomergeUrl; title: string } | undefined;
 }
+
+/** Two cameras are the same; storage may reorder an object's keys. */
+export const sameCamera = (a: CameraState | undefined, b: CameraState | undefined) => !!a && !!b && cameraKey(a) === cameraKey(b);
+const cameraKey = (v: CameraState) => JSON.stringify([v.direction, v.target, v.distance, v.projection, v.zoom]);
 
 /**
  * For tests: where on the screen an entity can be clicked. The e2e specs click real pixels, so
@@ -269,8 +276,7 @@ export function Viewer(props: ViewerProps) {
       projection: camera === perspective ? "perspective" : "orthographic",
       zoom: round(orthographic.zoom),
     });
-    // Storage may reorder an object's keys.
-    const key = (v: CameraState) => JSON.stringify([v.direction, v.target, v.distance, v.projection, v.zoom]);
+    const key = cameraKey;
     /** The camera this view last reported or applied, so that it doesn't apply its own state again. */
     let reported: string | undefined;
     const report = () => {
@@ -443,6 +449,29 @@ export function Viewer(props: ViewerProps) {
       if (region) turnTo(regionDirection(region));
     };
     const onCubeLeave = () => cube.hover(undefined);
+    const onCubeDragStart = (event: DragEvent) => {
+      const start = cubeDown ?? { x: event.clientX, y: event.clientY };
+      cubeDown = undefined;
+      const region = cube.regionAt(cubeNdc(start.x, start.y));
+      const name = region && regionName(region);
+      const created = region && name ? props.createView?.({ ...cameraState(), direction: vector(regionDirection(region)) }, name) : undefined;
+      if (!created || !event.dataTransfer) return event.preventDefault();
+      const { url, title } = created;
+      // The payload Patchwork's drop targets read, as in the pandoc tool. "all", as the sideboard's
+      // own drags: its list asks for "move", and a drop effect the drag doesn't allow cancels the drop.
+      event.dataTransfer.effectAllowed = "all";
+      event.dataTransfer.setData("text/x-patchwork-urls", JSON.stringify([url]));
+      event.dataTransfer.setData("text/x-patchwork-dnd", JSON.stringify({ source: "patchwork-cad", items: [{ url, name: title, type: "cad-model-view" }] }));
+      event.dataTransfer.setData("text/plain", url);
+      // The cube's element is transparent; drag the region's name instead.
+      const image = document.createElement("div");
+      image.className = "cad-viewcube__drag";
+      image.textContent = title;
+      container.append(image);
+      event.dataTransfer.setDragImage(image, 0, 0);
+      setTimeout(() => image.remove());
+    };
+    cubeElement.addEventListener("dragstart", onCubeDragStart);
     cubeElement.addEventListener("pointermove", onCubeMove);
     cubeElement.addEventListener("pointerdown", onCubeDown);
     cubeElement.addEventListener("pointerup", onCubeUp);
@@ -551,6 +580,7 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerdown", onCubeDown);
       cubeElement.removeEventListener("pointerup", onCubeUp);
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
+      cubeElement.removeEventListener("dragstart", onCubeDragStart);
       cube.dispose();
       dispose([...group.children, ...overlayGroup.children]);
       for (const m of [...faceMaterials, ...lineMaterials, overlayMaterial]) m.dispose();
@@ -574,7 +604,7 @@ export function Viewer(props: ViewerProps) {
             </svg>
           </button>
         </div>
-        <div class="cad-viewcube__cube" ref={cubeElement} />
+        <div class="cad-viewcube__cube" ref={cubeElement} draggable={props.createView ? "true" : undefined} />
       </div>
     </div>
   );

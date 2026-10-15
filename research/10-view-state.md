@@ -1,6 +1,6 @@
 # View State
 
-Where the tools keep per-user UI state: what the editor and the viewer remember about how a user last looked at a model. Implementation: [`uiState.ts`](../src/cad/src/components/uiState.ts); test: [`cad-ui-state.spec.ts`](../src/harness/e2e/tests/cad-ui-state.spec.ts).
+Where the tools keep how a model is looked at: per user, what the editor and the viewer remember about how a user last looked at a model, and per view document, a camera that everyone shares. Implementation: [`uiState.ts`](../src/cad/src/components/uiState.ts), [`viewer.tsx`](../src/cad/src/tools/viewer.tsx); tests: [`cad-ui-state.spec.ts`](../src/harness/e2e/tests/cad-ui-state.spec.ts), [`cad-view-doc.spec.ts`](../src/harness/e2e/tests/cad-view-doc.spec.ts).
 
 ## Storage
 
@@ -26,4 +26,12 @@ The numbers are rounded to 9 decimals, because Automerge 3.4.1 stores `0.9999999
 
 The camera is per user, model and tool, not per tool instance, because a tool can't tell its instances apart. Patchwork mounts a tool with the document handle and a fresh content element only ([`legacy-impl.ts`](../node_modules/.pnpm/@inkandswitch+patchwork-elements@6.0.3_@automerge+automerge-repo@2.6.0-subduction.48_@i_9d33da6ea60b875700fada3a96960a72/node_modules/@inkandswitch/patchwork-elements/src/legacy-impl.ts): `this.#tool.module(this.#handle, this.#content as ToolElement)`), and `<patchwork-view>` observes no attribute that names an instance (`patchwork-view.ts`: `return [ATTRS.component, ATTRS.url, ATTRS.docUrl, ATTRS.toolId];`). The tiling frame keys a panel's view by its leaf, but only for React: `<patchwork-view key={leaf.id} className="tile-panel__view" doc-url={resolvedUrl} tool-id={effectiveToolId} />` ([`PatchworkFrame.tsx`](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/patchwork-frame-tiling/src/PatchworkFrame.tsx)). So two panels of one model in the viewer share one stored camera: whichever moved last decides the camera of both on the next mount.
 
-A tool could guess an instance from its position in the DOM (the chain of enclosing views, its index among views of the same document and tool), but closing, reordering or moving panels would shift those keys. Views that need their own camera, e.g. an embedding or several viewers in a tiled layout, get it from a separate document that holds a model reference and a camera.
+A tool could guess an instance from its position in the DOM (the chain of enclosing views, its index among views of the same document and tool), but closing, reordering or moving panels would shift those keys. Views that need their own camera, e.g. an embedding or several viewers in a tiled layout, get it from a view document instead.
+
+## View documents
+
+A `cad-model-view` document ([`CadModelViewDoc`](../src/cad/src/types.ts)) holds a title, the model's URL and a camera. The datatype is unlisted, as it can't be created without a model, and only the viewer opens it.
+
+- **Creating one:** dragging a ViewCube region out of either tool creates a view of the model from that region, with the current target, distance and projection, titled e.g. "CAD Model – Front Right Top". The drag carries Patchwork's document payload (`text/x-patchwork-urls`, `text/x-patchwork-dnd`, `text/plain`, as the pandoc tool's); the spec drops it into the sidebar's document list, other drop targets are untested. It must allow every drop effect: the list sets `dropEffect = "move"` (sideboard: `"all" keeps move/copy dropEffects … valid so the drop event actually fires`). So a click on the cube turns the view, a drag creates a view; the cube can't be dragged to orbit.
+- **Viewing one:** the viewer shows the model with the document's camera. Orbiting is local; "Save view" writes the current camera to the document, and other open views of it follow. "Open model" opens the model.
+- **Open:** the document is created when the drag starts, so a cancelled drag leaves an orphan view. Where views are listed, and how to rename one or point it at another model, is to be discussed.

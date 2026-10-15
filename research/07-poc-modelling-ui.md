@@ -48,7 +48,7 @@ The tool's [`prepare.ts`](../src/cad/src/kernel/prepare.ts) adds names in memory
 | Tool id | Name | What it is |
 |---|---|---|
 | `cad-model` | CAD Editor | The WYSIWYG editor: toolbar, 3D view with picking, timeline, feature dialogs, and the code editor on demand. It is the default because Patchwork opens a datatype's first listed tool by id (`@inkandswitch/patchwork-plugins`, `getFallbackTool`: `sortPlugins(plugins, "supportedDatatypes", type, "id")?.filter((tool) => !tool.unlisted)?.[0]`). |
-| `cad-model-viewer` | CAD Viewer | The 3D view alone, for embedding a model. |
+| `cad-model-viewer` | CAD Viewer | The 3D view alone, for embedding a model, and the tool of view documents (`cad-model-view`, [10](10-view-state.md#view-documents)). |
 
 ### The editor
 
@@ -61,7 +61,7 @@ The tool's [`prepare.ts`](../src/cad/src/kernel/prepare.ts) adds names in memory
 
 ### The ViewCube
 
-Both tools' 3D view ([`Viewer.tsx`](../src/cad/src/components/Viewer.tsx), [`ViewCube.ts`](../src/cad/src/components/ViewCube.ts)) has a ViewCube in its top-right corner, with Home and a perspective/orthographic toggle beside it; feature dialogs open top left, as in Onshape, so that the cube stays usable while picking. Z is up, Front looks along +Y, Right along −X and Top along −Z. A click on one of its 26 regions (6 faces, 12 edges, 8 corners) turns the camera to look from that region's direction (each axis −1, 0 or 1) around the orbit target; Home looks from front, right and above and frames the model. A model that outgrows the view is reframed along the camera's current direction, so an edit never turns the view. The e2e specs set views by clicking the cube ([`cad-viewcube.spec.ts`](../src/harness/e2e/tests/cad-viewcube.spec.ts)); they wait for the turn's end, which the view marks with `data-turning`.
+Both tools' 3D view ([`Viewer.tsx`](../src/cad/src/components/Viewer.tsx), [`ViewCube.ts`](../src/cad/src/components/ViewCube.ts)) has a ViewCube in its top-right corner, with Home and a perspective/orthographic toggle beside it; feature dialogs open top left, as in Onshape, so that the cube stays usable while picking. Z is up, Front looks along +Y, Right along −X and Top along −Z. A click on one of its 26 regions (6 faces, 12 edges, 8 corners) turns the camera to look from that region's direction (each axis −1, 0 or 1) around the orbit target; Home looks from front, right and above and frames the model. A model that outgrows the view is reframed along the camera's current direction, so an edit never turns the view. The e2e specs set views by clicking the cube ([`cad-viewcube.spec.ts`](../src/harness/e2e/tests/cad-viewcube.spec.ts)); they wait for the turn's end, which the view marks with `data-turning`. Dragging a region out creates a view document ([10](10-view-state.md#view-documents)).
 
 ## Results
 

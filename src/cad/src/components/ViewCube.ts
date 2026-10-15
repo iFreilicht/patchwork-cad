@@ -27,6 +27,12 @@ export const REGIONS: Region[] = [-1, 0, 1].flatMap((x) => [-1, 0, 1].flatMap((y
 
 export const regionKey = (r: Region) => r.join(",");
 
+/** A region's name, e.g. "Front", "Front Right" or "Front Right Top". */
+export function regionName([x, y, z]: Region): string {
+  const parts = [y < 0 ? "Front" : y > 0 ? "Back" : "", x < 0 ? "Left" : x > 0 ? "Right" : "", z > 0 ? "Top" : z < 0 ? "Bottom" : ""];
+  return parts.filter(Boolean).join(" ");
+}
+
 /** The camera direction for a region. Top and bottom tilt a little towards the front, so that Z-up orbit controls keep Front at the bottom of the screen. */
 export function regionDirection(r: Region): THREE.Vector3 {
   const v = new THREE.Vector3(...r);

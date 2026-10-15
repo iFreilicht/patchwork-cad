@@ -27,3 +27,10 @@ export interface CadModelDoc {
   /** The model: a plain ES module that imports replicad or the feature library and default-exports a function returning shapes. */
   source: string;
 }
+
+/** A view of a model: which model, seen with which camera (research/10-view-state.md). */
+export interface CadModelViewDoc {
+  title: string;
+  model: AutomergeUrl;
+  camera: CameraState;
+}

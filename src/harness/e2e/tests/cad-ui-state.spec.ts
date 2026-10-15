@@ -4,7 +4,7 @@
  * had, after a tool switch and after a reload.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docUrl, editorView, openCode, openWithTool, type Region } from "../cad.ts";
+import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docUrl, editorView, openCode, openWithTool, type Region, reloadStored } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -27,7 +27,7 @@ test("the editor remembers per model whether the code pane was open", async ({ u
   await openWithTool(page, "cad-model");
   await expect(code).toHaveCount(1);
 
-  await page.reload();
+  await reloadStored(page);
   await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await expect(code).toHaveCount(1);
 
@@ -67,7 +67,7 @@ test("each tool remembers its camera per model", async ({ users }) => {
   await expectDirection(page, [1, -1, 1]);
   await expect(editor.locator(".cad-model__viewer")).toHaveAttribute("data-projection", "orthographic");
 
-  await page.reload();
+  await reloadStored(page);
   await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await expectDirection(page, [1, -1, 1]);
   await expect(editor.locator(".cad-model__viewer")).toHaveAttribute("data-projection", "orthographic");
@@ -107,7 +107,7 @@ test("two viewers of one model don't move each other", async ({ users }) => {
   expect(await first.evaluate((el) => (el as unknown as { cadViewer: { cameraDirection(): number[] } }).cadViewer.cameraDirection())).toEqual(home.map((c) => expect.closeTo(c, 6)));
 
   // The next mount shows the camera that moved last.
-  await page.reload();
+  await reloadStored(page);
   await expect(page.locator(".cad-model--viewer").first()).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await expectDirection(page, [0, -1, 0]);
 });

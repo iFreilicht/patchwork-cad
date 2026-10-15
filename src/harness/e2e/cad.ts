@@ -87,6 +87,12 @@ export function docPathWith(page: Page, tool?: string): string {
 /** The open document's automerge URL. */
 export const docUrl = (page: Page) => hashParams(page).get("doc")!;
 
+/** Reloads the page once the tab's repo has stored every change, so that the reload can't lose a recent one. */
+export async function reloadStored(page: Page): Promise<void> {
+  await page.evaluate(() => (window as unknown as { repo: { flush(): Promise<void> } }).repo.flush());
+  await page.reload();
+}
+
 /** The model source, read from the tab's repo. */
 export async function modelSource(page: Page): Promise<string> {
   return page.evaluate(async (url) => {
