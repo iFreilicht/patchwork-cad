@@ -13,6 +13,18 @@
 
 ## Not started
 
+- Persist whether Code Pane was open when the tool was last used
+- Add a ViewCube to easily enable switching between views that look at a face (front, rear, left, right, top, bottom), edge (i.e. 45deg between faces) or a corner. Next to the viewcube should be one button for going home and one for switching between orthographic and perspective view.
+- Persist the orientation the part was last viewed at. If possible, make it so that multiple instances of a Viewer remember which orientation they were displaying. This would be useful for embeddings as well as the tiled frame layout.
+- Add timeline marker to enable creating features before existing features (consider implications of commenting out vs. just changing what gets returned. Might be complex enough for a research question)
+- Allow moving features in the timeline until directly after the feature they depend on with drag-and-drop
+- Always highlight face or edge when hovering over it 
+- Collaboration features (seeing other people's cursors, highlights and selections in their respective color)
+- Allow adding comments on code, faces, edges and features. Look at other tools to see how to handle comments that reference deleted objects
+- Always display unused sketches (maybe by also returning them from the model function like "unused" features? Just a thought)
+- Add a "Move" feature that creates a copy of a body at a different location. Translating by a set number of mm in X, Y or Z axis is enough for now.
+- Allow disabling tangent selection of edges when creating fillet or chamfer
+- Allow toggling visibility of sketches
 - Per-feature caching ([review, risk 4](01-basic-idea-and-literature.md#problems-and-risks)); not needed for PoC 2's parts ([07](07-poc-modelling-ui.md#rebuild-performance))
 - Licensing obligations for the OCCT wasm build (risk 6)
 - Embedding: decal, reference in a sketch, annotation (item 7)
