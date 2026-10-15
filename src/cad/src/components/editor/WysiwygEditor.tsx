@@ -14,6 +14,8 @@ import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
 
+const EDITOR_TOOL_ID = "cad-model";
+
 /** The source span of a feature's parameter value, or an empty span. */
 const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
   const p = entry.call.props?.find((x) => x.key === key);
@@ -28,8 +30,8 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const model = createModel(props.handle);
   const editor = createEditor(props.handle, model);
   const ui = createUiState(props.element, props.handle.url);
-  const codeOpen = () => ui.get("codeOpen") ?? false;
-  const setCodeOpen = (open: boolean) => ui.set("codeOpen", open);
+  const codeOpen = ui.codeOpen;
+  const setCodeOpen = ui.setCodeOpen;
   const [codeFocus, setCodeFocus] = createSignal<Span>();
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {
@@ -78,7 +80,15 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} />
       <div class="cad-editor__stage">
-        <Viewer shapes={rolledBack() ?? model.shapes()} pick={editor.pickTarget()?.kind} onPick={pick} highlight={highlight()} overlays={overlays()} />
+        <Viewer
+          shapes={rolledBack() ?? model.shapes()}
+          pick={editor.pickTarget()?.kind}
+          onPick={pick}
+          highlight={highlight()}
+          overlays={overlays()}
+          view={ui.view(EDITOR_TOOL_ID)}
+          onViewChange={(view) => ui.setView(EDITOR_TOOL_ID, view)}
+        />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
         <Show when={editor.syntaxError()}>{(message) => <p class="cad-editor__banner">The code doesn't parse ({message()}); the timeline shows its last valid state.</p>}</Show>

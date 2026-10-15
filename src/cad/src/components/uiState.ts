@@ -1,16 +1,20 @@
 import { createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
-import type { DocUiState, UiStorageDoc } from "../types.ts";
+import type { CameraState, DocUiState, UiStorageDoc } from "../types.ts";
 
 /** The tool-storage id both tools share, so that state can be read by either. */
 const TOOL_STORAGE_ID = "patchwork-cad";
 
 export interface UiState {
-  get<K extends keyof DocUiState>(key: K): DocUiState[K];
-  set<K extends keyof DocUiState>(key: K, value: NonNullable<DocUiState[K]>): void;
-  /** Whether the stored state has been read; before that, `get` returns nothing. */
-  loaded: Accessor<boolean>;
+  codeOpen: Accessor<boolean>;
+  setCodeOpen(open: boolean): void;
+  /**
+   * The camera a tool last showed the model with, as stored when the state loaded. It doesn't follow
+   * later writes, so that two views of one model and tool don't move each other.
+   */
+  view(toolId: string): CameraState | undefined;
+  setView(toolId: string, view: CameraState): void;
 }
 
 /**
@@ -20,19 +24,31 @@ export interface UiState {
  */
 export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiState {
   const [state, setState] = createSignal<DocUiState>({});
-  const [loaded, setLoaded] = createSignal(false);
+  const [loadedViews, setLoadedViews] = createSignal<DocUiState["views"]>();
+  /** Tools that set a camera before the state loaded, which then wins over the stored one. */
+  const moved = new Set<string>();
   let handle: DocHandle<UiStorageDoc> | undefined;
   /** Writes made before the storage doc was found. */
-  let pending: Partial<DocUiState> = {};
+  let pending: ((entry: DocUiState) => void)[] = [];
 
-  const write = (patch: Partial<DocUiState>) =>
-    handle?.change((d) => {
+  const write = (edit: (entry: DocUiState) => void) => {
+    if (!handle) {
+      pending.push(edit);
+      return;
+    }
+    handle.change((d) => {
       // An assignment evaluates to the plain object, not to the document's proxy of it: read back.
       d.docs ??= {};
       d.docs[docUrl] ??= {};
-      Object.assign(d.docs[docUrl], patch);
+      edit(d.docs[docUrl]);
     });
+  };
   const read = () => setState({ ...handle?.doc()?.docs?.[docUrl] });
+  const load = () => {
+    const views = { ...handle?.doc()?.docs?.[docUrl]?.views };
+    for (const toolId of moved) delete views[toolId];
+    setLoadedViews(views);
+  };
 
   let disposed = false;
   const unsubscribe = subscribe<AutomergeUrl>(element, { type: "patchwork:tool-storage", toolId: TOOL_STORAGE_ID }, (url) => {
@@ -42,10 +58,9 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
       handle?.off("change", read);
       handle = found;
       handle.on("change", read);
-      if (Object.keys(pending).length) write(pending);
-      pending = {};
+      if (!loadedViews()) load();
+      for (const edit of pending.splice(0)) write(edit);
       read();
-      setLoaded(true);
     });
   });
   onCleanup(() => {
@@ -55,12 +70,18 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
   });
 
   return {
-    get: (key) => state()[key],
-    set(key, value) {
-      setState((s) => ({ ...s, [key]: value }));
-      if (handle) write({ [key]: value });
-      else pending[key] = value;
+    codeOpen: () => state().codeOpen ?? false,
+    setCodeOpen(open) {
+      setState((s) => ({ ...s, codeOpen: open }));
+      write((entry) => (entry.codeOpen = open));
     },
-    loaded,
+    view: (toolId) => loadedViews()?.[toolId],
+    setView(toolId, view) {
+      if (!loadedViews()) moved.add(toolId);
+      write((entry) => {
+        entry.views ??= {};
+        entry.views[toolId] = view;
+      });
+    },
   };
 }

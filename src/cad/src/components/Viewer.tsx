@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape } from "../kernel/protocol.ts";
+import type { CameraState } from "../types.ts";
 import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 
 export type EntityKind = "face" | "edge";
@@ -33,6 +34,10 @@ export interface ViewerProps {
   onPick?: (entity: Entity) => void;
   highlight?: Highlight[] | undefined;
   overlays?: Overlay[] | undefined;
+  /** A camera to show, e.g. the one the user last left; it applies whenever it changes. */
+  view?: CameraState | undefined;
+  /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
+  onViewChange?: (view: CameraState) => void;
 }
 
 /**
@@ -51,7 +56,7 @@ export interface ViewerTestHook {
   cameraDirection(): [number, number, number];
 }
 
-export type Projection = "perspective" | "orthographic";
+export type Projection = CameraState["projection"];
 
 /** The direction the camera looks from at first and after Home: front, right and above. */
 const HOME_DIRECTION = new THREE.Vector3(0.55, -0.85, 0.65).normalize();
@@ -94,7 +99,7 @@ export function Viewer(props: ViewerProps) {
   const [hovered, setHovered] = createSignal<Entity>();
   const [projection, setProjection] = createSignal<Projection>("perspective");
   let home = () => {};
-  let toggleProjection = () => {};
+  let toggleProjection = (_byUser?: boolean) => {};
 
   onMount(() => {
     const scene = new THREE.Scene();
@@ -220,17 +225,21 @@ export function Viewer(props: ViewerProps) {
       const d = distance();
       const along = turn.from.clone().applyQuaternion(new THREE.Quaternion().slerp(turn.rotation, eased));
       camera.position.copy(controls.target).addScaledVector(along, d);
-      if (t === 1) setTurn(undefined);
       controls.update();
       camera.updateMatrixWorld();
+      if (t === 1) {
+        setTurn(undefined);
+        report();
+      }
     };
     controls.addEventListener("start", () => setTurn(undefined));
 
     home = () => {
       setTurn(undefined);
       frame(true, HOME_DIRECTION);
+      report();
     };
-    toggleProjection = () => {
+    toggleProjection = (byUser = true) => {
       setTurn(undefined);
       const d = distance();
       if (camera === perspective) {
@@ -247,7 +256,53 @@ export function Viewer(props: ViewerProps) {
       updateProjection();
       controls.update();
       setProjection(camera === perspective ? "perspective" : "orthographic");
+      if (byUser) report();
     };
+
+    // Rounded: Automerge 3.4.1 stores 0.9999999999999999 in a list as 0 (research/10-view-state.md).
+    const round = (x: number) => Math.round(x * 1e9) / 1e9;
+    const vector = (v: THREE.Vector3) => v.toArray().map(round) as [number, number, number];
+    const cameraState = (): CameraState => ({
+      direction: vector(direction()),
+      target: vector(controls.target),
+      distance: round(distance()),
+      projection: camera === perspective ? "perspective" : "orthographic",
+      zoom: round(orthographic.zoom),
+    });
+    // Storage may reorder an object's keys.
+    const key = (v: CameraState) => JSON.stringify([v.direction, v.target, v.distance, v.projection, v.zoom]);
+    /** The camera this view last reported or applied, so that it doesn't apply its own state again. */
+    let reported: string | undefined;
+    const report = () => {
+      const state = cameraState();
+      reported = key(state);
+      props.onViewChange?.(state);
+    };
+    controls.addEventListener("end", report);
+
+    const apply = (view: CameraState) => {
+      setTurn(undefined);
+      if (view.projection !== projection()) toggleProjection(false);
+      controls.target.set(...view.target);
+      camera.position.copy(controls.target).addScaledVector(new THREE.Vector3(...view.direction).normalize(), view.distance);
+      for (const c of [perspective, orthographic]) {
+        c.near = view.distance / 300;
+        c.far = view.distance * 33;
+      }
+      orthoHeight = heightAt(view.distance);
+      orthographic.zoom = view.zoom;
+      updateProjection();
+      controls.update();
+      // As if framed from here, so that a build only reframes if the model doesn't fit.
+      framed = new THREE.Sphere(controls.target.clone(), view.distance / 3);
+      radius = framed.radius;
+    };
+    createEffect(() => {
+      const view = props.view;
+      if (!view || key(view) === reported) return;
+      reported = key(view);
+      apply(view);
+    });
 
     let frameId = 0;
     const tick = (now: number) => {

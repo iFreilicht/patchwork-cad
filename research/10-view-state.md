@@ -11,7 +11,19 @@ The account doc is the place for that, but tools don't get its handle anymore. P
 Both tools subscribe with the tool-storage id `patchwork-cad`, so they share one doc ([`UiStorageDoc`](../src/cad/src/types.ts)), keyed by model URL:
 
 ```ts
-{ docs: { [modelUrl]: { codeOpen?: boolean } } }
+{ docs: { [modelUrl]: { codeOpen?: boolean; views?: { [toolId]: CameraState } } } }
 ```
 
 The editor remembers whether the code pane was open. Without a provider, e.g. outside Patchwork, the state is kept in memory only.
+
+## Camera
+
+Each tool remembers the camera it last showed a model with ([`CameraState`](../src/cad/src/types.ts): direction, orbit target, distance, projection, orthographic zoom), written after an orbit, a ViewCube turn, Home or a projection switch, not per frame. A stored camera counts as framed, so a build only reframes the model if it doesn't fit ([07](07-poc-modelling-ui.md#the-viewcube)). A tool applies the stored camera when it mounts, not when the stored one changes later, so that two views of one model in the same tool don't move each other.
+
+The numbers are rounded to 9 decimals, because Automerge 3.4.1 stores `0.9999999999999999` (the largest double below 1, e.g. the x of a direction along +X) as `0` in a list, while a map field keeps it, and so does `1.9999999999999998`; wrapping it in `Float64` doesn't help. A direction of `[0.9999999999999999, -3e-16, 6e-17]` came back as almost the zero vector, which the next device normalised into an arbitrary direction. [`automerge-floats.test.ts`](../src/cad/test/automerge-floats.test.ts) fails once Automerge fixes this.
+
+## Instance identity
+
+The camera is per user, model and tool, not per tool instance, because a tool can't tell its instances apart. Patchwork mounts a tool with the document handle and a fresh content element only ([`legacy-impl.ts`](../node_modules/.pnpm/@inkandswitch+patchwork-elements@6.0.3_@automerge+automerge-repo@2.6.0-subduction.48_@i_9d33da6ea60b875700fada3a96960a72/node_modules/@inkandswitch/patchwork-elements/src/legacy-impl.ts): `this.#tool.module(this.#handle, this.#content as ToolElement)`), and `<patchwork-view>` observes no attribute that names an instance (`patchwork-view.ts`: `return [ATTRS.component, ATTRS.url, ATTRS.docUrl, ATTRS.toolId];`). The tiling frame keys a panel's view by its leaf, but only for React: `<patchwork-view key={leaf.id} className="tile-panel__view" doc-url={resolvedUrl} tool-id={effectiveToolId} />` ([`PatchworkFrame.tsx`](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/patchwork-frame-tiling/src/PatchworkFrame.tsx)). So two panels of one model in the viewer share one stored camera: whichever moved last decides the camera of both on the next mount.
+
+A tool could guess an instance from its position in the DOM (the chain of enclosing views, its index among views of the same document and tool), but closing, reordering or moving panels would shift those keys. Views that need their own camera, e.g. an embedding or several viewers in a tiled layout, get it from a separate document that holds a model reference and a camera.
