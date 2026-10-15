@@ -34,7 +34,8 @@ export async function vertices(page: Page): Promise<number> {
 
 /** Replaces the whole model source by typing into the editor (one undoable edit per key). */
 export async function replaceSource(page: Page, source: string): Promise<void> {
-  await editor(page).click();
+  // Focus rather than click: in the editor's narrow code pane, the center of long lines is scrolled out of view.
+  await editor(page).focus();
   await pressMod(page, "a");
   await page.keyboard.press("Delete");
   // insertText skips CodeMirror's auto-indent and bracket closing, so the text arrives verbatim.
