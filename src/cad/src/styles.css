@@ -65,6 +65,16 @@
   height: var(--cad-viewcube-size);
 }
 
+/* Collapsed, only the toggle in the top right corner stays. */
+.cad-model .cad-viewcube[data-collapsed="true"] {
+  width: 20px;
+  height: 20px;
+}
+
+.cad-model .cad-viewcube[data-collapsed="true"] > :not(.cad-viewcube__button--toggle) {
+  display: none;
+}
+
 .cad-model .cad-viewcube__cube {
   width: 100%;
   height: 100%;
@@ -99,6 +109,11 @@
 .cad-model .cad-viewcube__button--home {
   top: 0;
   left: 0;
+}
+
+.cad-model .cad-viewcube__button--toggle {
+  top: 0;
+  right: 0;
 }
 
 .cad-model .cad-viewcube__button--projection {

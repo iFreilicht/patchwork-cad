@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { HARNESS_DIR } from "./stack.ts";
 import { createViaMenu, editor, pressMod } from "./ui.ts";
 
@@ -197,8 +197,15 @@ interface CameraHook {
   cadViewer: { viewCubePoint(r: Region): { x: number; y: number } | undefined; cameraDirection(): [number, number, number] };
 }
 
+/** Expands a viewer's ViewCube if it is collapsed, as in the viewer tool. */
+export async function expandViewCube(target: Locator): Promise<void> {
+  const toggle = target.getByRole("button", { name: "ViewCube" });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+}
+
 /** Clicks a region of the ViewCube, which must face the camera, and waits until the camera looks from it. */
 export async function clickViewCube(page: Page, region: Region): Promise<void> {
+  await expandViewCube(viewer(page));
   const point = await viewer(page).evaluate((el, r) => (el as unknown as CameraHook).cadViewer.viewCubePoint(r), region);
   if (!point) throw new Error(`ViewCube region ${region.join(",")} isn't visible`);
   await page.mouse.click(point.x, point.y);
@@ -207,6 +214,7 @@ export async function clickViewCube(page: Page, region: Region): Promise<void> {
 
 /** Clicks the ViewCube's Home button and waits until the camera is there. */
 export async function clickHome(page: Page): Promise<void> {
+  await expandViewCube(viewer(page));
   await viewer(page).getByRole("button", { name: "Home view" }).click();
   await expect(viewer(page)).toHaveAttribute("data-turning", "false");
 }

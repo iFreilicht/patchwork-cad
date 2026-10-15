@@ -28,7 +28,7 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   const ui = createUiState(props.element, props.handle.url);
   return (
     <div class="cad-model cad-model--viewer" {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} createView={viewsOf(props.handle)} />
+      <Viewer shapes={model.shapes()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} createView={viewsOf(props.handle)} collapseViewCube />
       <StatusBar model={model} />
     </div>
   );
@@ -73,7 +73,7 @@ function SavedView(props: { handle: DocHandle<CadModelViewDoc>; doc: () => CadMo
   return (
     <div class="cad-model cad-model--viewer cad-model--view-doc" ref={root} {...modelAttributes(model)}>
       <div class="cad-view-doc__stage">
-        <Viewer shapes={model.shapes()} view={shown()} onViewChange={setCurrent} createView={viewsOf(props.model)} />
+        <Viewer shapes={model.shapes()} view={shown()} onViewChange={setCurrent} createView={viewsOf(props.model)} collapseViewCube />
         <Show when={changed()}>
           <div class="cad-view-doc__edit">
             <button class="cad-editor__button" onClick={save}>

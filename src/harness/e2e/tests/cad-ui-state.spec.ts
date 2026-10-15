@@ -4,7 +4,7 @@
  * had, after a tool switch and after a reload.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docUrl, editorView, openCode, openWithTool, type Region, reloadStored } from "../cad.ts";
+import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docUrl, editorView, expandViewCube, openCode, openWithTool, type Region, reloadStored } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -100,6 +100,7 @@ test("two viewers of one model don't move each other", async ({ users }) => {
   await expect(page.locator("#second .cad-model--viewer")).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
 
   // A turn in the second viewer is stored, but the first keeps its camera.
+  await expandViewCube(second);
   const point = await second.evaluate((el) => (el as unknown as { cadViewer: { viewCubePoint(r: Region): { x: number; y: number } } }).cadViewer.viewCubePoint([0, -1, 0]));
   await page.mouse.click(point.x, point.y);
   await expect(second).toHaveAttribute("data-turning", "false");

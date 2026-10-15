@@ -41,6 +41,8 @@ export interface ViewerProps {
   onViewChange?: (view: CameraState) => void;
   /** Makes ViewCube regions draggable: a drag creates a view document from the region (e.g. "Front") with this and drags it. */
   createView?: (view: CameraState, name: string) => { url: AutomergeUrl; title: string } | undefined;
+  /** Starts with the ViewCube collapsed to its toggle. The state is local to this mount. */
+  collapseViewCube?: boolean;
 }
 
 /** Two cameras are the same; storage may reorder an object's keys. */
@@ -105,6 +107,7 @@ export function Viewer(props: ViewerProps) {
   let cubeElement!: HTMLDivElement;
   const [hovered, setHovered] = createSignal<Entity>();
   const [projection, setProjection] = createSignal<Projection>("perspective");
+  const [collapsed, setCollapsed] = createSignal(props.collapseViewCube ?? false);
   let home = () => {};
   let toggleProjection = (_byUser?: boolean) => {};
 
@@ -331,6 +334,10 @@ export function Viewer(props: ViewerProps) {
       step(now);
       controls.update();
       renderer.render(scene, camera);
+      if (!collapsed()) renderCube();
+      frameId = requestAnimationFrame(tick);
+    };
+    const renderCube = () => {
       cube.orient(camera);
       const { x, y, size } = cubeViewport();
       renderer.setScissorTest(true);
@@ -342,7 +349,6 @@ export function Viewer(props: ViewerProps) {
       renderer.autoClear = true;
       renderer.setScissorTest(false);
       renderer.setViewport(0, 0, width, height);
-      frameId = requestAnimationFrame(tick);
     };
     frameId = requestAnimationFrame(tick);
 
@@ -465,6 +471,9 @@ export function Viewer(props: ViewerProps) {
       if (region) turnTo(regionDirection(region));
     };
     const onCubeLeave = () => cube.hover(undefined);
+    createEffect(() => {
+      if (collapsed()) cube.hover(undefined);
+    });
     const onCubeDragStart = (event: DragEvent) => {
       const start = cubeDown ?? { x: event.clientX, y: event.clientY };
       cubeDown = undefined;
@@ -533,6 +542,7 @@ export function Viewer(props: ViewerProps) {
         return n ? (sum.divideScalar(n).toArray() as [number, number, number]) : undefined;
       },
       viewCubePoint(region) {
+        if (collapsed()) return undefined;
         cube.orient(camera);
         const ndc = cube.pointOf(region);
         if (!ndc) return undefined;
@@ -607,7 +617,12 @@ export function Viewer(props: ViewerProps) {
   return (
     <div class="cad-model__viewer" ref={container} data-hovered={hovered() ? `${hovered()!.body}:${hovered()!.kind}:${hovered()!.index}` : ""} data-projection={projection()}>
       <canvas ref={canvas} />
-      <div class="cad-viewcube">
+      <div class="cad-viewcube" data-collapsed={collapsed() ? "true" : "false"}>
+        <button class="cad-viewcube__button cad-viewcube__button--toggle" aria-label="ViewCube" title={collapsed() ? "Show ViewCube" : "Hide ViewCube"} aria-expanded={!collapsed()} onClick={() => setCollapsed(!collapsed())}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 1.5 14 5V11L8 14.5 2 11V5ZM2 5 8 8.5 14 5M8 8.5V14.5" />
+          </svg>
+        </button>
         <button class="cad-viewcube__button cad-viewcube__button--home" aria-label="Home view" title="Home view" onClick={() => home()}>
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5" />

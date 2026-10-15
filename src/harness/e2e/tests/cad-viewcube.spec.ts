@@ -3,10 +3,10 @@
  * returns to the first view, the projection toggles, and an edit that reframes the model keeps the
  * direction.
  */
-import { CAD_MODULES, cameraDirection, clickHome, clickViewCube, createModel, editorView, setModelSource, type Region } from "../cad.ts";
+import { CAD_MODULES, cameraDirection, clickHome, clickViewCube, createModel, editorView, openWithTool, reloadStored, setModelSource, type Region } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 test.use({ siteModules: CAD_MODULES });
 
@@ -75,4 +75,40 @@ test("reframing a grown model keeps the camera's direction", async ({ users }) =
   await expect.poll(builds).toBeGreaterThan(executed);
   await expect(view).toHaveAttribute("data-state", "ready");
   await expectDirection(page, [1, -1, 0]);
+});
+
+test("the ViewCube starts expanded in the editor and collapsed in the viewer, every time", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  const editor = editorView(page);
+  await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  const toggle = (root: Locator) => root.getByRole("button", { name: "ViewCube" });
+  const home = (root: Locator) => root.getByRole("button", { name: "Home view" });
+
+  await expect(toggle(editor)).toHaveAttribute("aria-expanded", "true");
+  await expect(home(editor)).toBeVisible();
+  await toggle(editor).click();
+  await expect(toggle(editor)).toHaveAttribute("aria-expanded", "false");
+  await expect(home(editor)).toBeHidden();
+  await expect(editor.locator(".cad-viewcube__cube")).toBeHidden();
+  await expect(toggle(editor)).toBeVisible();
+
+  const viewer = page.locator(".cad-model--viewer");
+  await openWithTool(page, "cad-model-viewer");
+  await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
+  await expect(toggle(viewer)).toHaveAttribute("aria-expanded", "false");
+  await expect(home(viewer)).toBeHidden();
+  await toggle(viewer).click();
+  await expect(home(viewer)).toBeVisible();
+
+  // Neither state is stored.
+  await reloadStored(page);
+  await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expect(toggle(viewer)).toHaveAttribute("aria-expanded", "false");
+  await openWithTool(page, "cad-model");
+  await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
+  await expect(toggle(editor)).toHaveAttribute("aria-expanded", "true");
 });
