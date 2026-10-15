@@ -19,6 +19,9 @@
     --cad-model-panel: var(--editor-fill-offset-10, #f0f0f0);
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
     --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
+    --cad-viewcube-size: 96px;
+    /* The cube and its buttons. */
+    --cad-viewcube-width: calc(var(--cad-viewcube-size) + 28px);
   }
 }
 
@@ -53,6 +56,54 @@
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.cad-model .cad-viewcube {
+  position: absolute;
+  top: var(--studio-space-sm, 0.5rem);
+  right: var(--studio-space-sm, 0.5rem);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-model .cad-viewcube__cube {
+  width: var(--cad-viewcube-size);
+  height: var(--cad-viewcube-size);
+  cursor: pointer;
+}
+
+.cad-model .cad-viewcube__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-model .cad-viewcube__button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 4px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  cursor: pointer;
+}
+
+.cad-model .cad-viewcube__button[aria-pressed="true"] {
+  border-color: var(--cad-model-accent-text);
+  color: var(--cad-model-accent-text);
+}
+
+.cad-model .cad-viewcube__button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
 }
 
 .cad-model .cad-model__status {
@@ -148,8 +199,10 @@
 .cad-editor__dialog {
   position: absolute;
   top: var(--studio-space-sm, 0.5rem);
-  right: var(--studio-space-sm, 0.5rem);
-  width: min(22rem, calc(100% - 1rem));
+  /* Left, as in Onshape, clear of the ViewCube at the top right. */
+  left: var(--studio-space-sm, 0.5rem);
+  box-sizing: border-box;
+  width: min(22rem, calc(100% - var(--cad-viewcube-width) - 3 * var(--studio-space-sm, 0.5rem)));
   max-height: calc(100% - 1rem);
   overflow: auto;
   display: flex;

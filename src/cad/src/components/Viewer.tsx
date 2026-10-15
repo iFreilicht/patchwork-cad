@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape } from "../kernel/protocol.ts";
+import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 
 export type EntityKind = "face" | "edge";
 
@@ -44,9 +45,18 @@ export interface ViewerTestHook {
   entities(kind: EntityKind): Entity[];
   /** The mean of an entity's mesh vertices. */
   centroid(entity: Entity): [number, number, number] | undefined;
-  /** Looks at the model from `direction`, as orbiting the camera would. */
-  view(direction: [number, number, number]): void;
+  /** Where on the screen a ViewCube region can be clicked, if it faces the camera. */
+  viewCubePoint(region: Region): { x: number; y: number } | undefined;
+  /** The direction from the orbit target to the camera. */
+  cameraDirection(): [number, number, number];
 }
+
+export type Projection = "perspective" | "orthographic";
+
+/** The direction the camera looks from at first and after Home: front, right and above. */
+const HOME_DIRECTION = new THREE.Vector3(0.55, -0.85, 0.65).normalize();
+/** How long the camera turns to a ViewCube region. */
+const TURN_MS = 300;
 
 /** Reads a theme colour that the stylesheet derived for this tool. */
 function themeColor(element: Element, name: string): THREE.Color {
@@ -80,16 +90,25 @@ const same = (a: Entity | undefined, b: Entity | undefined) => !!a && !!b && a.b
 export function Viewer(props: ViewerProps) {
   let container!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+  let cubeElement!: HTMLDivElement;
   const [hovered, setHovered] = createSignal<Entity>();
+  const [projection, setProjection] = createSignal<Projection>("perspective");
+  let home = () => {};
+  let toggleProjection = () => {};
 
   onMount(() => {
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
-    camera.up.set(0, 0, 1);
-    camera.position.set(80, -120, 90);
+    const perspective = new THREE.PerspectiveCamera(45, 1, 0.1, 10_000);
+    perspective.up.set(0, 0, 1);
+    perspective.position.set(80, -120, 90);
+    const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10_000);
+    orthographic.up.set(0, 0, 1);
+    let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective;
+    /** The height the orthographic camera shows at zoom 1. */
+    let orthoHeight = 1;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    const controls = new OrbitControls(camera, renderer.domElement);
+    const controls = new OrbitControls<THREE.PerspectiveCamera | THREE.OrthographicCamera>(camera, renderer.domElement);
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
     const light = new THREE.DirectionalLight(0xffffff, 1.5);
@@ -115,42 +134,140 @@ export function Viewer(props: ViewerProps) {
     scene.add(group, overlayGroup);
     let rendered: Rendered[] = [];
 
+    const cube = new ViewCube({
+      face: themeColor(container, "--cad-model-panel"),
+      hover: hover,
+      line: themeColor(container, "--cad-model-fg"),
+    });
+
+    const direction = () => camera.position.clone().sub(controls.target).normalize();
+    const distance = () => camera.position.distanceTo(controls.target);
+
+    let width = 1;
+    let height = 1;
+    const updateProjection = () => {
+      perspective.aspect = width / height;
+      orthographic.top = orthoHeight / 2;
+      orthographic.bottom = -orthoHeight / 2;
+      orthographic.left = (-orthoHeight / 2) * perspective.aspect;
+      orthographic.right = (orthoHeight / 2) * perspective.aspect;
+      perspective.updateProjectionMatrix();
+      orthographic.updateProjectionMatrix();
+    };
+    /** The orthographic height that shows as much at the target as the perspective camera from `d`. */
+    const heightAt = (d: number) => 2 * d * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2));
+
     let radius = 50;
     let framed: THREE.Sphere | undefined;
-    /** Frames the model, unless it still fits in the framed view (so that edits don't move the camera). */
-    let viewDirection = new THREE.Vector3(0.55, -0.85, 0.65).normalize();
-    const frame = (force = false) => {
+    /**
+     * Frames the model, unless it still fits in the framed view (so that edits don't move the camera).
+     * Framing keeps the camera's direction; only the first frame and Home look from `towards`.
+     */
+    const frame = (force = false, towards?: THREE.Vector3) => {
       const box = new THREE.Box3().setFromObject(group);
       if (box.isEmpty()) return;
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       radius = sphere.radius;
       if (!force && framed && framed.radius >= sphere.radius && framed.radius <= sphere.radius * 3 && framed.containsPoint(sphere.center) && sphere.center.distanceTo(framed.center) + sphere.radius <= framed.radius * 1.1) return;
-      camera.position.copy(sphere.center).addScaledVector(viewDirection, sphere.radius * 3);
-      camera.near = sphere.radius / 100;
-      camera.far = sphere.radius * 100;
-      camera.updateProjectionMatrix();
+      const from = towards ?? (framed ? direction() : HOME_DIRECTION);
+      camera.position.copy(sphere.center).addScaledVector(from, sphere.radius * 3);
+      for (const c of [perspective, orthographic]) {
+        c.near = sphere.radius / 100;
+        c.far = sphere.radius * 100;
+      }
+      orthoHeight = heightAt(sphere.radius * 3);
+      orthographic.zoom = 1;
+      updateProjection();
       controls.target.copy(sphere.center);
+      controls.update();
       framed = sphere;
     };
 
+    /** The ViewCube's square in the canvas, in CSS pixels from the bottom left, as three.js's viewport wants it. */
+    const cubeViewport = () => {
+      const cubeRect = cubeElement.getBoundingClientRect();
+      const rect = canvas.getBoundingClientRect();
+      return { x: cubeRect.left - rect.left, y: rect.bottom - cubeRect.bottom, size: cubeRect.width };
+    };
     const resize = () => {
-      const width = container.clientWidth || 1;
-      const height = container.clientHeight || 1;
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
+      width = container.clientWidth || 1;
+      height = container.clientHeight || 1;
+      updateProjection();
       renderer.setSize(width, height, false);
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(container);
 
+    /** A running turn of the camera towards a ViewCube region; `data-turning` tells tests to wait for its end. */
+    let turn: { from: THREE.Vector3; rotation: THREE.Quaternion; start: number } | undefined;
+    const setTurn = (next: typeof turn) => {
+      turn = next;
+      container.dataset["turning"] = String(!!turn);
+    };
+    const turnTo = (to: THREE.Vector3) => {
+      const from = direction();
+      const rotation = new THREE.Quaternion().setFromUnitVectors(from, to);
+      setTurn({ from, rotation, start: performance.now() });
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) turn!.start -= TURN_MS;
+      step(performance.now());
+    };
+    /** Advances the turn to `now`. */
+    const step = (now: number) => {
+      if (!turn) return;
+      const t = Math.min(1, (now - turn.start) / TURN_MS);
+      const eased = t * t * (3 - 2 * t);
+      const d = distance();
+      const along = turn.from.clone().applyQuaternion(new THREE.Quaternion().slerp(turn.rotation, eased));
+      camera.position.copy(controls.target).addScaledVector(along, d);
+      if (t === 1) setTurn(undefined);
+      controls.update();
+      camera.updateMatrixWorld();
+    };
+    controls.addEventListener("start", () => setTurn(undefined));
+
+    home = () => {
+      setTurn(undefined);
+      frame(true, HOME_DIRECTION);
+    };
+    toggleProjection = () => {
+      setTurn(undefined);
+      const d = distance();
+      if (camera === perspective) {
+        orthographic.position.copy(perspective.position);
+        orthographic.quaternion.copy(perspective.quaternion);
+        orthoHeight = heightAt(d);
+        orthographic.zoom = 1;
+        camera = orthographic;
+      } else {
+        perspective.position.copy(controls.target).addScaledVector(direction(), d / orthographic.zoom);
+        camera = perspective;
+      }
+      controls.object = camera;
+      updateProjection();
+      controls.update();
+      setProjection(camera === perspective ? "perspective" : "orthographic");
+    };
+
     let frameId = 0;
-    const tick = () => {
+    const tick = (now: number) => {
+      step(now);
       controls.update();
       renderer.render(scene, camera);
+      cube.orient(camera);
+      const { x, y, size } = cubeViewport();
+      renderer.setScissorTest(true);
+      renderer.setScissor(x, y, size, size);
+      renderer.setViewport(x, y, size, size);
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(cube.scene, cube.camera);
+      renderer.autoClear = true;
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, width, height);
       frameId = requestAnimationFrame(tick);
     };
-    tick();
+    frameId = requestAnimationFrame(tick);
 
     const dispose = (objects: THREE.Object3D[]) => {
       for (const child of objects) if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) child.geometry.dispose();
@@ -254,6 +371,28 @@ export function Viewer(props: ViewerProps) {
       if (entity) props.onPick?.(entity);
     };
     const onPointerLeave = () => setHovered(undefined);
+
+    /** A client position in the ViewCube's normalised device coordinates. */
+    const cubeNdc = (clientX: number, clientY: number) => {
+      const rect = cubeElement.getBoundingClientRect();
+      return new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    };
+    let cubeDown: { x: number; y: number } | undefined;
+    const onCubeMove = (event: PointerEvent) => cube.hover(cube.regionAt(cubeNdc(event.clientX, event.clientY)));
+    const onCubeDown = (event: PointerEvent) => (cubeDown = { x: event.clientX, y: event.clientY });
+    const onCubeUp = (event: PointerEvent) => {
+      const start = cubeDown;
+      cubeDown = undefined;
+      if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+      const region = cube.regionAt(cubeNdc(event.clientX, event.clientY));
+      if (region) turnTo(regionDirection(region));
+    };
+    const onCubeLeave = () => cube.hover(undefined);
+    cubeElement.addEventListener("pointermove", onCubeMove);
+    cubeElement.addEventListener("pointerdown", onCubeDown);
+    cubeElement.addEventListener("pointerup", onCubeUp);
+    cubeElement.addEventListener("pointerleave", onCubeLeave);
+
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointerup", onPointerUp);
@@ -293,12 +432,14 @@ export function Viewer(props: ViewerProps) {
         });
         return n ? (sum.divideScalar(n).toArray() as [number, number, number]) : undefined;
       },
-      view(direction) {
-        viewDirection = new THREE.Vector3(...direction).normalize();
-        frame(true);
-        controls.update();
-        camera.updateMatrixWorld();
+      viewCubePoint(region) {
+        cube.orient(camera);
+        const ndc = cube.pointOf(region);
+        if (!ndc) return undefined;
+        const rect = cubeElement.getBoundingClientRect();
+        return { x: Math.round(rect.left + ((ndc.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - ndc.y) / 2) * rect.height) };
       },
+      cameraDirection: () => direction().toArray() as [number, number, number],
       screenPoint(entity) {
         const r = rendered.find((x) => x.shape.body === entity.body);
         if (!r) return undefined;
@@ -334,7 +475,9 @@ export function Viewer(props: ViewerProps) {
           const x = Math.round(p.x);
           const y = Math.round(p.y);
           const around = [[0, 0], [margin, 0], [-margin, 0], [0, margin], [0, -margin]];
-          if (around.every(([dx, dy]) => same(entityAt(x + dx!, y + dy!, entity.kind), entity))) return { x, y };
+          // Overlays such as a dialog or the ViewCube may cover the canvas.
+          const onCanvas = around.every(([dx, dy]) => document.elementFromPoint(x + dx!, y + dy!) === canvas);
+          if (onCanvas && around.every(([dx, dy]) => same(entityAt(x + dx!, y + dy!, entity.kind), entity))) return { x, y };
         }
         return undefined;
       },
@@ -349,6 +492,11 @@ export function Viewer(props: ViewerProps) {
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
+      cubeElement.removeEventListener("pointermove", onCubeMove);
+      cubeElement.removeEventListener("pointerdown", onCubeDown);
+      cubeElement.removeEventListener("pointerup", onCubeUp);
+      cubeElement.removeEventListener("pointerleave", onCubeLeave);
+      cube.dispose();
       dispose([...group.children, ...overlayGroup.children]);
       for (const m of [...faceMaterials, ...lineMaterials, overlayMaterial]) m.dispose();
       renderer.dispose();
@@ -356,8 +504,23 @@ export function Viewer(props: ViewerProps) {
   });
 
   return (
-    <div class="cad-model__viewer" ref={container} data-hovered={hovered() ? `${hovered()!.body}:${hovered()!.kind}:${hovered()!.index}` : ""}>
+    <div class="cad-model__viewer" ref={container} data-hovered={hovered() ? `${hovered()!.body}:${hovered()!.kind}:${hovered()!.index}` : ""} data-projection={projection()}>
       <canvas ref={canvas} />
+      <div class="cad-viewcube">
+        <div class="cad-viewcube__buttons">
+          <button class="cad-viewcube__button" aria-label="Home view" title="Home view" onClick={() => home()}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5" />
+            </svg>
+          </button>
+          <button class="cad-viewcube__button" aria-label="Orthographic" title="Orthographic" aria-pressed={projection() === "orthographic"} onClick={() => toggleProjection()}>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 5.5 8 3 13 5.5V11L8 13.5 3 11ZM3 5.5 8 8 13 5.5M8 8V13.5" />
+            </svg>
+          </button>
+        </div>
+        <div class="cad-viewcube__cube" ref={cubeElement} />
+      </div>
     </div>
   );
 }

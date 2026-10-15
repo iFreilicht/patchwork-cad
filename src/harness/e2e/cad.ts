@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { HARNESS_DIR } from "./stack.ts";
 import { createViaMenu, editor, pressMod } from "./ui.ts";
 
@@ -176,7 +176,25 @@ export function exampleSource(name: "m1" | "m3", replace: [string, string][] = [
   return source;
 }
 
-/** Orbits the viewer's camera to look at the model from `direction`. */
-export async function viewFrom(page: Page, direction: [number, number, number]): Promise<void> {
-  await viewer(page).evaluate((el, d) => (el as unknown as { cadViewer: { view(d: [number, number, number]): void } }).cadViewer.view(d), direction);
+/** A ViewCube region: a face, edge or corner as the sign of each axis, e.g. [0, -1, 0] for Front. */
+export type Region = [number, number, number];
+
+interface CameraHook {
+  cadViewer: { viewCubePoint(r: Region): { x: number; y: number } | undefined; cameraDirection(): [number, number, number] };
+}
+
+/** Clicks a region of the ViewCube, which must face the camera, and waits until the camera looks from it. */
+export async function clickViewCube(page: Page, region: Region): Promise<void> {
+  const point = await viewer(page).evaluate((el, r) => (el as unknown as CameraHook).cadViewer.viewCubePoint(r), region);
+  if (!point) throw new Error(`ViewCube region ${region.join(",")} isn't visible`);
+  await page.mouse.click(point.x, point.y);
+  await expect(viewer(page)).toHaveAttribute("data-turning", "false");
+}
+
+/** Clicks the ViewCube's Home button. */
+export const clickHome = (page: Page) => viewer(page).getByRole("button", { name: "Home view" }).click();
+
+/** The direction from the orbit target to the camera. */
+export async function cameraDirection(page: Page): Promise<[number, number, number]> {
+  return viewer(page).evaluate((el) => (el as unknown as CameraHook).cadViewer.cameraDirection());
 }

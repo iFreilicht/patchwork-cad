@@ -59,6 +59,10 @@ The tool's [`prepare.ts`](../src/cad/src/kernel/prepare.ts) adds names in memory
 - **Deleting a feature** rewires the features that used its body to its input, and turns references that named it into `ref.<name>` lookups, which then report themselves as broken.
 - **Unused results are marked.** A body that no later feature uses and `main` doesn't return is geometry the model drops, e.g. after a feature was retargeted to an earlier body, which branches the model. The timeline greys it out, and its dialog adds it to the result. When a form changes a feature's `body` or `target`, the body it no longer uses comes back into the result unless another feature uses it.
 
+### The ViewCube
+
+Both tools' 3D view ([`Viewer.tsx`](../src/cad/src/components/Viewer.tsx), [`ViewCube.ts`](../src/cad/src/components/ViewCube.ts)) has a ViewCube in its top-right corner, with Home and a perspective/orthographic toggle beside it; feature dialogs open top left, as in Onshape, so that the cube stays usable while picking. Z is up, Front looks along +Y, Right along −X and Top along −Z. A click on one of its 26 regions (6 faces, 12 edges, 8 corners) turns the camera to look from that region's direction (each axis −1, 0 or 1) around the orbit target; Home looks from front, right and above and frames the model. A model that outgrows the view is reframed along the camera's current direction, so an edit never turns the view. The e2e specs set views by clicking the cube ([`cad-viewcube.spec.ts`](../src/harness/e2e/tests/cad-viewcube.spec.ts)); they wait for the turn's end, which the view marks with `data-turning`.
+
 ## Results
 
 The "done when" scenario is the spec [`cad-collab`](../src/harness/e2e/tests/cad-collab.spec.ts), which passes in Chromium, Firefox and WebKit, with [`cad-editor`](../src/harness/e2e/tests/cad-editor.spec.ts), [`cad-tools`](../src/harness/e2e/tests/cad-tools.spec.ts) and PoC 1's specs:

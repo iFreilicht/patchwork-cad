@@ -21,7 +21,8 @@ test("the viewer and an embedded viewer show one document", async ({ users }) =>
   const viewer = page.locator(".cad-model--viewer");
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   expect(await vertices(page)).toBeGreaterThan(0);
-  await expect(viewer.locator("input, select, .cm-content, button")).toHaveCount(0);
+  // Only the view controls are interactive.
+  await expect(viewer.locator("input, select, .cm-content, button:not(.cad-viewcube__button)")).toHaveCount(0);
 
   // Another tool embeds the viewer by id; inside a tool's DOM, it finds Patchwork's providers.
   await openWithTool(page, "cad-model");

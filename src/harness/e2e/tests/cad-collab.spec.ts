@@ -17,7 +17,8 @@ import {
   setModelSource,
   timelineEntry,
   toolbarButton,
-  viewFrom,
+  clickHome,
+  clickViewCube,
   cadView,
 } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
@@ -171,14 +172,14 @@ test("M3: ribs in a loop are a Custom Script; picks into it survive moving and a
   await toolbarButton(a, "Fillet").click();
   await expect(dialog(a)).toHaveAttribute("data-feature", "fillet1");
   await expect(editorView(a)).toHaveAttribute("data-rolled-back", "true");
-  // The inner corner is behind the upright: A orbits to the back.
-  await viewFrom(a, [0.4, 0.8, 0.6]);
+  // The inner corner is behind the upright: A looks from the back.
+  await clickViewCube(a, [1, 1, 1]);
   await pickNear(a, "edge", [46.5, 8, 8], "rib0");
   await pickNear(a, "edge", [13.5, 8, 8], "rib0");
   await expect(dialog(a).locator(".cad-editor__chip")).toHaveCount(2);
   await setField(a, "Radius", "2");
   await toolbarButton(a, "Chamfer").click();
-  await viewFrom(a, [0.55, -0.85, 0.65]);
+  await clickHome(a);
   await pickNear(a, "edge", [30, 0, 50], "fillet1");
   await setField(a, "Distance", "1");
   await toolbarButton(a, "Sketch").click();

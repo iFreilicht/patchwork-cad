@@ -8,13 +8,12 @@
 | [04-kernel-robustness.md](04-kernel-robustness.md) | Which OCCT operations fail, and how to report failures | To do (approach only) |
 | [05-sandboxing.md](05-sandboxing.md) | Threat model and sandbox runner for model code; local test harness | In progress: [test harness](05-sandboxing.md#test-harness) done; sandbox runner to do |
 | [06-poc-replicad-in-patchwork.md](06-poc-replicad-in-patchwork.md) | PoC 1: replicad and OCCT in a Patchwork tool, code editor and 3D view | Done ([src/cad](../src/cad/), `pnpm dev`). Open: real-network and Safari load times, Firefox's slower OCCT |
-| [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | Done ([src/features](../src/features/), tool `cad-model`). Open: bodies as versions vs. the timeline's order, same-argument conflicts, names of features in loops |
+| [07-poc-modelling-ui.md](07-poc-modelling-ui.md) | PoC 2: feature library subset, timeline editor, selection and references | Done ([src/features](../src/features/), tool `cad-model`; [ViewCube](07-poc-modelling-ui.md#the-viewcube)). Open: bodies as versions vs. the timeline's order, same-argument conflicts, names of features in loops |
 | [08-module-evaluation.md](08-module-evaluation.md) | Model evaluations per build, their cost, module retention, OCCT memory | Done. Open: which objects fillet/chamfer/fuse leak |
 | [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage | In progress: code pane done; camera to do |
 
 ## Not started
 
-- Add a ViewCube to easily enable switching between views that look at a face (front, rear, left, right, top, bottom), edge (i.e. 45deg between faces) or a corner. Next to the viewcube should be one button for going home and one for switching between orthographic and perspective view.
 - Persist the orientation the part was last viewed at. If possible, make it so that multiple instances of a Viewer remember which orientation they were displaying. This would be useful for embeddings as well as the tiled frame layout.
 - Add timeline marker to enable creating features before existing features (consider implications of commenting out vs. just changing what gets returned. Might be complex enough for a research question)
 - Allow moving features in the timeline until directly after the feature they depend on with drag-and-drop
