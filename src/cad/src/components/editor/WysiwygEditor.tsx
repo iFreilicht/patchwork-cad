@@ -12,6 +12,7 @@ import { FeatureDialog } from "./FeatureDialog.tsx";
 import { createEditor } from "./state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
+import { createUiState } from "../uiState.ts";
 
 /** The source span of a feature's parameter value, or an empty span. */
 const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
@@ -23,10 +24,12 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
  * The Fusion-like editor (tool `cad-model`, the default): toolbar, 3D view, timeline and feature
  * dialogs on one kernel worker; the shared code editor opens next to it on demand.
  */
-export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc> }) {
+export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
   const model = createModel(props.handle);
   const editor = createEditor(props.handle, model);
-  const [codeOpen, setCodeOpen] = createSignal(false);
+  const ui = createUiState(props.element, props.handle.url);
+  const codeOpen = () => ui.get("codeOpen") ?? false;
+  const setCodeOpen = (open: boolean) => ui.set("codeOpen", open);
   const [codeFocus, setCodeFocus] = createSignal<Span>();
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {

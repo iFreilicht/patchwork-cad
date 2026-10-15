@@ -5,5 +5,5 @@ import type { CadModelDoc } from "../types.ts";
 import "../styles.css";
 
 export default function mount(handle: DocHandle<CadModelDoc>, element: HTMLElement): () => void {
-  return render(() => <WysiwygEditor handle={handle} />, element);
+  return render(() => <WysiwygEditor handle={handle} element={element} />, element);
 }

@@ -101,6 +101,9 @@ importers:
       '@inkandswitch/patchwork-plugins':
         specifier: 1.2.6
         version: 1.2.6(@automerge/automerge-repo@2.6.0-subduction.48)(@automerge/automerge@3.4.1)(@inkandswitch/patchwork-filesystem@0.2.10(@automerge/automerge-repo@2.6.0-subduction.48)(@automerge/automerge@3.4.1))
+      '@inkandswitch/patchwork-providers':
+        specifier: 0.5.3
+        version: 0.5.3(@automerge/automerge-repo@2.6.0-subduction.48)
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
