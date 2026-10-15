@@ -197,8 +197,11 @@ export async function clickViewCube(page: Page, region: Region): Promise<void> {
   await expect(viewer(page)).toHaveAttribute("data-turning", "false");
 }
 
-/** Clicks the ViewCube's Home button. */
-export const clickHome = (page: Page) => viewer(page).getByRole("button", { name: "Home view" }).click();
+/** Clicks the ViewCube's Home button and waits until the camera is there. */
+export async function clickHome(page: Page): Promise<void> {
+  await viewer(page).getByRole("button", { name: "Home view" }).click();
+  await expect(viewer(page)).toHaveAttribute("data-turning", "false");
+}
 
 /** The direction from the orbit target to the camera. */
 export async function cameraDirection(page: Page): Promise<[number, number, number]> {

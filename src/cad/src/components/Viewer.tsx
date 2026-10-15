@@ -169,30 +169,82 @@ export function Viewer(props: ViewerProps) {
     /** The orthographic height that shows as much at the target as the perspective camera from `d`. */
     const heightAt = (d: number) => 2 * d * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2));
 
+    /** Where the camera is: it looks from `direction` at `target`, `distance` away, and the orthographic camera zooms by `zoom`. */
+    interface Pose {
+      direction: THREE.Vector3;
+      target: THREE.Vector3;
+      distance: number;
+      zoom: number;
+    }
+    const pose = (): Pose => ({ direction: direction(), target: controls.target.clone(), distance: distance(), zoom: orthographic.zoom });
+    const place = (p: Pose) => {
+      controls.target.copy(p.target);
+      camera.position.copy(p.target).addScaledVector(p.direction, p.distance);
+      for (const c of [perspective, orthographic]) {
+        c.near = p.distance / 300;
+        c.far = p.distance * 33;
+      }
+      orthoHeight = heightAt(p.distance);
+      orthographic.zoom = p.zoom;
+      updateProjection();
+      controls.update();
+      camera.updateMatrixWorld();
+    };
+
+    /** A running move of the camera, e.g. to a ViewCube region; `data-turning` tells tests to wait for its end. */
+    let turn: { from: Pose; to: Pose; rotation: THREE.Quaternion; start: number; report: boolean } | undefined;
+    const setTurn = (next: typeof turn) => {
+      turn = next;
+      container.dataset["turning"] = String(!!turn);
+    };
+    /** Moves the camera to `to`, animated unless the user prefers reduced motion; `report` calls onViewChange at the end. */
+    const moveTo = (to: Partial<Pose>, report: boolean) => {
+      const from = pose();
+      const end = { ...from, ...to };
+      setTurn({ from, to: end, rotation: new THREE.Quaternion().setFromUnitVectors(from.direction, end.direction), start: performance.now(), report });
+      if (matchMedia("(prefers-reduced-motion: reduce)").matches) turn!.start -= TURN_MS;
+      step(performance.now());
+    };
+    /** Advances the move to `now`. */
+    const step = (now: number) => {
+      if (!turn) return;
+      const t = Math.min(1, (now - turn.start) / TURN_MS);
+      const eased = t * t * (3 - 2 * t);
+      const { from, to } = turn;
+      place({
+        direction: from.direction.clone().applyQuaternion(new THREE.Quaternion().slerp(turn.rotation, eased)),
+        target: from.target.clone().lerp(to.target, eased),
+        distance: THREE.MathUtils.lerp(from.distance, to.distance, eased),
+        zoom: THREE.MathUtils.lerp(from.zoom, to.zoom, eased),
+      });
+      if (t === 1) {
+        const done = turn;
+        setTurn(undefined);
+        if (done.report) report();
+      }
+    };
+    /** Whether the view has shown a camera yet; until then, cameras apply at once instead of moving there. */
+    let shown = false;
+
     let radius = 50;
     let framed: THREE.Sphere | undefined;
     /**
      * Frames the model, unless it still fits in the framed view (so that edits don't move the camera).
-     * Framing keeps the camera's direction; only the first frame and Home look from `towards`.
+     * Framing keeps the camera's direction; only the first frame and Home look from `towards`. Home
+     * moves there animated and reports the new camera.
      */
-    const frame = (force = false, towards?: THREE.Vector3) => {
+    const frame = (force = false, towards?: THREE.Vector3, animate = false) => {
       const box = new THREE.Box3().setFromObject(group);
       if (box.isEmpty()) return;
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       radius = sphere.radius;
       if (!force && framed && framed.radius >= sphere.radius && framed.radius <= sphere.radius * 3 && framed.containsPoint(sphere.center) && sphere.center.distanceTo(framed.center) + sphere.radius <= framed.radius * 1.1) return;
-      const from = towards ?? (framed ? direction() : HOME_DIRECTION);
-      camera.position.copy(sphere.center).addScaledVector(from, sphere.radius * 3);
-      for (const c of [perspective, orthographic]) {
-        c.near = sphere.radius / 100;
-        c.far = sphere.radius * 100;
-      }
-      orthoHeight = heightAt(sphere.radius * 3);
-      orthographic.zoom = 1;
-      updateProjection();
-      controls.target.copy(sphere.center);
-      controls.update();
+      const to = { direction: (towards ?? (framed ? direction() : HOME_DIRECTION)).clone(), target: sphere.center.clone(), distance: sphere.radius * 3, zoom: 1 };
       framed = sphere;
+      shown = true;
+      if (animate) return moveTo(to, true);
+      setTurn(undefined);
+      place(to);
     };
 
     /** The ViewCube's square in the canvas, in CSS pixels from the bottom left, as three.js's viewport wants it. */
@@ -211,41 +263,10 @@ export function Viewer(props: ViewerProps) {
     const observer = new ResizeObserver(resize);
     observer.observe(container);
 
-    /** A running turn of the camera towards a ViewCube region; `data-turning` tells tests to wait for its end. */
-    let turn: { from: THREE.Vector3; rotation: THREE.Quaternion; start: number } | undefined;
-    const setTurn = (next: typeof turn) => {
-      turn = next;
-      container.dataset["turning"] = String(!!turn);
-    };
-    const turnTo = (to: THREE.Vector3) => {
-      const from = direction();
-      const rotation = new THREE.Quaternion().setFromUnitVectors(from, to);
-      setTurn({ from, rotation, start: performance.now() });
-      if (matchMedia("(prefers-reduced-motion: reduce)").matches) turn!.start -= TURN_MS;
-      step(performance.now());
-    };
-    /** Advances the turn to `now`. */
-    const step = (now: number) => {
-      if (!turn) return;
-      const t = Math.min(1, (now - turn.start) / TURN_MS);
-      const eased = t * t * (3 - 2 * t);
-      const d = distance();
-      const along = turn.from.clone().applyQuaternion(new THREE.Quaternion().slerp(turn.rotation, eased));
-      camera.position.copy(controls.target).addScaledVector(along, d);
-      controls.update();
-      camera.updateMatrixWorld();
-      if (t === 1) {
-        setTurn(undefined);
-        report();
-      }
-    };
+    const turnTo = (to: THREE.Vector3) => moveTo({ direction: to }, true);
     controls.addEventListener("start", () => setTurn(undefined));
 
-    home = () => {
-      setTurn(undefined);
-      frame(true, HOME_DIRECTION);
-      report();
-    };
+    home = () => frame(true, HOME_DIRECTION, true);
     toggleProjection = (byUser = true) => {
       setTurn(undefined);
       const d = distance();
@@ -286,22 +307,17 @@ export function Viewer(props: ViewerProps) {
     };
     controls.addEventListener("end", report);
 
+    /** Shows `view`: animated once the view has shown a camera, e.g. on Reset, at once when it opens. */
     const apply = (view: CameraState) => {
       setTurn(undefined);
       if (view.projection !== projection()) toggleProjection(false);
-      controls.target.set(...view.target);
-      camera.position.copy(controls.target).addScaledVector(new THREE.Vector3(...view.direction).normalize(), view.distance);
-      for (const c of [perspective, orthographic]) {
-        c.near = view.distance / 300;
-        c.far = view.distance * 33;
-      }
-      orthoHeight = heightAt(view.distance);
-      orthographic.zoom = view.zoom;
-      updateProjection();
-      controls.update();
-      // As if framed from here, so that a build only reframes if the model doesn't fit.
-      framed = new THREE.Sphere(controls.target.clone(), view.distance / 3);
+      const to = { direction: new THREE.Vector3(...view.direction).normalize(), target: new THREE.Vector3(...view.target), distance: view.distance, zoom: view.zoom };
+      // As if framed from there, so that a build only reframes if the model doesn't fit.
+      framed = new THREE.Sphere(to.target.clone(), view.distance / 3);
       radius = framed.radius;
+      if (shown) return moveTo(to, false);
+      shown = true;
+      place(to);
     };
     createEffect(() => {
       const view = props.view;

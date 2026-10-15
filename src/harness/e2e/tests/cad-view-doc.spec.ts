@@ -1,7 +1,7 @@
 /**
  * View documents (research/10-view-state.md): dragging a ViewCube region into another document
  * creates a `cad-model-view` of the model; the viewer shows it with its camera, orbiting is local
- * until "Save view", and a saved view reaches other users.
+ * until "Save view" ("Reset" returns to the saved camera), and a saved view reaches other users.
  */
 import type { Page } from "@playwright/test";
 import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docPathWith, docUrl, editorView, type Region, reloadStored } from "../cad.ts";
@@ -58,6 +58,13 @@ test("a ViewCube region dragged into the sidebar is a view of the model", async 
   await reloadStored(page);
   await expect(view).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await expectDirection(page, [0, -1, 0]);
+
+  // Reset returns to the document's camera.
+  await clickViewCube(page, [1, -1, 1]);
+  await view.getByRole("button", { name: "Reset" }).click();
+  await expectDirection(page, [0, -1, 0]);
+  await expect(save).toHaveCount(0);
+  await expect(view.getByRole("button", { name: "Reset" })).toHaveCount(0);
 
   // A saved view stays, for everyone.
   await clickViewCube(page, [1, -1, 1]);

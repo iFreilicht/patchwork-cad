@@ -1,4 +1,4 @@
-import { createResource, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createResource, createSignal, onCleanup, Show } from "solid-js";
 import { render } from "solid-js/web";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { createModel, modelAttributes } from "../components/createModel.ts";
@@ -59,16 +59,30 @@ function SavedView(props: { handle: DocHandle<CadModelViewDoc>; doc: () => CadMo
     const camera = current();
     if (camera) props.handle.change((d) => (d.camera = camera));
   };
+  // The camera the viewer shows: the document's, again as a new object on Reset, which the viewer applies even if the document's didn't change.
+  const [shown, setShown] = createSignal<CameraState>();
+  createEffect(() => setShown(props.doc()?.camera));
+  const reset = () => {
+    const camera = props.doc()?.camera;
+    if (!camera) return;
+    setShown({ ...camera });
+    setCurrent(camera);
+  };
   let root!: HTMLDivElement;
   const openModel = () => root.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url: props.model.url }, bubbles: true, composed: true }));
   return (
     <div class="cad-model cad-model--viewer cad-model--view-doc" ref={root} {...modelAttributes(model)}>
       <div class="cad-view-doc__stage">
-        <Viewer shapes={model.shapes()} view={props.doc()?.camera} onViewChange={setCurrent} createView={viewsOf(props.model)} />
+        <Viewer shapes={model.shapes()} view={shown()} onViewChange={setCurrent} createView={viewsOf(props.model)} />
         <Show when={changed()}>
-          <button class="cad-editor__button cad-view-doc__save" onClick={save}>
-            Save view
-          </button>
+          <div class="cad-view-doc__edit">
+            <button class="cad-editor__button" onClick={save}>
+              Save view
+            </button>
+            <button class="cad-editor__button" onClick={reset}>
+              Reset
+            </button>
+          </div>
         </Show>
         <button class="cad-editor__button cad-view-doc__open" onClick={openModel}>
           Open model
