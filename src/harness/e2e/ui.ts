@@ -33,14 +33,15 @@ export async function pressMod(page: Page, key: string): Promise<void> {
   await page.keyboard.press(`${mac ? "Meta" : "Control"}+${key}`);
 }
 
+// Focus rather than click: in the CAD editor's narrow code pane, the center of long lines is scrolled out of view.
 export async function typeAtEnd(page: Page, text: string): Promise<void> {
-  await editor(page).click();
+  await editor(page).focus();
   await pressMod(page, "End");
   await page.keyboard.type(text);
 }
 
 export async function typeAtStart(page: Page, text: string): Promise<void> {
-  await editor(page).click();
+  await editor(page).focus();
   await pressMod(page, "Home");
   await page.keyboard.type(text);
 }
