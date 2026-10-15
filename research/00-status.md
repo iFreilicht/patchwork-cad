@@ -13,11 +13,10 @@
 | [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity; view documents | Done. Open: orphan views of cancelled drags, the UX of listing and editing views |
 | [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Done. Open: history of adopted library bodies, scalar calculations; touch deferred |
 | [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
+| [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Research done; implementation to do |
 
 ## Not started
 
-- Collaboration features (seeing other people's cursors, highlights, selections and timeline markers in their respective color)
-- Allow adding comments on code, faces, edges and features. Look at other tools to see how to handle comments that reference deleted objects
 - Always display unused sketches (maybe by also returning them from the model function like "unused" features? Just a thought)
 - Add a "Move" feature that creates a copy of a body at a different location. Translating by a set number of mm in X, Y or Z axis is enough for now.
 - Allow disabling tangent selection of edges when creating fillet or chamfer
