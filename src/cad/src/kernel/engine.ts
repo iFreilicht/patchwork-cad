@@ -1,7 +1,7 @@
 import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
-  | { ok: true; source: string; shapes: MeshedShape[]; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: true; source: string; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
@@ -189,7 +189,7 @@ export class Engine {
       this.#start(next);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, trace: message.trace, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, dropped: message.dropped, trace: message.trace, timings: message.timings });
     else onResult({ ok: false, source: running.source, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

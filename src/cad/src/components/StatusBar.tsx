@@ -14,6 +14,11 @@ export interface Reference {
 export function StatusBar(props: { model: Model; notice?: string | undefined; reference?: Reference | undefined }) {
   const { init, initError, error, last, building } = props.model;
   const [copied, setCopied] = createSignal<string>();
+  /** Values main returned that the evaluator dropped, e.g. a string. */
+  const dropped = () => {
+    const result = last();
+    return result?.ok ? result.dropped : 0;
+  };
   const copy = (code: string) =>
     navigator.clipboard.writeText(code).then(
       () => setCopied(code),
@@ -29,6 +34,7 @@ export function StatusBar(props: { model: Model; notice?: string | undefined; re
           </span>
         )}
       </Show>
+      <Show when={dropped()}>{(n) => <span class="cad-model__warning">main returned {n() === 1 ? "a value that isn't a shape; it isn't" : `${n()} values that aren't shapes; they aren't`} shown</span>}</Show>
       <Show when={props.notice}>{(message) => <span class="cad-model__error cad-model__notice">{message()}</span>}</Show>
       <Show when={props.reference}>
         {(reference) => (

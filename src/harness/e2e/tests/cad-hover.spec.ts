@@ -244,3 +244,39 @@ test("the viewer tool hovers faces and edges but doesn't name them", async ({ us
   expect(hovered).toBe(true);
   await expect(reference(page)).toHaveCount(0);
 });
+
+// replicad-evaluator drops what main returns but can't show, e.g. a string; the bodies after it are
+// still paired with their own meshes, and the status bar says what was dropped.
+test("bodies after a value that isn't a shape stay pickable", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await hideSidebars(page);
+  await setModelSource(
+    page,
+    `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
+
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 20] }) });
+  const left = extrude({ sketch: sketch1, distance: 10 });
+  const sketch2 = sketch({ plane: plane("XY"), profile: rect({ from: [40, 0], to: [60, 20] }) });
+  const right = extrude({ sketch: sketch2, distance: 10 });
+  return [left, "test", right];
+}
+`,
+  );
+  await expect(timelineEntry(page, "right")).toHaveAttribute("data-status", "ok", { timeout: 120_000 });
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready");
+  await expect(page.locator(".cad-model__warning")).toHaveText("main returned a value that isn't a shape; it isn't shown");
+
+  const faces = await entities(page, "face");
+  expect(new Set(faces.map((f) => f.body))).toEqual(new Set(["left", "right"]));
+  await hoverNamed(page, "face", "right.");
+  await expect(timelineEntry(page, "right")).toHaveAttribute("data-cross-hover", "true");
+  await expect(timelineEntry(page, "left")).not.toHaveAttribute("data-cross-hover", "true");
+  // Hovering the entry highlights the right body's six faces.
+  await timelineEntry(page, "right").hover();
+  await expect.poll(async () => (await hoverHighlight(page, "face")).map((f) => f.body)).toEqual(Array(6).fill("right"));
+});

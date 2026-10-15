@@ -152,6 +152,10 @@
   white-space: pre-wrap;
 }
 
+.cad-model .cad-model__warning {
+  color: var(--cad-model-warning);
+}
+
 .cad-model .cad-model__timings {
   margin-left: auto;
   color: var(--cad-model-muted);

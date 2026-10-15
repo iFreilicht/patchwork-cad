@@ -80,7 +80,8 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
-  | { type: "built"; id: number; shapes: MeshedShape[]; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
+  /** `dropped`: how many of the values main returned can't be shown, e.g. a string. */
+  | { type: "built"; id: number; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
   | { type: "picked"; id: number; code: string }

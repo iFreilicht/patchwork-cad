@@ -201,18 +201,22 @@ async function build(id: number, source: string): Promise<void> {
   }
   const broken = result.find((shape) => shape.error);
   if (broken) return fail({ message: broken.message ?? "Could not mesh the shape", line: undefined, kind: "mesh" });
-  // The evaluator keeps the order of what main returned; a body there makes its shape pickable.
-  const values = Array.isArray(returned) ? returned : [returned];
+  const values = Array.isArray(returned) ? returned : returned === undefined ? [] : [returned];
+  // The evaluator drops what main returned but it can't show, e.g. a string. Its shape entries are
+  // what it kept, in the order of the meshes (its `$` debug shapes follow them), so a mesh's body is
+  // the returned one with the entry's shape.
+  const kept = builder.getShapeEntries() as { shape: unknown }[];
+  const bodies = new Map(values.flatMap((v) => (v instanceof features.Body ? [[v.shape as unknown, v] as const] : [])));
   const shapes: MeshedShape[] = result.flatMap((shape, i) => {
     if (shape.format === "svg" || !shape.mesh) return [];
-    const value = values[i];
+    const body = bodies.get(kept[i]?.shape);
     const edges = shape.edges ?? undefined;
-    const pickable = value instanceof features.Body ? indices(value, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
+    const pickable = body ? indices(body, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
     return [{ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh, edges, ...pickable }];
   });
   lastTrace = [...currentTrace()];
   const timings: BuildTimings = { build: t2 - t1, total: performance.now() - t0 };
-  post({ type: "built", id, shapes, trace: serialize(lastTrace, unusedBodies(values)), timings, heapBytes: heapBytes() });
+  post({ type: "built", id, shapes, dropped: values.length - kept.length, trace: serialize(lastTrace, unusedBodies(values)), timings, heapBytes: heapBytes() });
 }
 
 /**
