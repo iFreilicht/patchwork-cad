@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
-import type { CameraState, DocUiState, UiStorageDoc } from "../types.ts";
+import type { CameraState, DocUiState, TimelineMarker, UiStorageDoc } from "../types.ts";
 
 /** The tool-storage id both tools share, so that state can be read by either. */
 const TOOL_STORAGE_ID = "patchwork-cad";
@@ -15,6 +15,9 @@ export interface UiState {
    */
   view(toolId: string): CameraState | undefined;
   setView(toolId: string, view: CameraState): void;
+  /** The editor's timeline marker; undefined is at the end. */
+  marker: Accessor<TimelineMarker | undefined>;
+  setMarker(marker: TimelineMarker | undefined): void;
 }
 
 /**
@@ -74,6 +77,17 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
     setCodeOpen(open) {
       setState((s) => ({ ...s, codeOpen: open }));
       write((entry) => (entry.codeOpen = open));
+    },
+    marker: () => state().marker,
+    setMarker(marker) {
+      setState((s) => {
+        const { marker: _, ...rest } = s;
+        return marker ? { ...rest, marker } : rest;
+      });
+      write((entry) => {
+        if (marker) entry.marker = { ...marker };
+        else delete entry.marker;
+      });
     },
     view: (toolId) => loadedViews()?.[toolId],
     setView(toolId, view) {

@@ -144,6 +144,78 @@
   background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
 }
 
+/*
+ * Code past the timeline marker: grey, but a grayscale filter keeps each token's luminance, and so its
+ * contrast. Only the syntax tokens are filtered, not the marks of related code around them.
+ */
+.cad-model .cad-model__past-marker {
+  box-shadow: inset 3px 0 var(--cad-model-muted);
+}
+
+.cad-model .cad-model__past-marker span:not(.cad-model__related) {
+  filter: grayscale(1);
+}
+
+/* Themes set the tokens' font style, so it is set on them too. */
+.cad-model .cm-line.cad-model__past-marker,
+.cad-model .cm-line.cad-model__past-marker * {
+  font-style: italic;
+}
+
+/* The code of the focused timeline entry and of its dependencies (accent) and dependents (warning); dashed: a link a move rewires. */
+/* Underlines drawn as backgrounds: a text decoration is painted with the text, so the filter past the marker would grey it. */
+.cad-model .cad-model__related {
+  --cad-model-related: var(--cad-model-fg);
+  --cad-model-related-width: 1px;
+  background: linear-gradient(var(--cad-model-related), var(--cad-model-related)) 0 100% / 100% var(--cad-model-related-width) repeat-x;
+}
+
+.cad-model .cad-model__related[data-link="chain"] {
+  background-image: repeating-linear-gradient(to right, var(--cad-model-related) 0 4px, transparent 4px 7px);
+}
+
+.cad-model .cad-model__related--self {
+  --cad-model-related-width: 2px;
+}
+
+/* Bars in front of the lines of the focused entry and of those related to it, in a gutter of their own. */
+.cad-model .cad-model__relation-gutter {
+  width: 4px;
+}
+
+.cad-model .cad-model__relation-gutter .cm-gutterElement {
+  box-sizing: border-box;
+  width: 4px;
+}
+
+.cad-model .cad-model__relation-bar {
+  border-left: 3px solid;
+}
+
+.cad-model .cad-model__relation-bar--chain {
+  border-left-style: dashed;
+}
+
+.cad-model .cad-model__relation-bar--self {
+  border-left-color: var(--cad-model-fg);
+}
+
+.cad-model .cad-model__relation-bar--dependency {
+  border-left-color: var(--cad-model-accent);
+}
+
+.cad-model .cad-model__relation-bar--dependent {
+  border-left-color: var(--cad-model-warning);
+}
+
+.cad-model .cad-model__related--dependency {
+  --cad-model-related: var(--cad-model-accent);
+}
+
+.cad-model .cad-model__related--dependent {
+  --cad-model-related: var(--cad-model-warning);
+}
+
 .cad-view-doc__stage {
   position: relative;
   min-height: 0;
@@ -395,9 +467,17 @@
   text-decoration: underline;
 }
 
-.cad-editor__timeline {
+/* Holds the timeline and the marker's floating triangle, which the scrolling timeline would clip. */
+.cad-editor__timeline-wrap {
   grid-area: timeline;
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+}
+
+.cad-editor__timeline {
   display: flex;
+  align-items: stretch;
   gap: var(--studio-space-2xs, 4px);
   overflow-x: auto;
   padding: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem);
@@ -419,10 +499,6 @@
   background: var(--cad-model-panel);
   color: var(--cad-model-fg);
   cursor: pointer;
-}
-
-.cad-editor__entry[aria-pressed="true"] {
-  border-color: var(--cad-model-accent-text);
 }
 
 .cad-editor__entry[data-status="broken"] {
@@ -467,4 +543,93 @@
 
 .cad-editor__glyph {
   color: var(--cad-model-fg);
+}
+
+/* Entries past the timeline marker: rolled back, as in Fusion. */
+.cad-editor__entry[data-past-marker="true"] {
+  border-style: dashed;
+  background: var(--cad-model-bg);
+  font-style: italic;
+}
+
+.cad-editor__entry[data-past-marker="true"] .cad-editor__glyph {
+  filter: grayscale(1);
+}
+
+/* The hovered, dragged or open entry stands out most; what it relates to gets a coloured border. */
+.cad-editor__entry[data-focused="true"],
+.cad-editor__entry[aria-pressed="true"] {
+  outline: 2px solid var(--cad-model-fg);
+  outline-offset: 1px;
+}
+
+.cad-editor__entry[data-relation="dependency"] {
+  border-color: var(--cad-model-accent);
+}
+
+.cad-editor__entry[data-relation="dependent"] {
+  border-color: var(--cad-model-warning);
+}
+
+/* The link's style wins over the dashed border of entries past the marker. */
+.cad-editor__entry[data-link="chain"] {
+  border-style: dashed;
+}
+
+.cad-editor__entry[data-link="hard"] {
+  border-style: solid;
+}
+
+.cad-editor__entry[data-dragging="true"] {
+  opacity: 0.5;
+}
+
+/* Where a dragged entry would go: a line of its own in the timeline. */
+.cad-editor__drop {
+  flex: none;
+  width: 2px;
+  margin: 0 2px;
+  background: var(--cad-model-fg);
+}
+
+.cad-editor__drop[data-blocked="true"] {
+  background: var(--cad-model-danger);
+}
+
+/* The marker's slot in the timeline, as wide as the stem of its drawing, which is anchored above it. */
+.cad-editor__marker {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.cad-editor__marker-drawing {
+  position: absolute;
+  color: var(--cad-model-accent);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.cad-editor__marker-drawing svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.cad-editor__marker:focus-visible {
+  outline: 2px solid var(--cad-model-accent-text);
+}
+
+.cad-editor__to-end {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  cursor: pointer;
 }

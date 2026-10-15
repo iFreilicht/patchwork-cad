@@ -8,6 +8,7 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
 import { FEATURES_MODULE, type Analysis, type FeatureCall, type Prop, type Span } from "./analyze.ts";
+import { graph, inputOf as consumedInput, type Graph } from "./deps.ts";
 import type { FeatureEntry, Timeline } from "./timeline.ts";
 
 export interface Edit {
@@ -157,26 +158,35 @@ function inputOf(source: string, call: FeatureCall): string | undefined {
   return p ? source.slice(p.value.start, p.value.end) : undefined;
 }
 
+/** The whole lines a span covers, with the line break after them. */
+function lines(source: string, span: Span): Span {
+  const lineEnd = source.indexOf("\n", span.end);
+  return { start: source.lastIndexOf("\n", span.start - 1) + 1, end: lineEnd < 0 ? span.end : lineEnd + 1 };
+}
+
+/** Replaces an identifier; a shorthand property (`{ body }`) keeps its key (`{ body: fillet1 }`). */
+const replaceIdentifier = (span: Span, text: string, shorthand: string | undefined): Edit => ({ start: span.start, end: span.end, text: shorthand ? `${shorthand}: ${text}` : text });
+
 /**
  * Deletes a feature statement. Features that used its body (`body:`, `target:`) and the return use
  * its input instead; references that named it (`notch.side.c`, `.piece(notch, 1)`) name it through
  * `ref.notch`, so that they report themselves as broken instead of throwing a ReferenceError.
  */
 export function deleteFeature(source: string, analysis: Analysis, entry: FeatureEntry): Edit[] {
-  const lineStart = source.lastIndexOf("\n", entry.span.start - 1) + 1;
-  const lineEnd = source.indexOf("\n", entry.span.end);
-  const edits: Edit[] = [{ start: lineStart, end: lineEnd < 0 ? entry.span.end : lineEnd + 1, text: "" }];
+  const edits: Edit[] = [{ ...lines(source, entry.span), text: "" }];
   const input = inputOf(source, entry.call);
   walk(analysis.program as Program, (node, ancestors) => {
     if (node.type !== "Identifier" || node.name !== entry.name || node.start < entry.span.end) return;
     const parent = ancestors[ancestors.length - 1];
     if (parent?.type === "MemberExpression" && parent.property === node && !parent.computed) return;
     if (parent?.type === "Property" && parent.key === node && !parent.computed) return;
-    const asValue = parent?.type === "Property" && parent.value === node && ["body", "target"].includes(parent.key.type === "Identifier" ? parent.key.name : "");
+    const key = parent?.type === "Property" && parent.value === node && parent.key.type === "Identifier" ? parent.key.name : undefined;
+    const shorthand = parent?.type === "Property" && parent.shorthand ? key : undefined;
+    const asValue = key === "body" || key === "target";
     const inReturn = ancestors.some((a) => a.type === "ReturnStatement");
     if (asValue || inReturn) {
-      if (input) edits.push({ start: node.start, end: node.end, text: input });
-    } else edits.push({ start: node.start, end: node.end, text: `ref.${entry.name}` });
+      if (input) edits.push(replaceIdentifier(node, input, shorthand));
+    } else edits.push(replaceIdentifier(node, `ref.${entry.name}`, shorthand));
   });
   if (edits.some((e) => e.text.startsWith("ref."))) edits.push(...ensureImports(analysis, ["ref"]));
   return edits;
@@ -223,4 +233,110 @@ export function addToReturn(source: string, analysis: Analysis, name: string): E
   const indent = statement ? indentOf(source, statement.start) : "  ";
   const close = analysis.main.body.end - 1;
   return [{ start: close, end: close, text: `${indent}return ${name};\n` }];
+}
+
+/** Where code goes that is inserted before entry `position`: the start of its line, or of the return's line at the end. */
+function insertionPoint(source: string, analysis: Analysis, tl: Timeline, position: number): number | undefined {
+  const entry = tl.entries[position];
+  if (entry) return lines(source, entry.span).start;
+  if (tl.returned) return lines(source, tl.returned).start;
+  return analysis.main ? lines(source, { start: analysis.main.body.end - 1, end: analysis.main.body.end - 1 }).start : undefined;
+}
+
+/** The current name of every use, edited as a move or an insert rewires the chain of bodies. */
+type Names = string[];
+
+/** The edits that rename uses whose name changed, except those in `skip`. */
+const renames = (g: Graph, names: Names, skip: Span | undefined): Edit[] =>
+  g.uses.flatMap((u, k) => (names[k] !== u.name && !(skip && u.span.start >= skip.start && u.span.end <= skip.end) ? [replaceIdentifier(u.span, names[k]!, u.shorthand)] : []));
+
+/**
+ * Inserts `const name = code;` before entry `position` (research/07, "The timeline marker"). A
+ * feature that consumes a body (`effect.consumes`) is inserted into its chain, as in Fusion: every
+ * later feature and the return that used that version of the body use the new feature instead.
+ * At the end, it is `insertFeature`.
+ */
+export function insertFeatureAt(source: string, analysis: Analysis, tl: Timeline, name: string, code: string, position: number, effect: { consumes?: string; body: boolean }): Edit[] {
+  if (position >= tl.entries.length) return insertFeature(source, analysis, name, code, effect);
+  const at = insertionPoint(source, analysis, tl, position);
+  if (at === undefined) return [];
+  const g = graph(analysis, tl);
+  const edits: Edit[] = [...ensureImports(analysis, usedFunctions(code)), { start: at, end: at, text: `${indentOf(source, tl.entries[position]!.span.start)}const ${name} = ${code};\n` }];
+  if (effect.consumes) {
+    const names = g.uses.map((u) => (u.name === effect.consumes && u.role !== "hard" && u.owner >= position ? name : u.name));
+    edits.push(...renames(g, names, undefined));
+  } else if (effect.body) edits.push(...addToReturn(source, analysis, name));
+  return edits;
+}
+
+/**
+ * Moves entry `index` before entry `position` (`entries.length`: before the return) as one change.
+ * A feature moves Fusion-style (research/07, "Reordering"): first it leaves its chain of bodies, so
+ * whatever used its result uses its input; then it joins the chain at the new place, working on the
+ * version of its body there, and whatever used that version later uses its result instead. A
+ * sketch's body becomes the version at the new place. Custom Script code moves as it is. The caller
+ * checks the move with `canMove` (deps.ts).
+ */
+export function moveEntry(source: string, analysis: Analysis, tl: Timeline, index: number, position: number): Edit[] {
+  const entry = tl.entries[index];
+  const at = insertionPoint(source, analysis, tl, position);
+  if (!entry || at === undefined || position === index || position === index + 1) return [];
+  const g = graph(analysis, tl);
+  const n = tl.entries.length;
+  const order = [...Array(n).keys()].filter((i) => i !== index);
+  order.splice(position > index ? position - 1 : position, 0, index);
+  const pos = (owner: number) => (owner >= n ? n : order.indexOf(owner));
+  const here = pos(index);
+  const names: Names = g.uses.map((u) => u.name);
+  const used = (k: number) => g.uses[k]!;
+
+  /** The input of the feature that declares `name`, under the current renames. */
+  const inputName = (name: string) => {
+    const d = g.declaredBy.get(name);
+    const input = d === undefined ? undefined : consumedInput(g, d);
+    return input ? names[g.uses.indexOf(input)] : undefined;
+  };
+  /** The version of the chain of body `name` that is current at the moved entry's new place. */
+  const versionHere = (name: string): string | undefined => {
+    let version: string | undefined = name;
+    for (let guard = 0; version !== undefined && pos(g.declaredBy.get(version) ?? -1) > here && guard < n; guard++) version = inputName(version);
+    if (version === undefined) return undefined;
+    for (let guard = 0; guard < n; guard++) {
+      const next = g.uses.findIndex((u, k) => u.role === "consume" && names[k] === version && u.owner !== index && u.owner < n && pos(u.owner) < here);
+      if (next < 0) break;
+      version = g.declares[used(next).owner]![0]!;
+    }
+    return version;
+  };
+
+  if (entry.kind === "feature") {
+    const own = g.declares[index]![0]!;
+    const inputUse = g.uses.findIndex((u) => u.owner === index && u.role === "consume");
+    const readUse = g.uses.findIndex((u) => u.owner === index && u.role === "read");
+    if (inputUse >= 0) {
+      const input = names[inputUse]!;
+      names.forEach((name, k) => {
+        if (name === own && used(k).owner !== index && used(k).role !== "hard") names[k] = input;
+      });
+      const version = versionHere(input);
+      if (version === undefined) return [];
+      names[inputUse] = version;
+      names.forEach((name, k) => {
+        const u = used(k);
+        if (k !== inputUse && name === version && u.role !== "hard" && u.owner !== index && pos(u.owner) > here) names[k] = own;
+      });
+    }
+    if (readUse >= 0) {
+      const version = versionHere(names[readUse]!);
+      if (version === undefined) return [];
+      names[readUse] = version;
+    }
+  }
+
+  const range = lines(source, entry.span);
+  const inside = renames(g, names, undefined).filter((e) => e.start >= range.start && e.end <= range.end);
+  let moved = source.slice(range.start, range.end);
+  for (const e of inside.sort((a, b) => b.start - a.start)) moved = moved.slice(0, e.start - range.start) + e.text + moved.slice(e.end - range.start);
+  if (!moved.endsWith("\n")) moved += "\n";
+  return [{ ...range, text: "" }, { start: at, end: at, text: moved }, ...renames(g, names, range)];
 }

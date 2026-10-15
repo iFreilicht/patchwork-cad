@@ -65,7 +65,9 @@ export type WorkerRequest =
   /** The bodies visible before feature `feature` of the last build, for picking while it is edited. */
   | { type: "rollback"; id: number; feature: string }
   /** The reference code for entity `index` of body `body` of the last build. */
-  | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number };
+  | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number }
+  /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
+  | { type: "check"; id: number; source: string };
 
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
@@ -74,4 +76,6 @@ export type WorkerResponse =
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
   | { type: "picked"; id: number; code: string }
+  /** The trial build's error, or how many of its features are broken or failed. */
+  | { type: "checked"; id: number; error: ModelError | undefined; problems: number }
   | { type: "requestFailed"; id: number; message: string };

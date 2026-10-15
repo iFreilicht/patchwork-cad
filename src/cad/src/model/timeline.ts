@@ -70,3 +70,22 @@ export function timeline(source: string, analysis: Analysis, trace: readonly Fea
   }
   return { entries, returned };
 }
+
+/**
+ * Where a timeline marker is: before the first entry that ends after its cursor's offset
+ * (research/07, "The timeline marker"). The cursor sits on the first character of the entry after
+ * the marker and moves to the next surviving character when that text is deleted, so the marker
+ * stays between the entries around it when others delete entries on both sides. A cursor that is
+ * lost (`offset` undefined, e.g. after the whole text was replaced) falls back to the entry named
+ * `next`. `entries.length` is the end.
+ */
+export function markerPosition(tl: Timeline, offset: number | undefined, next: string | undefined): number {
+  const n = tl.entries.length;
+  if (offset === undefined) {
+    const named = tl.entries.findIndex((e) => e.kind === "feature" && e.name === next);
+    return named < 0 ? n : named;
+  }
+  // An offset inside an entry (its first characters were edited) still means before it.
+  const index = tl.entries.findIndex((e) => e.span.end > offset);
+  return index < 0 ? n : index;
+}

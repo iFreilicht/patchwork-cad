@@ -205,7 +205,29 @@ async function build(id: number, source: string): Promise<void> {
   post({ type: "built", id, shapes, trace: serialize(lastTrace, unusedBodies(values)), timings, heapBytes: heapBytes() });
 }
 
-function answer(request: Exclude<WorkerRequest, { type: "build" }>): void {
+/**
+ * Runs a model on trial without meshing, keeping the last build's trace for rollback and picking.
+ * Its bodies are left to the heap limit (research/08).
+ */
+async function check(id: number, source: string): Promise<void> {
+  const problems = () => currentTrace().filter((t) => t.status !== "ok").length;
+  try {
+    const code = prepare(source);
+    await kernel;
+    beginBuild({ lenient: true });
+    // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
+    const module = await browserEvaluator.evaluateModule<Record<string, unknown>>(code, { filename: "__entry__.ts", globals: { replicad, replicadShapeFns: undefined, oc: (await kernel).oc } });
+    const main = module["default"];
+    if (typeof main === "function") (main as (p: unknown) => unknown)(module["defaultParams"] ?? {});
+    post({ type: "checked", id, error: undefined, problems: problems() });
+  } catch (error) {
+    const kind = error instanceof PrepareError ? error.kind : "runtime";
+    const line = error instanceof PrepareError ? error.line : lineFromStack((error as Error)?.stack);
+    post({ type: "checked", id, error: { message: String((error as Error)?.message ?? error), line, kind }, problems: problems() });
+  }
+}
+
+function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): void {
   const bodies = bodiesOf(lastTrace);
   if (request.type === "rollback") {
     const entry = lastTrace.find((t) => t.name === request.feature);
@@ -218,8 +240,16 @@ function answer(request: Exclude<WorkerRequest, { type: "build" }>): void {
   }
 }
 
+/** Builds and checks run one after another: both use the feature library's one build context. */
+let queue: Promise<void> = Promise.resolve();
+const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
+
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
+  if (request.type === "check") {
+    enqueue(() => check(request.id, request.source));
+    return;
+  }
   if (request.type !== "build") {
     try {
       answer(request);
@@ -228,7 +258,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     }
     return;
   }
-  build(request.id, request.source).catch((error: unknown) =>
+  enqueue(() => build(request.id, request.source).catch((error: unknown) =>
     post({
       type: "failed",
       id: request.id,
@@ -237,5 +267,5 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       timings: { build: 0, total: 0 },
       heapBytes: heapBytes(),
     }),
-  );
+  ));
 };

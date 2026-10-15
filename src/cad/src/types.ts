@@ -15,6 +15,15 @@ export interface DocUiState {
   codeOpen?: boolean;
   /** The last camera of each tool, by tool id. */
   views?: Record<string, CameraState>;
+  /** The timeline marker, if it isn't at the end (research/07, "The timeline marker"). */
+  marker?: TimelineMarker;
+}
+
+/** A timeline marker: before the entry whose first character `cursor` (an automerge cursor into `source`) is on. */
+export interface TimelineMarker {
+  cursor: string;
+  /** The variable of that entry, for when the cursor is lost; "" for a Custom Script. */
+  next: string;
 }
 
 /** The account's tool-storage doc of patchwork-cad (see src/components/uiState.ts). */

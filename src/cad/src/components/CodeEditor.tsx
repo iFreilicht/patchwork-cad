@@ -1,6 +1,6 @@
 import { createEffect, onCleanup } from "solid-js";
-import { EditorView, Decoration, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, type DecorationSet } from "@codemirror/view";
-import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { EditorView, Decoration, GutterMarker, gutter, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, type DecorationSet } from "@codemirror/view";
+import { Compartment, EditorState, Prec, RangeSet, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
@@ -28,6 +28,94 @@ const focus = StateField.define<DecorationSet>({
   },
   provide: (field) => EditorView.decorations.from(field),
 });
+
+/** Code of a timeline entry related to the focused one (or the focused one itself, `self`). */
+export interface RelatedSpan {
+  start: number;
+  end: number;
+  relation: "self" | "dependency" | "dependent";
+  link: "chain" | "hard";
+}
+
+const setPast = StateEffect.define<{ from: number; to: number } | undefined>();
+const pastLine = Decoration.line({ class: "cad-model__past-marker" });
+
+/** Marks the lines past the timeline marker (research/07, "The timeline marker"), whose tokens are greyed. */
+const past = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setPast)) continue;
+      const span = effect.value;
+      const doc = tr.state.doc;
+      if (!span || span.to > doc.length || span.from >= span.to) {
+        value = Decoration.none;
+        continue;
+      }
+      const first = doc.lineAt(span.from).number;
+      const last = doc.lineAt(span.to).number;
+      value = Decoration.set(Array.from({ length: last - first + 1 }, (_, i) => pastLine.range(doc.line(first + i).from)));
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+const setRelated = StateEffect.define<RelatedSpan[]>();
+
+/** Marks the code of the entry whose dependencies the timeline shows, and of those it relates to. */
+const related = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setRelated)) continue;
+      const spans = effect.value.filter((s) => s.end <= tr.state.doc.length && s.start < s.end).sort((a, b) => a.start - b.start);
+      value = Decoration.set(spans.map((s) => Decoration.mark({ class: `cad-model__related cad-model__related--${s.relation}`, attributes: { "data-relation": s.relation, "data-link": s.link } }).range(s.start, s.end)));
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** A bar in the relation gutter, in front of a line of the focused entry or of one related to it. */
+class RelationMarker extends GutterMarker {
+  constructor(
+    readonly relation: RelatedSpan["relation"],
+    readonly link: RelatedSpan["link"],
+  ) {
+    super();
+    this.elementClass = `cad-model__relation-bar cad-model__relation-bar--${relation} cad-model__relation-bar--${link}`;
+  }
+  override eq(other: RelationMarker): boolean {
+    return other.relation === this.relation && other.link === this.link;
+  }
+}
+
+/**
+ * The bars of the lines of related code. They are a gutter of their own, not part of the line: the
+ * lines past the timeline marker are greyed with a filter, which would grey a bar in the line, too.
+ */
+const relationBars = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setRelated)) continue;
+      const doc = tr.state.doc;
+      const byLine = new Map<number, RelationMarker>();
+      for (const s of effect.value) {
+        if (s.end > doc.length || s.start >= s.end) continue;
+        for (let n = doc.lineAt(s.start).number; n <= doc.lineAt(s.end).number; n++) if (!byLine.has(n) || s.relation === "self") byLine.set(n, new RelationMarker(s.relation, s.link));
+      }
+      value = RangeSet.of([...byLine].sort(([a], [b]) => a - b).map(([n, marker]) => marker.range(doc.line(n).from)));
+    }
+    return value;
+  },
+});
+
+const relationGutter = gutter({ class: "cad-model__relation-gutter", markers: (view) => view.state.field(relationBars) });
 
 /** Marks the line of the current model error. */
 const errorLine = StateField.define<DecorationSet>({
@@ -62,6 +150,10 @@ export function CodeEditor(props: {
   errorLine: number | undefined;
   /** A source span to mark and scroll to, e.g. the timeline entry being edited. */
   focus?: { start: number; end: number } | undefined;
+  /** The code past the timeline marker. */
+  past?: { start: number; end: number } | undefined;
+  /** Code to mark as related to the focused timeline entry. */
+  related?: RelatedSpan[];
 }) {
   const patchwork = new Compartment();
   const view = new EditorView({
@@ -81,6 +173,11 @@ export function CodeEditor(props: {
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       errorLine,
       focus,
+      past,
+      // Lowest precedence: its marks wrap the syntax tokens, so that greying the tokens past the marker keeps their colours.
+      Prec.lowest(related),
+      relationBars,
+      relationGutter,
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
     ],
@@ -97,6 +194,17 @@ export function CodeEditor(props: {
     const span = props.focus;
     const range = span ? { from: span.start, to: span.end } : undefined;
     view.dispatch({ effects: range ? [setFocus.of(range), EditorView.scrollIntoView(range.from, { y: "center" })] : [setFocus.of(undefined)] });
+  });
+  // Both follow the source, which changes inside CodeMirror's own update when the user types here
+  // (the sync plugin writes to the document then), and a dispatch during an update throws: dispatch after it.
+  const dispatchSoon = (spec: Parameters<typeof view.dispatch>[0]) => queueMicrotask(() => disposed || view.dispatch(spec));
+  createEffect(() => {
+    const span = props.past;
+    dispatchSoon({ effects: setPast.of(span ? { from: span.start, to: span.end } : undefined) });
+  });
+  createEffect(() => {
+    const spans = props.related ?? [];
+    dispatchSoon({ effects: setRelated.of(spans) });
   });
   onCleanup(() => {
     disposed = true;

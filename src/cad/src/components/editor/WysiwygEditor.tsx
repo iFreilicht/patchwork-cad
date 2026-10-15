@@ -4,7 +4,7 @@ import type { MeshedShape } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
-import { CodeEditor } from "../CodeEditor.tsx";
+import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
 import { Viewer, type Highlight } from "../Viewer.tsx";
@@ -29,8 +29,8 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
  */
 export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
   const model = createModel(props.handle);
-  const editor = createEditor(props.handle, model);
   const ui = createUiState(props.element, props.handle.url);
+  const editor = createEditor(props.handle, model, ui);
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -40,22 +40,48 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     editor.pick(entity).catch((error: unknown) => setPickError(String((error as Error)?.message ?? error)));
   };
 
+  /** The first feature the last build ran at or after the timeline marker, if the marker isn't at the end. */
+  const firstPastMarker = (): string | undefined => {
+    for (const entry of editor.timeline().entries.slice(editor.marker())) {
+      const name = entry.kind === "feature" ? entry.trace?.name : entry.features[0]?.name;
+      if (name) return name;
+    }
+    return undefined;
+  };
   // While a reference is picked, the view rolls back to the bodies the feature works on, as in
-  // Fusion's timeline; the feature's resolved references are highlighted there.
+  // Fusion's timeline; the feature's resolved references are highlighted there. Otherwise it shows
+  // the model at the timeline marker.
+  const rollbackTo = () => {
+    const entry = editor.open();
+    return editor.pickTarget() && entry?.trace ? entry.trace.name : firstPastMarker();
+  };
   const [rolledBack, setRolledBack] = createSignal<MeshedShape[]>();
   createEffect(() => {
-    const target = editor.pickTarget();
-    const entry = editor.open();
+    const name = rollbackTo();
     model.last();
-    if (!target || !entry?.trace) return setRolledBack(undefined);
-    const name = entry.trace.name;
+    if (!name) return setRolledBack(undefined);
     model.engine.rollback(name).then(
-      (shapes) => editor.pickTarget() && editor.open()?.trace?.name === name && setRolledBack(shapes),
+      (shapes) => rollbackTo() === name && setRolledBack(shapes),
       () => setRolledBack(undefined),
     );
   });
   const highlight = (): Highlight[] =>
-    rolledBack() ? (editor.open()?.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches })) : [];
+    rolledBack() && editor.pickTarget() ? (editor.open()?.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches })) : [];
+
+  /** The code past the timeline marker, from the start of its first line. */
+  const pastMarker = (): Span | undefined => {
+    const entries = editor.timeline().entries;
+    const first = entries[editor.marker()];
+    if (!first || editor.syntaxError()) return undefined;
+    return { start: first.span.start, end: entries[entries.length - 1]!.span.end };
+  };
+  /** The code of the entry whose dependencies are shown, and of its dependencies and dependents. */
+  const relatedCode = (): RelatedSpan[] => {
+    const index = editor.focused();
+    const entries = editor.timeline().entries;
+    if (index === undefined || editor.syntaxError() || !entries[index]) return [];
+    return [{ ...entries[index]!.span, relation: "self" as const, link: "hard" as const }, ...[...editor.related().values()].map((r) => ({ ...entries[r.index]!.span, relation: r.relation, link: r.link }))];
+  };
 
   /** The open sketch's profile, or the sketch of the open extrude. */
   const overlays = () => {
@@ -78,7 +104,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   };
 
   return (
-    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"}>
+    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} />
       <div class="cad-editor__stage">
         <Viewer
@@ -97,11 +123,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       </div>
       <Show when={codeOpen()}>
         <div class="cad-editor__code">
-          <CodeEditor handle={props.handle} errorLine={model.error()?.line} focus={codeFocus()} />
+          <CodeEditor handle={props.handle} errorLine={model.error()?.line} focus={codeFocus()} past={pastMarker()} related={relatedCode()} />
         </div>
       </Show>
       <Timeline editor={editor} onOpenScript={openScript} />
-      <StatusBar model={model} />
+      <StatusBar model={model} notice={editor.moveError()} />
     </div>
   );
 }

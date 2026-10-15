@@ -5,7 +5,7 @@ export type BuildResult =
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "checked" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -72,6 +72,12 @@ export class Engine {
     return answer.type === "picked" ? answer.code : "";
   }
 
+  /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
+  async check(source: string): Promise<{ error: ModelError | undefined; problems: number }> {
+    const answer = await this.#request({ type: "check", id: this.#nextId++, source });
+    return answer.type === "checked" ? { error: answer.error, problems: answer.problems } : { error: undefined, problems: 0 };
+  }
+
   dispose(): void {
     this.#worker.terminate();
     for (const { reject } of this.#pending.values()) reject(new Error("kernel disposed"));
@@ -94,7 +100,7 @@ export class Engine {
         loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "checked" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));

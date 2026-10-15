@@ -70,6 +70,14 @@ export async function openCode(page: Page): Promise<void> {
   await page.locator(".cad-model__code .cm-content").waitFor();
 }
 
+/** Hides Patchwork's document and context sidebars, which leaves the tool the whole width, e.g. for a long timeline. */
+export async function hideSidebars(page: Page): Promise<void> {
+  for (const name of ["Hide sidebar", "Hide context sidebar"]) {
+    const button = page.getByRole("button", { name, exact: true });
+    if (await button.isVisible()) await button.click();
+  }
+}
+
 /** Creates a CAD model through the create-new menu; it opens in the default tool, or then in `tool`. */
 export async function createModel(page: Page, tool?: string): Promise<void> {
   await createViaMenu(page, "CAD Model");

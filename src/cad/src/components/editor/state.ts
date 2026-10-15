@@ -9,10 +9,12 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
-import { apply, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeature, lastOf, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
-import { timeline, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
+import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Relation } from "../../model/deps.ts";
+import { apply, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
+import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
 import type { Model } from "../createModel.ts";
+import type { UiState } from "../uiState.ts";
 import type { Entity, EntityKind } from "../Viewer.tsx";
 
 export interface PickTarget {
@@ -43,6 +45,29 @@ export interface Editor {
   pick(entity: Entity): Promise<void>;
   /** Variables of features before the open one that produce a body or a sketch. */
   variablesBefore(kind: "body" | "sketch"): string[];
+  /** The dependencies between the timeline's entries. */
+  graph: Accessor<Graph | undefined>;
+  /** The timeline marker: entries from this index on are rolled back; `entries.length` is the end. */
+  marker: Accessor<number>;
+  setMarker(position: number): void;
+  /** The entry being hovered or dragged in the timeline. */
+  setHovered(index: number | undefined): void;
+  setDragging(index: number | undefined): void;
+  dragging: Accessor<number | undefined>;
+  /** The entry whose dependencies are highlighted: the dragged, else the hovered, else the open one. */
+  focused: Accessor<number | undefined>;
+  /** The focused entry's dependencies and dependents, by entry index. */
+  related: Accessor<Map<number, Relation>>;
+  /** Why the last drop in the timeline didn't move anything; the status bar shows it. */
+  moveError: Accessor<string | undefined>;
+  setMoveError(message: string | undefined): void;
+  /** Why entry `index` can't move to `position` (before entry `position`), or undefined if it can. */
+  blocked(index: number, position: number): string | undefined;
+  /**
+   * Moves entry `index` before entry `position`, and before or after the marker if that is where it
+   * is (`pastMarker`); resolves to why it didn't, if it didn't.
+   */
+  move(index: number, position: number, pastMarker: boolean): Promise<string | undefined>;
 }
 
 function tryAnalyze(source: string): { analysis?: Analysis; error?: string } {
@@ -61,7 +86,10 @@ const DEFAULTS: Record<FeatureType, (d: { sketch: string; body: string }) => str
   chamfer: ({ body }) => `chamfer({ body: ${body}, edges: [], distance: 1 })`,
 };
 
-export function createEditor(handle: DocHandle<CadModelDoc>, model: Model): Editor {
+/** A label of an entry for messages. */
+const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.name : `the Custom Script at lines ${entry.lines.join("–")}`);
+
+export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: Pick<UiState, "marker" | "setMarker">): Editor {
   const [source, setSource] = createSignal(handle.doc()?.source ?? "");
   const onChange = () => setSource(handle.doc()?.source ?? "");
   handle.on("change", onChange);
@@ -138,12 +166,22 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model): Edit
     if (!a) return;
     const name = freshName(text, type);
     const tl = timeline(text, a, []);
-    // A new fillet or chamfer works on the visible result, which may come from a Custom Script.
-    const returned = returnedVariables(a);
-    const body = (returned.length === 1 ? returned[0] : undefined) ?? lastOf(tl, "body") ?? "undefined";
-    const code = DEFAULTS[type]({ sketch: lastOf(tl, "sketch") ?? "undefined", body });
+    // New features go to the marker; before it, the timeline is what the model is up to there.
+    const position = markerIn(tl);
+    const before: Timeline = { ...tl, entries: tl.entries.slice(0, position) };
+    // At the end, a new fillet or chamfer works on the visible result, which may come from a Custom
+    // Script; before the end, on the body that the next feature after the marker works on, e.g. what a loop made.
+    const returned = position === tl.entries.length ? returnedVariables(a) : [];
+    const deps = graph(a, tl);
+    const declaredBefore = (name: string) => (deps.declaredBy.get(name) ?? Infinity) < position;
+    const nextInput = tl.entries
+      .slice(position)
+      .map((_, i) => inputOf(deps, position + i)?.name)
+      .find((name) => name !== undefined && declaredBefore(name));
+    const body = (returned.length === 1 ? returned[0] : undefined) ?? nextInput ?? lastOf(before, "body") ?? "undefined";
+    const code = DEFAULTS[type]({ sketch: lastOf(before, "sketch") ?? "undefined", body });
     const consumes = type === "fillet" || type === "chamfer" ? body : undefined;
-    apply(handle, insertFeature(text, a, name, code, { body: type !== "sketch", ...(consumes ? { consumes } : {}) }));
+    apply(handle, insertFeatureAt(text, a, tl, name, code, position, { body: type !== "sketch", ...(consumes ? { consumes } : {}) }));
     const after = tryAnalyze(doc().source).analysis;
     const call = after?.calls.find((x) => x.variable === name);
     if (!call) return;
@@ -192,7 +230,141 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model): Edit
       .map((e) => e.name);
   };
 
-  return { source, analysis, timeline: tl, syntaxError, open, openFeature, pickTarget, setPickTarget, editOpen, insert, deleteOpen, pick, variablesBefore };
+  const g = createMemo(() => {
+    const a = analysis();
+    return a ? graph(a, tl()) : undefined;
+  });
+
+  /** The marker's position in a timeline of the document's current source. */
+  function markerIn(t: Timeline): number {
+    const m = ui.marker();
+    if (!m) return t.entries.length;
+    let offset: number | undefined;
+    try {
+      offset = getCursorPosition(doc(), ["source"], m.cursor);
+    } catch {
+      // The cursor's text was replaced as a whole.
+    }
+    return markerPosition(t, offset, m.next || undefined);
+  }
+  // While the code doesn't parse, the timeline is the last valid one and offsets don't match it: keep the marker.
+  const marker = createMemo<number>((previous) => {
+    source();
+    return syntaxError() && previous !== undefined ? previous : markerIn(tl());
+  });
+  /** Puts the marker before entry `position` of `t`, a timeline of the document's current source. */
+  const setMarkerIn = (t: Timeline, position: number) => {
+    const entry = t.entries[position];
+    if (!entry) return ui.setMarker(undefined);
+    ui.setMarker({ cursor: getCursor(doc(), ["source"], entry.span.start, "after"), next: entry.kind === "feature" ? entry.name : "" });
+  };
+  const setMarker = (position: number) => (syntaxError() ? undefined : setMarkerIn(tl(), position));
+
+  const [moveError, setMoveError] = createSignal<string>();
+  const [hovered, setHovered] = createSignal<number>();
+  const [dragging, setDragging] = createSignal<number>();
+  const focused = () => {
+    const d = dragging() ?? hovered();
+    if (d !== undefined) return d;
+    const index = tl().entries.findIndex((e) => e === open());
+    return index < 0 ? undefined : index;
+  };
+  const related = createMemo(() => {
+    const index = focused();
+    const graph = g();
+    return new Map(index === undefined || !graph ? [] : relations(graph, index).map((r) => [r.index, r]));
+  });
+
+  const blocked = (index: number, position: number): string | undefined => {
+    const graph = g();
+    const entries = tl().entries;
+    if (!graph || syntaxError()) return "The code doesn't parse.";
+    if (position === index || position === index + 1) return undefined;
+    if (canMove(graph, index, position)) return undefined;
+    const range = allowedRange(graph, index);
+    const name = labelOf(entries[index]);
+    if (position < range.min) return `${name} can't move before ${labelOf(entries[range.minBy ?? 0])}, which it uses.`;
+    return `${name} can't move after ${labelOf(entries[range.maxBy ?? entries.length])}, which uses it.`;
+  };
+
+  /** The entry in a fresh timeline that is entry `index` of the shown one. */
+  const freshIndex = (fresh: Timeline, index: number): number => {
+    const shown = tl().entries[index];
+    if (!shown) return fresh.entries.length;
+    if (shown.kind === "feature") return fresh.entries.findIndex((e) => e.kind === "feature" && e.name === shown.name);
+    return fresh.entries[index]?.kind === "script" ? index : -1;
+  };
+
+  const move = async (index: number, position: number, pastMarker: boolean): Promise<string | undefined> => {
+    const m = marker();
+    const past = position === m ? pastMarker : position > m;
+    // After the move, the marker is after the same other entries as before, and the moved entry on the side it was dropped.
+    const markerGap = m - (index < m ? 1 : 0) + (past ? 0 : 1);
+    if (position === index || position === index + 1) {
+      if (past !== index >= m) setMarker(markerGap);
+      return undefined;
+    }
+    const why = blocked(index, position);
+    if (why) return why;
+    const entry = tl().entries[index];
+    // Custom Script code is opaque: try the move in the background first and keep it only if the model still builds as well as before.
+    if (entry?.kind === "script") {
+      const text = doc().source;
+      const { analysis: a } = tryAnalyze(text);
+      if (!a) return "The code doesn't parse.";
+      const fresh = timeline(text, a, []);
+      const edits = moveEntry(text, a, fresh, freshIndex(fresh, index), freshIndex(fresh, position));
+      let moved = text;
+      for (const e of [...edits].sort((x, y) => y.start - x.start)) moved = moved.slice(0, e.start) + e.text + moved.slice(e.end);
+      const result = await model.engine.check(moved);
+      const target = tl().entries[position];
+      const where = target ? `before ${labelOf(target)}` : "to the end";
+      if (result.error && !model.error()) return `Moving ${labelOf(entry)} ${where} breaks the model: ${result.error.message}`;
+      const problems = model.trace().filter((t) => t.status !== "ok").length;
+      const broken = result.problems - problems;
+      if (broken > 0) return `Moving ${labelOf(entry)} ${where} breaks ${broken} feature${broken === 1 ? "" : "s"}.`;
+    }
+    const text = doc().source;
+    const { analysis: a } = tryAnalyze(text);
+    if (!a) return "The code doesn't parse.";
+    const fresh = timeline(text, a, []);
+    const from = freshIndex(fresh, index);
+    const to = freshIndex(fresh, position);
+    if (from < 0 || to < 0) return "The timeline changed meanwhile.";
+    if (!canMove(graph(a, fresh), from, to)) return blocked(index, position) ?? "The timeline changed meanwhile.";
+    apply(handle, moveEntry(text, a, fresh, from, to));
+    const after = tryAnalyze(doc().source).analysis;
+    if (after) setMarkerIn(timeline(doc().source, after, []), markerGap);
+    return undefined;
+  };
+
+  return {
+    source,
+    analysis,
+    timeline: tl,
+    syntaxError,
+    open,
+    openFeature,
+    pickTarget,
+    setPickTarget,
+    editOpen,
+    insert,
+    deleteOpen,
+    pick,
+    variablesBefore,
+    graph: g,
+    marker,
+    setMarker,
+    setHovered,
+    setDragging,
+    dragging,
+    focused,
+    related,
+    blocked,
+    moveError,
+    setMoveError,
+    move,
+  };
 }
 
 export const schemaOf = (type: FeatureType) => schemas[type];
