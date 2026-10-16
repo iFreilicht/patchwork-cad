@@ -1,11 +1,11 @@
-import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
   | { ok: true; source: string; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "checked" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "checked" | "located" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -78,10 +78,16 @@ export class Engine {
     return answer.type === "rolledBack" ? answer.shapes : [];
   }
 
-  /** The reference code for entity `index` of body `body` in the last build. */
-  async pick(body: string, kind: "face" | "edge", index: number): Promise<string> {
+  /** The reference for entity `index` of body `body` in the last build: its code, and as data. */
+  async pick(body: string, kind: "face" | "edge", index: number): Promise<{ code: string; ref: RefData | undefined }> {
     const answer = await this.#request({ type: "pick", id: this.#nextId++, body, kind, index });
-    return answer.type === "picked" ? answer.code : "";
+    return answer.type === "picked" ? { code: answer.code, ref: answer.ref } : { code: "", ref: undefined };
+  }
+
+  /** For each of `refs`, the entities it names in bodies `bodies` of the last build. */
+  async locate(bodies: string[], refs: RefData[]): Promise<{ body: string; indices: number[] }[][]> {
+    const answer = await this.#request({ type: "locate", id: this.#nextId++, bodies, refs });
+    return answer.type === "located" ? answer.found : refs.map(() => []);
   }
 
   /** Body `body` of the last build, meshed, if there is one, e.g. a feature's result past the timeline marker. */
@@ -120,7 +126,7 @@ export class Engine {
         this.#loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "checked" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "checked" || message.type === "located" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));

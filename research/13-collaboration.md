@@ -113,20 +113,26 @@ Presence in Onshape is "Follow Mode": the follower sees "The collaborator's curs
 
 ### Presence
 
-- **We build the provider's interface ourselves now:** a module-level singleton per model document, shared by the editor and the viewer (one package, so one module instance), with a key per view, so per-view state such as a camera needs no view identity. Its channel is prefixed (`cad:…`) against other tools on the same document, and it re-sends its snapshot periodically, not only on change, so that other tools' `goodbye`s and the idle pruning cost at most a heartbeat interval. Once Patchwork has a [presence provider](#a-presence-provider), the singleton becomes a `subscribe` call.
-- **What to broadcast**, and in which form so a peer can resolve it against its own build, which may be of another version of `source`:
+Both tools show collaborators ([`presenceSession.ts`](../src/cad/src/components/presenceSession.ts), [`presence.ts`](../src/cad/src/components/presence.ts)); tests: [`presence.test.ts`](../src/cad/test/presence.test.ts), [`cad-presence.spec.ts`](../src/harness/e2e/tests/cad-presence.spec.ts) in Chromium, Firefox and WebKit.
 
-  | State | Form | Shown as |
-  |---|---|---|
-  | code selection | Automerge cursors into `source`, as codemirror-base | carets and tints in the code pane |
-  | timeline marker | its cursor and variable ([`TimelineMarker`](../src/cad/src/types.ts)) | a marker in their colour in the timeline |
-  | hovered and selected faces, edges, features | canonical reference names ([03](03-topological-naming.md#references-in-code)), not mesh indices, which a rebuild renumbers ([12](12-hover-highlighting.md#open)) | see-through highlights in their colour, also in the timeline |
-  | pointer | the world-space point under it on the model, or none | a marker in 3D; screen positions mean nothing under another camera |
-  | camera | [`CameraState`](../src/cad/src/types.ts) | a follow mode like Onshape's, later |
+- **The provider's interface, built in the package:** one `PresenceSession` per model document and tab, shared by every mounted editor and viewer (both tools import it from one chunk, so one module instance). It wraps one automerge `Presence` with a single channel, `cad: { contactUrl, views: { [viewId]: ViewPresence } }`, with a key per mounted view. Closing a view removes its key; only the last view or `pagehide` sends `goodbye`. The whole channel is re-sent every 2 s (heartbeat 2 s, TTL 10 s, as `doc-presence`): these updates keep idle tabs from being pruned, and heal another tool's `goodbye` within one interval, as `presence.test.ts` checks. Without a contact, e.g. outside Patchwork, presence is off. Once Patchwork has a [presence provider](#a-presence-provider), `joinPresence` becomes a `subscribe` call.
+- **What a view shares** ([`ViewPresence`](../src/cad/src/types.ts)), and how it shows:
 
-  A name that doesn't resolve in the local build, e.g. a feature the peer has added and we haven't received yet, is skipped until the next build, like codemirror's cursors.
-- **Colour** comes from the contact URL hash, as codemirror-base's carets, so a user has the same colour in both; collisions are 1 in 12.
-- **Highlight cost:** each peer's selection is one more highlight overlay ([12](12-hover-highlighting.md#design)), and a name costs a `pick` request to the worker. Hover names change often, so they should be rate-limited.
+  | State | Form | Shown as | Tools |
+  |---|---|---|---|
+  | hovered and selected face or edge | its reference as data, as a pick writes it | see-through highlight in their colour | editor, viewer |
+  | hovered features (timeline or code) | feature names | what the features made, in their colour; the entries outlined | editor; viewer shows the 3D part |
+  | pointer | the point under it on the model, in world coordinates | a dot with their name | editor, viewer |
+  | code selection | Automerge cursors into `source`, while the code pane has focus | caret with their name and a tint | editor |
+  | timeline marker | [`TimelineMarker`](../src/cad/src/types.ts), placed with the editor's own marker logic | a bar in their colour, their name above it | editor |
+  | open feature | its name | its entry outlined | editor |
+
+- **Faces and edges are references, not indices,** which a rebuild renumbers ([12](12-hover-highlighting.md#open)). A `Ref` is plain data: its history names and the picked piece's centroid ([`refs.ts`](../src/features/src/refs.ts)). The worker names the hovered or selected entity (`pickData`, the same request that names it in the status bar), and a collaborator's worker resolves it against the bodies its view shows (`locate`, the library's `resolve`), so nothing of theirs runs. It applies across builds and rollback states, as a feature's reference does: a face picked before a split names all its pieces after it, and a piece picked after the split shows on the unsplit face before it, through the geometric suggestion ([`locate.test.ts`](../src/features/test/locate.test.ts), and the last test of `cad-presence.spec.ts`). The viewer names entities only while someone else is there.
+- **Colour** is Patchwork's hash of the contact URL into its 12-colour palette, as codemirror-base's carets; collisions are 1 in 12. Names are Patchwork's `contact-cursor` token, which loads with a short delay on first use; it draws its own colour, not ours.
+- Views of our own contact, e.g. in another tab, are hidden, as in `doc-presence`.
+- **Diagnosis:** `cadPresence()` in a tab's console shows each model's session: whether it runs, its contact, its views, how many messages it sent and received and when, and its peers.
+- **VS Code's integrated browser (1.136.2) stops receiving presence after a while**, while it still sends and document changes still arrive over the same, single WebSocket: the server's ephemeral frames to it stop. Not reproducible in a standalone Chromium, also not by freezing a page for 60 s through the DevTools protocol while a collaborator floods it (it received everything on resume). The Subduction server (`subduction_ephemeral`) drops ephemeral payloads to a peer that has 64 unfinished sends after its 1024-frame transport queue, and messages more than 30 s from its clock; its debug log, which `pnpm dev` doesn't show, would tell which. VS Code throttles timers in webviews ([microsoft/vscode#232788](https://github.com/microsoft/vscode/issues/232788)); no report of this exact behaviour was found. Treated as a quirk of VS Code's browser.
+- **Not shared yet:** the camera, for a follow mode like Onshape's.
 
 ### Comments
 
@@ -146,5 +152,5 @@ Presence in Onshape is "Follow Mode": the follower sees "The collaborator's curs
 
 - Whether patchwork-base would accept non-range targets, or an "Original content deleted" state, in the Comments panel, instead of us listing threads ourselves.
 - A [presence provider](#a-presence-provider) in patchwork-base, and getting the pruning fix into the subduction releases.
-- What the viewer tool shows of collaborators: it has no code pane and no timeline.
+- A follow mode, sharing the camera.
 - Comments outside Patchwork (standalone): no provider, so the tools would need their own panel.

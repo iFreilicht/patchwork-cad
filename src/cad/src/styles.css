@@ -768,3 +768,55 @@
   background: var(--cad-model-bg);
   color: var(--cad-model-fg);
 }
+
+/* Collaborators (research/13-collaboration.md): each in their presence colour, `--peer-color`. */
+
+.cad-model__peer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  /* Up and to the right of the dot. */
+  margin: -1.6em 0 0 6px;
+  white-space: nowrap;
+}
+
+.cad-editor__entry[data-peer="true"] {
+  box-shadow: 0 0 0 2px var(--peer-color);
+}
+
+.cad-editor__peer-marker {
+  position: relative;
+  flex: none;
+  width: 2px;
+  background: var(--peer-color);
+  pointer-events: none;
+}
+
+/* Above the timeline, like the marker's drawing, where the scrolling timeline doesn't clip it. */
+.cad-editor__peer-name {
+  position: absolute;
+  transform: translateY(-100%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.cad-model__peer-selection {
+  background: color-mix(in srgb, var(--peer-color) 25%, transparent);
+}
+
+.cad-model__caret {
+  position: relative;
+  margin: 0 -1px;
+  border-left: 2px solid var(--peer-color);
+  pointer-events: none;
+}
+
+.cad-model__caret-label {
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  z-index: 150;
+  white-space: nowrap;
+  user-select: none;
+}

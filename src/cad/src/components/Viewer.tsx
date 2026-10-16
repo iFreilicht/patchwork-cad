@@ -5,6 +5,7 @@ import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-three
 import type { MeshedShape } from "../kernel/protocol.ts";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
 import type { CameraState } from "../types.ts";
+import { contactToken } from "./presence.ts";
 import { regionDirection, regionName, ViewCube, type Region } from "./ViewCube.ts";
 
 export type EntityKind = "face" | "edge";
@@ -17,13 +18,15 @@ export interface Highlight {
   body: string;
   kind: EntityKind;
   indices: number[];
-  /** `hover`: what is hovered, e.g. a feature's faces; `accent`: what is selected, or what a reference resolves to. */
+  /** `hover`: what is hovered, e.g. a feature's faces; `accent`: what is selected, or what a reference resolves to; `peer`: what a collaborator hovers or selects, in `color`. */
   style: HighlightStyle;
+  /** A CSS colour, for `peer`. */
+  color?: string;
   /** The body's mesh, if it isn't shown, e.g. a feature's result past the timeline marker. */
   shape?: MeshedShape;
 }
 
-export type HighlightStyle = "hover" | "accent";
+export type HighlightStyle = "hover" | "accent" | "peer";
 
 export interface Entity {
   body: string;
@@ -35,6 +38,15 @@ export interface Entity {
 export interface Overlay {
   points: [number, number, number][];
   closed: boolean;
+}
+
+/** A collaborator's pointer on the model. */
+export interface PeerMarker {
+  key: string;
+  point: [number, number, number];
+  color: string;
+  /** Labels the marker with the contact's name. */
+  contactUrl: string;
 }
 
 export interface ViewerProps {
@@ -51,6 +63,10 @@ export interface ViewerProps {
   onSelect?: (entity: Entity | undefined) => void;
   highlight?: Highlight[] | undefined;
   overlays?: Overlay[] | undefined;
+  /** The point on the model under the pointer as it moves, undefined when it is off the model. */
+  onPointer?: (point: [number, number, number] | undefined) => void;
+  /** Collaborators' pointers. */
+  peers?: PeerMarker[] | undefined;
   /** A camera to show, e.g. the one the user last left; it applies whenever it changes. */
   view?: CameraState | undefined;
   /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
@@ -81,6 +97,8 @@ export interface ViewerTestHook {
   viewCubePoint(region: Region): { x: number; y: number } | undefined;
   /** The direction from the orbit target to the camera. */
   cameraDirection(): [number, number, number];
+  /** Where collaborators' pointer markers are on the screen. */
+  peerMarkers(): { key: string; x: number; y: number }[];
 }
 
 export type Projection = CameraState["projection"];
@@ -181,16 +199,30 @@ export function Viewer(props: ViewerProps) {
     // Highlights show through the model, so that they also show what other faces hide.
     const highlightFace = (color: THREE.Color, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
     const highlightLine = (color: THREE.Color) => new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false });
-    const highlightMaterials: Record<HighlightStyle, { face: THREE.Material; line: THREE.Material }> = {
+    const highlightMaterials: Record<Exclude<HighlightStyle, "peer">, { face: THREE.Material; line: THREE.Material }> = {
       hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine) },
       accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine) },
     };
+    /** Collaborators' highlights, by colour. */
+    const peerMaterials = new Map<string, { face: THREE.Material; line: THREE.Material; marker: THREE.Material }>();
+    const peerMaterial = (css: string) => {
+      let m = peerMaterials.get(css);
+      if (!m) {
+        const color = new THREE.Color().setStyle(css, THREE.SRGBColorSpace);
+        m = { face: highlightFace(color, 0.3), line: highlightLine(color), marker: new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }) };
+        peerMaterials.set(css, m);
+      }
+      return m;
+    };
+    const materialsOf = (h: Highlight) => (h.style === "peer" ? peerMaterial(h.color ?? "#888") : highlightMaterials[h.style]);
     const group = new THREE.Group();
     const overlayGroup = new THREE.Group();
     overlayGroup.renderOrder = 1;
     const highlightGroup = new THREE.Group();
     highlightGroup.renderOrder = 2;
-    scene.add(group, overlayGroup, highlightGroup);
+    const peerGroup = new THREE.Group();
+    peerGroup.renderOrder = 3;
+    scene.add(group, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
     const cube = new ViewCube({
@@ -377,6 +409,7 @@ export function Viewer(props: ViewerProps) {
     const tick = (now: number) => {
       step(now);
       controls.update();
+      placeMarkers();
       renderer.render(scene, camera);
       if (!collapsed()) renderCube();
       frameId = requestAnimationFrame(tick);
@@ -456,7 +489,7 @@ export function Viewer(props: ViewerProps) {
         }
         const geometry = subset(source, indexOf, h.indices);
         temporary?.dispose();
-        const { face, line } = highlightMaterials[h.style];
+        const { face, line } = materialsOf(h);
         highlightGroup.add(h.kind === "face" ? new THREE.Mesh(geometry, face) : new THREE.LineSegments(geometry, line));
       }
     });
@@ -469,6 +502,52 @@ export function Viewer(props: ViewerProps) {
         overlayGroup.add(overlay.closed ? new THREE.LineLoop(geometry, overlayMaterial) : new THREE.Line(geometry, overlayMaterial));
       }
     });
+
+    // ---------- collaborators' pointers ----------
+
+    /** A marker per collaborator: a dot on the model and their name next to it, which the render loop places. */
+    const markers = new Map<string, { dot: THREE.Mesh; label: HTMLDivElement; point: THREE.Vector3 }>();
+    const dotGeometry = new THREE.SphereGeometry(1, 12, 8);
+    createEffect(() => {
+      const peers = props.peers ?? [];
+      const keys = new Set(peers.map((p) => p.key));
+      for (const [key, m] of markers) {
+        if (keys.has(key)) continue;
+        peerGroup.remove(m.dot);
+        m.label.remove();
+        markers.delete(key);
+      }
+      for (const peer of peers) {
+        let m = markers.get(peer.key);
+        if (!m) {
+          const label = document.createElement("div");
+          label.className = "cad-model__peer";
+          label.append(contactToken(peer.contactUrl));
+          container.append(label);
+          m = { dot: new THREE.Mesh(dotGeometry), label, point: new THREE.Vector3() };
+          peerGroup.add(m.dot);
+          markers.set(peer.key, m);
+        }
+        m.dot.material = peerMaterial(peer.color).marker;
+        m.label.style.setProperty("--peer-color", peer.color);
+        m.point.set(...peer.point);
+        m.dot.position.copy(m.point);
+      }
+      container.dataset["peerMarkers"] = String(markers.size);
+    });
+    /** Places the markers' labels and sizes their dots to a constant few pixels. */
+    const placeMarkers = () => {
+      if (!markers.size) return;
+      const rect = canvas.getBoundingClientRect();
+      for (const m of markers.values()) {
+        const v = m.point.clone().project(camera);
+        const visible = v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
+        m.label.hidden = !visible;
+        m.label.style.transform = `translate(${((v.x + 1) / 2) * rect.width}px, ${((1 - v.y) / 2) * rect.height}px)`;
+        const unitsPerPixel = camera === perspective ? (2 * m.point.distanceTo(camera.position) * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) / rect.height : orthoHeight / orthographic.zoom / rect.height;
+        m.dot.scale.setScalar(4 * unitsPerPixel);
+      }
+    };
 
     // ---------- picking ----------
 
@@ -503,11 +582,21 @@ export function Viewer(props: ViewerProps) {
     /** Whether an entity is of a feature-library body, which can be picked and named. */
     const isBody = (entity: Entity | undefined): entity is Entity => !!entity && rendered.some((r) => r.shape.body === entity.body);
 
+    /** The point on the model under a canvas position. */
+    const pointAt = (clientX: number, clientY: number): [number, number, number] | undefined => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(rendered.map((r) => r.mesh), false)[0];
+      return hit ? (hit.point.toArray().map((x) => Math.round(x * 1000) / 1000) as [number, number, number]) : undefined;
+    };
+
     let down: { x: number; y: number } | undefined;
     const onPointerMove = (event: PointerEvent) => {
       if (event.buttons) return;
       const entity = hoverAt(event.clientX, event.clientY);
       if (!same(entity, hovered())) setHovered(entity);
+      if (props.onPointer) props.onPointer(pointAt(event.clientX, event.clientY));
     };
     const onPointerDown = (event: PointerEvent) => (down = { x: event.clientX, y: event.clientY });
     const onPointerUp = (event: PointerEvent) => {
@@ -523,7 +612,10 @@ export function Viewer(props: ViewerProps) {
         setSelected(isBody(entity) ? entity : undefined);
       }
     };
-    const onPointerLeave = () => setHovered(undefined);
+    const onPointerLeave = () => {
+      setHovered(undefined);
+      props.onPointer?.(undefined);
+    };
 
     /** A client position in the ViewCube's normalised device coordinates. */
     const cubeNdc = (clientX: number, clientY: number) => {
@@ -628,6 +720,11 @@ export function Viewer(props: ViewerProps) {
         return { x: Math.round(rect.left + ((ndc.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - ndc.y) / 2) * rect.height) };
       },
       cameraDirection: () => direction().toArray() as [number, number, number],
+      peerMarkers: () =>
+        [...markers].map(([key, m]) => {
+          const p = toScreen(m.point);
+          return { key, x: Math.round(p.x), y: Math.round(p.y) };
+        }),
       screenPoint(entity) {
         const r = rendered.find((x) => x.shape.body === entity.body);
         if (!r) return undefined;
@@ -687,7 +784,9 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("dragstart", onCubeDragStart);
       cube.dispose();
       dispose([...group.children, ...overlayGroup.children, ...highlightGroup.children]);
-      for (const m of [faceMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line])]) m.dispose();
+      for (const m of markers.values()) m.label.remove();
+      dotGeometry.dispose();
+      for (const m of [faceMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line, m.marker])]) m.dispose();
       renderer.dispose();
     });
   });

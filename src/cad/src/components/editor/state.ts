@@ -14,7 +14,7 @@ import { apply, applyToText, appendElement, deleteFeature, elements, ensureImpor
 import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { FeatureTrace } from "../../kernel/protocol.ts";
-import type { CadModelDoc } from "../../types.ts";
+import type { CadModelDoc, TimelineMarker } from "../../types.ts";
 import type { Model } from "../createModel.ts";
 import type { UiState } from "../uiState.ts";
 import type { Entity, EntityKind } from "../Viewer.tsx";
@@ -55,6 +55,8 @@ export interface Editor {
   /** The timeline marker: entries from this index on are rolled back; `entries.length` is the end. */
   marker: Accessor<number>;
   setMarker(position: number): void;
+  /** Where another marker, e.g. a collaborator's, is in the timeline. */
+  markerOf(marker: TimelineMarker | undefined): number;
   /** The entry being hovered or dragged in the timeline. */
   setHovered(index: number | undefined): void;
   setDragging(index: number | undefined): void;
@@ -208,7 +210,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const name = freshName(text, type);
     const tl = timeline(text, a, []);
     // New features go to the marker; before it, the timeline is what the model is up to there.
-    const position = markerIn(tl);
+    const position = markerIn(tl, ui.marker());
     const before: Timeline = { ...tl, entries: tl.entries.slice(0, position) };
     // At the end, a new fillet or chamfer works on the visible result, which may come from a Custom
     // Script; before the end, on the body that the next feature after the marker works on, e.g. what a loop made.
@@ -245,7 +247,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const pick = async (entity: Entity) => {
     const target = pickTarget();
     if (!target) return;
-    const code = await model.engine.pick(entity.body, entity.kind, entity.index);
+    const { code } = await model.engine.pick(entity.body, entity.kind, entity.index);
     const bodyIsVariable = model.trace().some((t) => t.variable && t.result === entity.body);
     editOpen((call, a, text) => {
       const edits: Edit[] = [...ensureImports(a, usedFunctions(code))];
@@ -276,9 +278,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     return a ? graph(a, tl()) : undefined;
   });
 
-  /** The marker's position in a timeline of the document's current source. */
-  function markerIn(t: Timeline): number {
-    const m = ui.marker();
+  /** A marker's position in a timeline of the document's current source; undefined is at the end. */
+  function markerIn(t: Timeline, m: TimelineMarker | undefined): number {
     if (!m) return t.entries.length;
     let offset: number | undefined;
     try {
@@ -291,7 +292,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   // While the code doesn't parse, the timeline is the last valid one and offsets don't match it: keep the marker.
   const marker = createMemo<number>((previous) => {
     source();
-    return syntaxError() && previous !== undefined ? previous : markerIn(tl());
+    return syntaxError() && previous !== undefined ? previous : markerIn(tl(), ui.marker());
   });
   /** Puts the marker before entry `position` of `t`, a timeline of the document's current source. */
   const setMarkerIn = (t: Timeline, position: number) => {
@@ -484,6 +485,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     variablesBefore,
     graph: g,
     marker,
+    markerOf: (m: TimelineMarker | undefined) => (syntaxError() ? tl().entries.length : markerIn(tl(), m)),
     setMarker,
     setHovered,
     setDragging,

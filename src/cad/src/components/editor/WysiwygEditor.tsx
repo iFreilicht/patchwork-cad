@@ -1,18 +1,21 @@
-import { createEffect, createSignal, onCleanup, Show, type Accessor } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import type { MeshedShape } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import type { Entry, FeatureEntry } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
-import { createModel, modelAttributes, type Model } from "../createModel.ts";
+import { createModel, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
 import { Viewer, type Entity, type Highlight } from "../Viewer.tsx";
+import { createEntityName } from "../entityName.ts";
 import { FeatureDialog } from "./FeatureDialog.tsx";
 import { createEditor, ownersOf } from "./state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
+import { createPeerHighlights, joinPresence, peerMarkers } from "../presence.ts";
+import type { TimelinePeer } from "./Timeline.tsx";
 import { viewsOf } from "../viewDoc.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -24,31 +27,6 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
 };
 
 /**
- * The reference expression of a face or edge, e.g. `extrude1.side.front`, as a pick would write it
- * (research/12). `set` asks the worker for it after `delayMs`, so that a pointer moving across the
- * model doesn't flood the worker with requests.
- */
-function createEntityName(model: Model, delayMs: number): { name: Accessor<string | undefined>; set: (entity: Entity | undefined) => void } {
-  const [name, setName] = createSignal<string>();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let current: Entity | undefined;
-  const set = (entity: Entity | undefined) => {
-    clearTimeout(timer);
-    current = entity;
-    setName(undefined);
-    if (!entity) return;
-    timer = setTimeout(() => {
-      model.engine.pick(entity.body, entity.kind, entity.index).then(
-        (code) => current === entity && setName(code),
-        () => undefined,
-      );
-    }, delayMs);
-  };
-  onCleanup(() => clearTimeout(timer));
-  return { name, set };
-}
-
-/**
  * The Fusion-like editor (tool `cad-model`, the default): toolbar, 3D view, timeline and feature
  * dialogs on one kernel worker; the shared code editor opens next to it on demand.
  */
@@ -56,6 +34,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const model = createModel(props.handle);
   const ui = createUiState(props.element, props.handle.url);
   const editor = createEditor(props.handle, model, ui);
+  const presence = joinPresence(props.element, props.handle, "editor");
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -186,6 +165,27 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     return model.trace().flatMap((t) => (names.has(t.name) && t.outline ? [{ points: t.outline, closed: true }] : []));
   };
 
+  // What collaborators see of this view (research/13), and what this view shows of theirs.
+  // Hovered and selected faces and edges go out as references once the worker has named them.
+  createEffect(() => presence.set({ hover: hoverName.ref() }));
+  createEffect(() => presence.set({ selected: selectedName.ref() }));
+  createEffect(() => presence.set({ features: editor.hoveredFeatures() }));
+  createEffect(() => presence.set({ marker: ui.marker() }));
+  createEffect(() => presence.set({ open: editor.open()?.name }));
+  const peers = presence.peers;
+  const peerHighlights = createPeerHighlights(model, shown, peers);
+  const timelinePeers = (): TimelinePeer[] => {
+    const entries = editor.timeline().entries;
+    return presence
+      .peers()
+      .filter((p) => p.state.tool === "editor")
+      .map((p) => {
+        const names = new Set(p.state.features ?? []);
+        const marked = new Set(entries.flatMap((e, i) => ((e.kind === "feature" && e.name === p.state.open) || ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
+        return { key: p.key, color: p.color, contactUrl: p.contactUrl, marker: editor.markerOf(p.state.marker), entries: marked };
+      });
+  };
+
   /** Opens the code pane at an entry's code: a Custom Script's or a body()'s, which have no dialog. */
   const openCode = (span: Span) => {
     editor.openFeature(undefined);
@@ -208,7 +208,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onPick={pick}
           onHover={onHover}
           onSelect={selectedName.set}
-          highlight={[...references(), ...featureHighlight()]}
+          onPointer={(pointer) => presence.set({ pointer })}
+          highlight={[...peerHighlights(), ...references(), ...featureHighlight()]}
+          peers={peerMarkers(peers())}
           overlays={overlays()}
           view={ui.view(EDITOR_TOOL_ID)}
           onViewChange={(view) => ui.setView(EDITOR_TOOL_ID, view)}
@@ -230,10 +232,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             onHover={editor.setCodeHover}
             onCursor={editor.setCodeCursor}
             crossHover={viewHoveredCode()}
+            onSelection={(code) => presence.set({ code })}
+            peerSelections={presence.peers().flatMap((p) => (p.state.code ? [{ key: p.key, color: p.color, contactUrl: p.contactUrl, ...p.state.code }] : []))}
           />
         </div>
       </Show>
-      <Timeline editor={editor} onOpenCode={openCode} />
+      <Timeline editor={editor} onOpenCode={openCode} peers={timelinePeers()} />
       <StatusBar model={model} notice={editor.notice()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );

@@ -1,5 +1,5 @@
 import { createEffect, onCleanup } from "solid-js";
-import { EditorView, Decoration, GutterMarker, gutter, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, type DecorationSet } from "@codemirror/view";
+import { EditorView, Decoration, GutterMarker, WidgetType, gutter, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, type DecorationSet } from "@codemirror/view";
 import { Compartment, EditorState, Prec, RangeSet, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
@@ -7,7 +7,66 @@ import { javascript } from "@codemirror/lang-javascript";
 import { automergeSyncPlugin } from "@automerge/automerge-codemirror";
 import { getRegistry, type PluginDescription } from "@inkandswitch/patchwork-plugins";
 import type { DocHandle } from "@automerge/automerge-repo";
+import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { CadModelDoc } from "../types.ts";
+import { contactToken } from "./presence.ts";
+
+/** A collaborator's selection in the code, as automerge cursors into `source`. */
+export interface PeerSelection {
+  key: string;
+  color: string;
+  contactUrl: string;
+  anchor: string;
+  head: string;
+}
+
+/** A collaborator's caret: a bar in their colour with their name above it. */
+class CaretWidget extends WidgetType {
+  constructor(
+    readonly color: string,
+    readonly contactUrl: string,
+  ) {
+    super();
+  }
+  override eq(other: CaretWidget) {
+    return other.color === this.color && other.contactUrl === this.contactUrl;
+  }
+  toDOM() {
+    const caret = document.createElement("span");
+    caret.className = "cad-model__caret";
+    caret.style.setProperty("--peer-color", this.color);
+    caret.dataset["contact"] = this.contactUrl;
+    const label = document.createElement("span");
+    label.className = "cad-model__caret-label";
+    label.append(contactToken(this.contactUrl));
+    caret.append(label);
+    return caret;
+  }
+  override ignoreEvent() {
+    return true;
+  }
+}
+
+/** Collaborators' selections, resolved to positions in this editor's text. */
+const setPeerSelections = StateEffect.define<{ from: number; to: number; head: number; color: string; contactUrl: string }[]>();
+const peerSelections = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setPeerSelections)) continue;
+      const length = tr.state.doc.length;
+      const ranges = effect.value.flatMap((s) => {
+        const [from, to, head] = [s.from, s.to, s.head].map((x) => Math.min(x, length)) as [number, number, number];
+        const caret = Decoration.widget({ widget: new CaretWidget(s.color, s.contactUrl), side: 1 }).range(head);
+        return from < to ? [Decoration.mark({ class: "cad-model__peer-selection", attributes: { style: `--peer-color: ${s.color}` } }).range(from, to), caret] : [caret];
+      });
+      value = Decoration.set(ranges, true);
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 const setErrorLine = StateEffect.define<number | undefined>();
 const errorLineClass = Decoration.line({ class: "cad-model__error-line" });
@@ -183,6 +242,10 @@ export function CodeEditor(props: {
   onCursor?: (offset: number | undefined) => void;
   /** Code to mark as the origin of what the 3D view hovers. */
   crossHover?: { start: number; end: number }[];
+  /** The selection as automerge cursors while the editor has focus, else undefined, for collaborators. */
+  onSelection?: (selection: { anchor: string; head: string } | undefined) => void;
+  /** Collaborators' selections. */
+  peerSelections?: PeerSelection[];
 }) {
   let hovered: number | undefined;
   const hover = (offset: number | undefined) => {
@@ -195,6 +258,21 @@ export function CodeEditor(props: {
     if (offset === cursor) return;
     cursor = offset;
     props.onCursor?.(offset);
+  };
+  let sentSelection = "";
+  const reportSelection = (selection: { anchor: number; head: number } | undefined) => {
+    const doc = props.handle.doc();
+    let cursors: { anchor: string; head: string } | undefined;
+    try {
+      cursors = selection && doc ? { anchor: getCursor(doc, ["source"], selection.anchor), head: getCursor(doc, ["source"], selection.head) } : undefined;
+    } catch {
+      // The editor is ahead of the document for a moment; the next update sends it.
+      return;
+    }
+    const key = JSON.stringify(cursors ?? null);
+    if (key === sentSelection) return;
+    sentSelection = key;
+    props.onSelection?.(cursors);
   };
   const patchwork = new Compartment();
   /** Whether the `focus` span is marked. */
@@ -240,7 +318,11 @@ export function CodeEditor(props: {
       }),
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.focusChanged || update.docChanged) reportCursor(update.view.hasFocus ? update.state.selection.main.head : undefined);
+        if (update.selectionSet || update.focusChanged) reportSelection(update.view.hasFocus ? update.state.selection.main : undefined);
+        // Others' cursors resolve against the document, which a change may have moved them in.
+        if (update.docChanged) queueMicrotask(resolvePeers);
       }),
+      peerSelections,
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
     ],
@@ -284,9 +366,30 @@ export function CodeEditor(props: {
     const spans = props.crossHover ?? [];
     dispatchSoon({ effects: setCrossHover.of(spans) });
   });
+  /** Resolves collaborators' cursors against the document; one that doesn't resolve yet, e.g. ahead of sync, is skipped. */
+  const resolvePeers = () => {
+    if (disposed) return;
+    const doc = props.handle.doc();
+    if (!doc) return;
+    const resolved = (props.peerSelections ?? []).flatMap((s) => {
+      try {
+        const anchor = getCursorPosition(doc, ["source"], s.anchor);
+        const head = getCursorPosition(doc, ["source"], s.head);
+        return [{ from: Math.min(anchor, head), to: Math.max(anchor, head), head, color: s.color, contactUrl: s.contactUrl }];
+      } catch {
+        return [];
+      }
+    });
+    view.dispatch({ effects: setPeerSelections.of(resolved) });
+  };
+  createEffect(() => {
+    props.peerSelections;
+    queueMicrotask(resolvePeers);
+  });
   onCleanup(() => {
     hover(undefined);
     reportCursor(undefined);
+    reportSelection(undefined);
     disposed = true;
     view.destroy();
   });

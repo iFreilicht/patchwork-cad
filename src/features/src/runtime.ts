@@ -7,7 +7,8 @@ export type { Topo } from "./topo.ts";
 export { describe } from "./geom.ts";
 import { body, chamfer, extrude, fillet, sketch } from "./features.ts";
 import { pick as pickRef, type Body, type TraceEntry } from "./feature.ts";
-import { owningFeatures, refForm, setFeaturePrinter } from "./names.ts";
+import { owningFeatures, refForm, setFeaturePrinter, type Name, type Vec } from "./names.ts";
+import { Ref, resolve } from "./refs.ts";
 import { oc, type Kind } from "./oc.ts";
 import { entities } from "./topo.ts";
 
@@ -42,4 +43,33 @@ export function pickCode(b: Body, kind: Kind, index: number, trace: readonly Tra
   const variables = new Set(trace.filter((t) => t.variable).flatMap((t) => t.names ?? [t.name]));
   setFeaturePrinter((feature) => (variables.has(feature) ? feature : refForm(feature)));
   return String(pickRef(b, kind, index));
+}
+
+/** A reference as plain data, e.g. to send to a collaborator, who resolves it against their own build (`locate`). */
+export interface RefData {
+  kind: Kind;
+  names: Name[];
+  near?: Vec;
+}
+
+/** The reference a pick of entity `index` of `b` writes, as data. */
+export function pickData(b: Body, kind: Kind, index: number): RefData {
+  const ref = pickRef(b, kind, index);
+  return { kind: ref.kind, names: [...ref.names], ...(ref.near ? { near: ref.near } : {}) };
+}
+
+/**
+ * The indices of the entities of `b` that a reference names, as a feature resolves it: all
+ * descendants of its names, or else the entities its geometric hint suggests. Data that isn't a
+ * reference, e.g. from a newer version of the library, names nothing.
+ */
+export function locate(b: Body, data: RefData): number[] {
+  try {
+    const r = resolve(b.topo, new Ref(data.kind, data.names, data.near), true);
+    const found = "ok" in r ? r.ok : "ambiguous" in r ? r.ambiguous : (r.suggestion ?? []);
+    const pool = entities(b.topo, data.kind);
+    return found.map((e) => pool.findIndex((x) => x.IsSame(e))).filter((i) => i >= 0);
+  } catch {
+    return [];
+  }
 }

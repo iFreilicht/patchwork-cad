@@ -4,6 +4,7 @@ import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import type { Entry, FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { Editor } from "./state.ts";
+import { ContactToken } from "../presence.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
@@ -89,6 +90,15 @@ const MARKER_SIZE = { width: 8 * MARKER_SCALE, height: 23.333 * MARKER_SCALE };
  */
 const ORDER = { entry: (i: number) => 10 * i + 5, marker: (p: number) => 10 * p + 2, drop: (p: number, afterMarker: boolean) => 10 * p + (afterMarker ? 3 : 1) };
 
+/** A collaborator in the timeline: where their marker is, and the entries they hover or have open. */
+export interface TimelinePeer {
+  key: string;
+  color: string;
+  contactUrl: string;
+  marker: number;
+  entries: Set<number>;
+}
+
 /** Where a dragged entry would be dropped: before entry `position`, past the marker or not. */
 interface Drop {
   position: number;
@@ -102,7 +112,7 @@ interface Drop {
  * them within the range their dependencies allow ("Reordering"); hovering, dragging or opening one
  * marks what it depends on and what depends on it.
  */
-export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void }) {
+export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[] }) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -236,8 +246,16 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     return { position, pastMarker, blocked: editor.blocked(index, position) };
   };
 
+  /** The colour of the first collaborator who hovers or has open entry `index`. */
+  const peerColor = (index: number) => props.peers?.find((p) => p.entries.has(index))?.color;
   const item = (index: number): ItemProps => ({
-    style: { order: ORDER.entry(index) },
+    get style() {
+      const color = peerColor(index);
+      return { order: ORDER.entry(index), ...(color ? { "--peer-color": color } : {}) };
+    },
+    get "data-peer"() {
+      return peerColor(index) ? "true" : undefined;
+    },
     "data-index": String(index),
     get "data-past-marker"() {
       return index >= markerAt() ? "true" : undefined;
@@ -340,6 +358,8 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   // button of the selected entry floats above it the same way, so that it shifts no entries.
   const [anchor, setAnchor] = createSignal<{ x: number; bottom: number }>();
   const [moreAt, setMoreAt] = createSignal<{ right: number; top: number }>();
+  /** Where collaborators' markers are, for their names above the timeline, by key. */
+  const [peerAt, setPeerAt] = createSignal<Record<string, { x: number; top: number }>>({});
   const place = () => {
     if (!markerEl || !nav || !wrap) return;
     const slot = markerEl.getBoundingClientRect();
@@ -351,6 +371,12 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     const entry = index === undefined || renaming() ? null : entryElement(index);
     const r = entry?.getBoundingClientRect();
     setMoreAt(r && r.right > scroller.left && r.right <= scroller.right ? { right: r.right - box.left, top: r.top - box.top } : undefined);
+    const peers: Record<string, { x: number; top: number }> = {};
+    for (const el of nav.querySelectorAll<HTMLElement>(".cad-editor__peer-marker")) {
+      const p = el.getBoundingClientRect();
+      if (p.left >= scroller.left && p.left <= scroller.right) peers[el.dataset["key"]!] = { x: p.left - box.left, top: p.top - box.top };
+    }
+    setPeerAt(peers);
   };
   createEffect(() => {
     markerAt();
@@ -358,6 +384,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     active();
     renaming();
     editor.timeline();
+    props.peers?.map((p) => p.marker);
     requestAnimationFrame(place);
   });
   const observer = new ResizeObserver(place);
@@ -411,6 +438,12 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
           }}
           {...markerDragHandlers}
         />
+        {/* By position, so that the name tokens don't remount on every update. */}
+        <Index each={props.peers ?? []}>
+          {(peer) => (
+            <span class="cad-editor__peer-marker" data-key={peer().key} data-position={peer().marker} data-contact={peer().contactUrl} style={{ order: ORDER.marker(peer().marker), "--peer-color": peer().color }} />
+          )}
+        </Index>
         <Show when={drop()}>
           {(d) => (
             <span
@@ -456,6 +489,17 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
           ⋯
         </button>
       </Show>
+      <Index each={props.peers ?? []}>
+        {(peer) => (
+          <Show when={peerAt()[peer().key]}>
+            {(at) => (
+              <span class="cad-editor__peer-name" style={{ left: `${at().x}px`, top: `${at().top}px`, "--peer-color": peer().color }}>
+                <ContactToken contactUrl={peer().contactUrl} />
+              </span>
+            )}
+          </Show>
+        )}
+      </Index>
       <Show when={menu()}>{(m) => <Menu items={menuItems(m().index)} label={`Actions for ${entryLabel(m().index)}`} at={m()} wrap={wrap} onClose={closeMenu} />}</Show>
     </div>
   );

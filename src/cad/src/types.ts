@@ -1,4 +1,5 @@
 import type { AutomergeUrl } from "@automerge/automerge-repo";
+import type { RefData } from "./kernel/protocol.ts";
 
 /** How a 3D view looks at the model: from `direction` towards `target`, `distance` away. */
 export interface CameraState {
@@ -29,6 +30,24 @@ export interface TimelineMarker {
 /** The account's tool-storage doc of patchwork-cad (see src/components/uiState.ts). */
 export interface UiStorageDoc {
   docs?: Record<AutomergeUrl, DocUiState>;
+}
+
+/** What one view of a model shows collaborators (research/13-collaboration.md); all of it is optional. */
+export interface ViewPresence {
+  tool: "editor" | "viewer";
+  /** The hovered and the selected face or edge, as references, which collaborators resolve against what they show. */
+  hover?: RefData;
+  selected?: RefData;
+  /** Features hovered in the timeline or code, by name. */
+  features?: string[];
+  /** The point on the model under the pointer, in world coordinates. */
+  pointer?: [number, number, number];
+  /** The code pane's selection as automerge cursors into `source`, while it has focus. */
+  code?: { anchor: string; head: string };
+  /** The timeline marker; absent at the end. */
+  marker?: TimelineMarker;
+  /** The feature whose dialog is open. */
+  open?: string;
 }
 
 export interface CadModelDoc {

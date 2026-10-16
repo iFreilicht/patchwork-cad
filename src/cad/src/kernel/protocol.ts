@@ -59,6 +59,13 @@ export interface FeatureTrace {
   namingMs: number;
 }
 
+/** A reference to faces or edges as data (`RefData` of the feature library), e.g. a collaborator's pick; its names are opaque here. */
+export interface RefData {
+  kind: "face" | "edge";
+  names: unknown[];
+  near?: readonly [number, number, number];
+}
+
 export interface ModelError {
   message: string;
   /** 1-based line in the model source, when it can be determined. */
@@ -74,6 +81,8 @@ export type WorkerRequest =
   | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number }
   /** Body `body` of the last build, meshed, e.g. a feature's result past the timeline marker. */
   | { type: "result"; id: number; body: string }
+  /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
+  | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
   | { type: "check"; id: number; source: string };
 
@@ -84,7 +93,9 @@ export type WorkerResponse =
   | { type: "built"; id: number; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
-  | { type: "picked"; id: number; code: string }
+  | { type: "picked"; id: number; code: string; ref: RefData }
+  /** For each of the request's refs, the entities it names, by body. */
+  | { type: "located"; id: number; found: { body: string; indices: number[] }[][] }
   | { type: "resultMeshed"; id: number; shape: MeshedShape | undefined }
   /** The trial build's error, or how many of its features are broken or failed. */
   | { type: "checked"; id: number; error: ModelError | undefined; problems: number }

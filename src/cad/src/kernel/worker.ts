@@ -5,7 +5,7 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, currentTrace, liveBodies, meshIds, outline, owners, pickCode, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
 import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
@@ -250,10 +250,21 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
   } else if (request.type === "result") {
     const result = bodies.get(request.body);
     post({ type: "resultMeshed", id: request.id, shape: result && meshBody(result) });
+  } else if (request.type === "locate") {
+    const shown = request.bodies.flatMap((name) => {
+      const body = bodies.get(name);
+      return body ? [body] : [];
+    });
+    // Others' references are data, never code: resolving one runs nothing of theirs.
+    const found = request.refs.map((ref) => shown.flatMap((body) => {
+      const indices = locate(body, ref as LibraryRefData);
+      return indices.length ? [{ body: body.name, indices }] : [];
+    }));
+    post({ type: "located", id: request.id, found });
   } else {
     const body = bodies.get(request.body);
     if (!body) throw new Error(`No body ${request.body} in the last build`);
-    post({ type: "picked", id: request.id, code: pickCode(body, request.kind, request.index, lastTrace) });
+    post({ type: "picked", id: request.id, code: pickCode(body, request.kind, request.index, lastTrace), ref: pickData(body, request.kind, request.index) });
   }
 }
 
