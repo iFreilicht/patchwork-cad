@@ -1,7 +1,7 @@
-import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
-  | { ok: true; source: string; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: true; source: string; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
@@ -72,10 +72,10 @@ export class Engine {
     else this.#start(source);
   }
 
-  /** The bodies visible before `feature` (or after it) in the last build, meshed for picking. */
-  async rollback(feature: string, after = false): Promise<MeshedShape[]> {
+  /** The bodies visible before `feature` (or after it) in the last build, meshed for picking, and the sketches no feature used yet. */
+  async rollback(feature: string, after = false): Promise<{ shapes: MeshedShape[]; sketches: ShownSketch[] }> {
     const answer = await this.#request({ type: "rollback", id: this.#nextId++, feature, after });
-    return answer.type === "rolledBack" ? answer.shapes : [];
+    return answer.type === "rolledBack" ? answer : { shapes: [], sketches: [] };
   }
 
   /** The reference for entity `index` of body `body` in the last build: its code, and as data. */
@@ -201,7 +201,7 @@ export class Engine {
       this.#start(next);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, dropped: message.dropped, trace: message.trace, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
     else onResult({ ok: false, source: running.source, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

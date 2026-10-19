@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { Engine, type BuildResult } from "../kernel/engine.ts";
-import type { FeatureTrace, InitTimings, MeshedShape, ModelError } from "../kernel/protocol.ts";
+import type { FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
 import type { CadModelDoc } from "../types.ts";
 
 export type ModelStatus = "loading" | "init-failed" | "building" | "error" | "ready";
@@ -11,6 +11,8 @@ export interface Model {
   engine: Engine;
   /** The shapes of the last successful build; they stay while later builds fail. */
   shapes: Accessor<MeshedShape[] | undefined>;
+  /** The sketches main returned in the last successful build. */
+  sketches: Accessor<ShownSketch[]>;
   error: Accessor<ModelError | undefined>;
   /** The feature trace of the last build, successful or not. */
   trace: Accessor<FeatureTrace[]>;
@@ -24,6 +26,7 @@ export interface Model {
 /** Builds the document's source on every change, one build at a time (see Engine). Disposed with the owner. */
 export function createModel(handle: DocHandle<CadModelDoc>): Model {
   const [shapes, setShapes] = createSignal<MeshedShape[]>();
+  const [sketches, setSketches] = createSignal<ShownSketch[]>([]);
   const [error, setError] = createSignal<ModelError>();
   const [trace, setTrace] = createSignal<FeatureTrace[]>([]);
   const [init, setInit] = createSignal<InitTimings>();
@@ -38,6 +41,7 @@ export function createModel(handle: DocHandle<CadModelDoc>): Model {
       setTrace(result.trace);
       if (result.ok) {
         setShapes(result.shapes);
+        setSketches(result.sketches);
         setError(undefined);
       } else setError(result.error);
       setBuilding(result.source !== latest);
@@ -61,7 +65,7 @@ export function createModel(handle: DocHandle<CadModelDoc>): Model {
   });
 
   const status = (): ModelStatus => (initError() ? "init-failed" : !init() ? "loading" : building() ? "building" : error() ? "error" : "ready");
-  return { engine, shapes, error, trace, init, initError, last, building, status };
+  return { engine, shapes, sketches, error, trace, init, initError, last, building, status };
 }
 
 /** The data attributes the e2e specs read from a tool's root element, as getters so that a JSX spread tracks them. */

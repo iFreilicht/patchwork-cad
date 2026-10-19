@@ -114,7 +114,7 @@ test("M3: a shorthand body keeps its key, and nothing moves before the loop that
 test("a fillet inserted before the chamfer goes into the chain", () => {
   const source = example("m1");
   const position = indexOf(source, "chamfer1");
-  const out = edit(source, (a) => insertFeatureAt(source, a, tlOf(source), "fillet2", "fillet({ body: fillet1, edges: [edge(extrude1.start, extrude1.side.front)], radius: 1 })", position, { consumes: "fillet1", body: true }));
+  const out = edit(source, (a) => insertFeatureAt(source, a, tlOf(source), "fillet2", "fillet({ body: fillet1, edges: [edge(extrude1.start, extrude1.side.front)], radius: 1 })", position, { consumes: "fillet1", shows: true }));
   expect(names(out).slice(4, 7)).toEqual(["fillet1", "fillet2", "chamfer1"]);
   expect(out).toContain("  const fillet2 = fillet({ body: fillet1, edges: [edge(extrude1.start, extrude1.side.front)], radius: 1 });\n  const chamfer1 = chamfer({ body: fillet2, ");
   expect(out).toContain("return extrude2;");

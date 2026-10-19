@@ -1,6 +1,6 @@
 /**
  * Screenshots for research/14-edge-contrast.md: M1 with a selected and a hovered edge, from the home
- * view and turned to the back left, in light and dark mode, with and without `prefers-contrast: more`.
+ * view and turned to the back left, and sketches, in light and dark mode, with and without `prefers-contrast: more`.
  *
  *   CAD_RENDER_SHOTS=<dir> pnpm test:e2e --project=chromium --workers=1 cad-render-shots
  */
@@ -103,6 +103,17 @@ for (const [colorScheme, contrast] of [["dark", "no-preference"], ["light", "no-
         await expect(viewer(page)).toHaveAttribute("data-turning", "false");
         await page.mouse.move(5, 5);
         await viewer(page).screenshot({ path: `${dir}/${mode}-turned.png` });
+        // A sketch on the top that nothing uses; then sketch1, under the block, hovered in the timeline.
+        await clickHome(page);
+        await setModelSource(page, exampleSource("m1", [["  return extrude2;", '  const sketch4 = sketch({ plane: plane("XY", h), profile: rect({ from: [5, 25], to: [25, 35] }) });\n  return [extrude2, sketch4];']]));
+        await expect(viewer(page)).toHaveAttribute("data-sketches", "sketch4");
+        const box = (await viewer(page).boundingBox())!;
+        await page.mouse.click(box.x + 10, box.y + 10);
+        await page.waitForTimeout(300);
+        await viewer(page).screenshot({ path: `${dir}/${mode}-sketch.png` });
+        await timelineEntry(page, "sketch1").hover();
+        await page.waitForTimeout(300);
+        await viewer(page).screenshot({ path: `${dir}/${mode}-sketch-hovered.png` });
       }
     });
   });

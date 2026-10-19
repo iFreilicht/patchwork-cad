@@ -9,7 +9,6 @@ import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
 import { FEATURES_MODULE, type Analysis, type FeatureCall, type Prop, type Span } from "./analyze.ts";
 import { graph, inputOf as consumedInput, type Graph } from "./deps.ts";
-import { span } from "./nodes.ts";
 import type { FeatureEntry, Timeline } from "./timeline.ts";
 
 export interface Edit {
@@ -126,11 +125,29 @@ export const returnedVariables = (analysis: Analysis): string[] => returnedNames
 const printReturn = (names: string[]) => (names.length === 1 ? names[0]! : `[${names.join(", ")}]`);
 
 /**
- * Inserts `const name = code;` as the last feature of `main`, before its `return`. If the feature
- * consumes a returned body (`consumes`), the return shows the new one instead; a new body is
- * added to it.
+ * What a new feature does to the result: its body or sketch shows (`shows`), in place of the body it
+ * consumes (`consumes`) or the sketch it uses (`hides`), which no longer shows, as in Fusion.
  */
-export function insertFeature(source: string, analysis: Analysis, name: string, code: string, effect: { consumes?: string; body: boolean }): Edit[] {
+export interface InsertEffect {
+  shows: boolean;
+  consumes?: string;
+  hides?: string;
+}
+
+/** The names a return shows after inserting feature `name`. */
+function showing(names: string[], name: string, effect: InsertEffect): string[] {
+  const replaced = [effect.consumes, effect.hides].find((n) => n !== undefined && names.includes(n));
+  const shown = !effect.shows ? names : replaced ? names.map((n) => (n === replaced ? name : n)) : [...names, name];
+  return shown.filter((n) => n !== effect.hides);
+}
+
+/** Replaces the names a simple return returns, if they change. */
+function setReturned(returned: { node: Expression; names: string[] }, names: string[]): Edit[] {
+  return names.join() === returned.names.join() ? [] : [{ start: returned.node.start, end: returned.node.end, text: printReturn(names) }];
+}
+
+/** Inserts `const name = code;` as the last feature of `main`, before its `return`, which changes by `effect`. */
+export function insertFeature(source: string, analysis: Analysis, name: string, code: string, effect: InsertEffect): Edit[] {
   if (!analysis.main) return [];
   const edits: Edit[] = [...ensureImports(analysis, usedFunctions(code))];
   const ret = analysis.main.statements.at(-1);
@@ -138,14 +155,11 @@ export function insertFeature(source: string, analysis: Analysis, name: string, 
   if (ret?.type === "ReturnStatement") {
     edits.push({ start: ret.start, end: ret.start, text: `${statement}\n${indentOf(source, ret.start)}` });
     const returned = returnedNames(analysis);
-    if (effect.body && returned) {
-      const names = effect.consumes && returned.names.includes(effect.consumes) ? returned.names.map((n) => (n === effect.consumes ? name : n)) : [...returned.names, name];
-      edits.push({ start: returned.node.start, end: returned.node.end, text: printReturn(names) });
-    }
+    if (returned) edits.push(...setReturned(returned, showing(returned.names, name, effect)));
   } else {
     const indent = analysis.main.statements[0] ? indentOf(source, analysis.main.statements[0].start) : "  ";
     const close = analysis.main.body.end - 1;
-    edits.push({ start: close, end: close, text: `${indent}${statement}\n${effect.body ? `${indent}return ${name};\n` : ""}` });
+    edits.push({ start: close, end: close, text: `${indent}${statement}\n${effect.shows ? `${indent}return ${name};\n` : ""}` });
   }
   return edits;
 }
@@ -176,14 +190,21 @@ export const replaceIdentifier = (span: Span, text: string, shorthand: string | 
 /**
  * Deletes a feature statement. Features that used its body (`body:`, `target:`) and the return use
  * its input instead; references that named it (`notch.side.c`, `.piece(notch, 1)`) name it through
- * `ref.notch`, so that they report themselves as broken instead of throwing a ReferenceError.
+ * `ref.notch`, so that they report themselves as broken instead of throwing a ReferenceError. Its
+ * sketch, if nothing else uses it, shows again.
  */
 export function deleteFeature(source: string, analysis: Analysis, entry: FeatureEntry): Edit[] {
   const edits: Edit[] = [{ ...lines(source, entry.span), text: "" }];
-  const input = inputOf(source, entry.call);
+  // A sketch's body is the one its plane lies on, not an input it passes on.
+  const input = entry.type === "sketch" ? undefined : inputOf(source, entry.call);
   const returned = returnedNames(analysis);
-  // Without an input to use instead (a new extrude, a body()), its bodies leave the result.
-  const leave = !input && returned && returned.names.some((n) => entry.names.includes(n));
+  if (returned) {
+    // Without an input to use instead (a new extrude, a body(), a sketch), its results leave the result.
+    const names = returned.names.flatMap((n) => (!entry.names.includes(n) ? [n] : input ? [input] : []));
+    const sketch = prop(entry.call, "sketch")?.node;
+    const freed = sketch?.type === "Identifier" && !names.includes(sketch.name) && !usesSketch(analysis, sketch.name, entry.call) ? [sketch.name] : [];
+    edits.push(...setReturned(returned, [...names, ...freed]));
+  }
   walk(analysis.program as Program, (node, ancestors) => {
     if (node.type !== "Identifier" || !entry.names.includes(node.name) || node.start < entry.span.end) return;
     const parent = ancestors[ancestors.length - 1];
@@ -193,12 +214,11 @@ export function deleteFeature(source: string, analysis: Analysis, entry: Feature
     const shorthand = parent?.type === "Property" && parent.shorthand ? key : undefined;
     const asValue = key === "body" || key === "target";
     const inReturn = ancestors.some((a) => a.type === "ReturnStatement");
-    if (inReturn && leave) return;
+    if (inReturn && returned) return;
     // Users get its input; without one, `ref.<name>`, which fails the user alone instead of throwing a ReferenceError.
     if ((asValue || inReturn) && input) edits.push(replaceIdentifier(node, input, shorthand));
     else edits.push(replaceIdentifier(node, `ref.${node.name}`, shorthand));
   });
-  if (leave && returned) edits.push({ ...span(returned.node), text: printReturn(returned.names.filter((n) => !entry.names.includes(n))) });
   if (edits.some((e) => e.text.startsWith("ref."))) edits.push(...ensureImports(analysis, ["ref"]));
   return edits;
 }
@@ -218,6 +238,23 @@ function consumedBy(analysis: Analysis, name: string, except: FeatureCall): bool
   return analysis.calls.some(
     (c) => c.span.start !== except.span.start && (c.props ?? []).some((p) => (p.key === "body" || p.key === "target") && p.node.type === "Identifier" && p.node.name === name),
   );
+}
+
+/** Whether a feature call other than `except` uses the sketch `name`. */
+function usesSketch(analysis: Analysis, name: string, except: FeatureCall): boolean {
+  return analysis.calls.some((c) => c.span.start !== except.span.start && (c.props ?? []).some((p) => p.key === "sketch" && p.node.type === "Identifier" && p.node.name === name));
+}
+
+/**
+ * Keeps the return in step when a feature (`call`) switches its sketch from `previous` to `next`:
+ * `next` no longer shows, and `previous`, if nothing else uses it, shows again.
+ */
+export function resketch(analysis: Analysis, call: FeatureCall, previous: string | undefined, next: string | undefined): Edit[] {
+  const returned = returnedNames(analysis);
+  if (!returned) return [];
+  const names = returned.names.filter((n) => n !== next);
+  if (previous && previous !== next && !names.includes(previous) && !usesSketch(analysis, previous, call)) names.push(previous);
+  return setReturned(returned, names);
 }
 
 /**
@@ -267,16 +304,19 @@ const renames = (g: Graph, names: Names, skip: Span | undefined): Edit[] =>
  * later feature and the return that used that version of the body use the new feature instead.
  * At the end, it is `insertFeature`.
  */
-export function insertFeatureAt(source: string, analysis: Analysis, tl: Timeline, name: string, code: string, position: number, effect: { consumes?: string; body: boolean }): Edit[] {
+export function insertFeatureAt(source: string, analysis: Analysis, tl: Timeline, name: string, code: string, position: number, effect: InsertEffect): Edit[] {
   if (position >= tl.entries.length) return insertFeature(source, analysis, name, code, effect);
   const at = insertionPoint(source, analysis, tl, position);
   if (at === undefined) return [];
   const g = graph(analysis, tl);
   const edits: Edit[] = [...ensureImports(analysis, usedFunctions(code)), { start: at, end: at, text: `${indentOf(source, tl.entries[position]!.span.start)}const ${name} = ${code};\n` }];
+  const returned = returnedNames(analysis);
   if (effect.consumes) {
+    // A feature in a chain of bodies doesn't use a sketch, so there is none to hide.
     const names = g.uses.map((u) => (u.name === effect.consumes && u.role !== "hard" && u.owner >= position ? name : u.name));
     edits.push(...renames(g, names, undefined));
-  } else if (effect.body) edits.push(...addToReturn(source, analysis, name));
+  } else if (returned) edits.push(...setReturned(returned, showing(returned.names, name, effect)));
+  else if (effect.shows) edits.push(...addToReturn(source, analysis, name));
   return edits;
 }
 

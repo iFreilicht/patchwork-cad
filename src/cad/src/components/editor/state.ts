@@ -213,9 +213,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       .map((_, i) => inputOf(deps, position + i)?.name)
       .find((name) => name !== undefined && declaredBefore(name));
     const body = (returned.length === 1 ? returned[0] : undefined) ?? nextInput ?? lastOf(before, "body") ?? "undefined";
-    const code = DEFAULTS[type]({ sketch: lastOf(before, "sketch") ?? "undefined", body });
+    const sketch = lastOf(before, "sketch");
+    const code = DEFAULTS[type]({ sketch: sketch ?? "undefined", body });
     const consumes = type === "fillet" || type === "chamfer" ? body : undefined;
-    apply(handle, insertFeatureAt(text, a, tl, name, code, position, { body: type !== "sketch", ...(consumes ? { consumes } : {}) }));
+    const hides = type === "extrude" ? sketch : undefined;
+    apply(handle, insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) }));
     const after = tryAnalyze(doc().source).analysis;
     const call = after?.calls.find((x) => x.variable === name);
     if (!call) return;

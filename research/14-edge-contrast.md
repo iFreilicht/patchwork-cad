@@ -52,11 +52,14 @@ Screenshots of M1 with the top's front edge selected and its right edge hovered,
   - **Edges** share the accent's text colour; hover is 2 px, a selection 3.5 px, a collaborator's 3 px in their colour, each over a halo 3.5 px wider in the darker of background and text colour if the line is light (luminance > 0.35), else the lighter. A hovered selection gets a 10 px accent ring in a 13.5 px halo around it.
   - **Faces** keep their fills, hover pale and selection in the accent, and a hover is outlined with the hover's line: the triangle edges of the hovered faces that only one triangle has, by position, so a hovered feature's faces get one outline. A hovered selected face keeps the selection's fill and gets the outline.
   - **Timeline entries:** the open one has a 3 px outline, the hovered or dragged one 1 px, 2 px off it; hovering the open one adds a 1 px line inside it, where the scrolling timeline doesn't clip it.
+- **Sketches** that the model shows are 1.5 px lines in the accent's text colour, hidden by the bodies in front of them as edges are. The open or a hovered sketch is drawn as a hovered edge, over the model.
 - **`prefers-contrast: more`** makes every line 1.5 times wider.
 
 ![The result: dark and light mode, home view and turned](14-edge-contrast/result.png)
 
 ![Per row: selected edge, hovered edge, hovered selected edge, hovered face, selected face, hovered selected face; rows dark, light, then both with prefers-contrast: more](14-edge-contrast/result-details.png)
+
+![A sketch on the top that nothing uses, then sketch1 under the block hovered in the timeline; dark, then light](14-edge-contrast/result-sketches.png)
 
 ![The timeline with sketch2 open: sketch1 hovered, then sketch2 hovered; dark, then light](14-edge-contrast/result-timeline.png)
 
@@ -69,4 +72,3 @@ CAD_RENDER_SHOTS=<dir> pnpm test:e2e --project=chromium --workers=1 cad-render-s
 ## Open
 
 - The grey's lightness per mode, e.g. lighter in light mode; with more contrast, a grey further from the background.
-- The sketch outline in the view is still a 1 px line.

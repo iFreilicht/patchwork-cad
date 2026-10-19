@@ -6,7 +6,7 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
-import type { MeshedShape } from "../kernel/protocol.ts";
+import type { MeshedShape, ShownSketch } from "../kernel/protocol.ts";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
 import type { CameraState } from "../types.ts";
 import { contactToken } from "./presence.ts";
@@ -79,7 +79,10 @@ export interface ViewerProps {
    */
   onSelect?: (entity: Entity | undefined) => void;
   highlight?: Highlight[] | undefined;
+  /** Outlines drawn over the model, e.g. of the open sketch, as a hovered edge is. */
   overlays?: Overlay[] | undefined;
+  /** The sketches the model shows, drawn as lines on it. */
+  sketches?: ShownSketch[] | undefined;
   /** The point on the model under the pointer as it moves, undefined when it is off the model. */
   onPointer?: (point: [number, number, number] | undefined) => void;
   /** Collaborators' pointers. */
@@ -289,7 +292,7 @@ export function Viewer(props: ViewerProps) {
     // Lines need the contrast of the text variant, e.g. a sketch outline against a light background.
     const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
-    const overlayMaterial = new THREE.LineBasicMaterial({ color: accentLine, depthTest: false });
+    const sketchMaterial = wideLine(accentLine, 1.5, false);
     // Highlights show through the model, so that they also show what other faces hide.
     const highlightFace = (color: THREE.Color, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
     // A highlighted edge is a line over a wider halo in the theme's dark or light ink, whichever
@@ -327,15 +330,17 @@ export function Viewer(props: ViewerProps) {
       }
       return m;
     };
+    const overlayMaterials = [highlightMaterials.hover.line.halo, highlightMaterials.hover.line.core];
     const materialsOf = (h: Highlight) => (h.style === "peer" ? peerMaterial(h.color ?? "#888") : highlightMaterials[h.style]);
     const group = new THREE.Group();
+    const sketchGroup = new THREE.Group();
     const overlayGroup = new THREE.Group();
     overlayGroup.renderOrder = 1;
     const highlightGroup = new THREE.Group();
     highlightGroup.renderOrder = 2;
     const peerGroup = new THREE.Group();
     peerGroup.renderOrder = 3;
-    scene.add(group, overlayGroup, highlightGroup, peerGroup);
+    scene.add(group, sketchGroup, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
     const cube = new ViewCube({
@@ -631,13 +636,21 @@ export function Viewer(props: ViewerProps) {
       }
     });
 
+    /** A polyline as the segments of a wide line. */
+    const segments = (overlay: Overlay) => {
+      const { points, closed } = overlay;
+      const ends = points.slice(0, closed ? undefined : -1).flatMap((p, i) => [...p, ...points[(i + 1) % points.length]!]);
+      return new LineSegmentsGeometry().setPositions(ends);
+    };
+    createEffect(() => {
+      dispose([...sketchGroup.children]);
+      sketchGroup.clear();
+      for (const sketch of props.sketches ?? []) sketchGroup.add(new LineSegments2(segments({ points: sketch.outline, closed: true }), sketchMaterial));
+    });
     createEffect(() => {
       dispose([...overlayGroup.children]);
       overlayGroup.clear();
-      for (const overlay of props.overlays ?? []) {
-        const geometry = new THREE.BufferGeometry().setFromPoints(overlay.points.map((p) => new THREE.Vector3(...p)));
-        overlayGroup.add(overlay.closed ? new THREE.LineLoop(geometry, overlayMaterial) : new THREE.Line(geometry, overlayMaterial));
-      }
+      for (const overlay of props.overlays ?? []) overlayGroup.add(...overlayMaterials.map((material, i) => Object.assign(new LineSegments2(segments(overlay), material), { renderOrder: i })));
     });
 
     // ---------- collaborators' pointers ----------
@@ -966,18 +979,18 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
       cubeElement.removeEventListener("dragstart", onCubeDragStart);
       cube.dispose();
-      dispose([...group.children, ...overlayGroup.children, ...highlightGroup.children]);
+      dispose([...group.children, ...sketchGroup.children, ...overlayGroup.children, ...highlightGroup.children]);
       for (const m of markers.values()) m.label.remove();
       dotGeometry.dispose();
       pmrem.dispose();
       scene.environment?.dispose();
-      for (const m of [...ghostLines.values(), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
+      for (const m of [...ghostLines.values(), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, sketchMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
     });
   });
 
   return (
-    <div class="cad-model__viewer" ref={container} data-hovered={entityKey(hovered())} data-selected={entityKey(selected())} data-projection={projection()}>
+    <div class="cad-model__viewer" ref={container} data-hovered={entityKey(hovered())} data-selected={entityKey(selected())} data-projection={projection()} data-sketches={(props.sketches ?? []).map((s) => s.name).join(" ")}>
       <canvas ref={canvas} />
       <div class="cad-viewcube" data-collapsed={collapsed() ? "true" : "false"}>
         <button class="cad-viewcube__button cad-viewcube__button--toggle" aria-label="ViewCube" title={collapsed() ? "Show ViewCube" : "Hide ViewCube"} aria-expanded={!collapsed()} onClick={() => setCollapsed(!collapsed())}>

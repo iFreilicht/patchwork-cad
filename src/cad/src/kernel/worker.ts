@@ -7,7 +7,7 @@ import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser"
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
-import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -65,7 +65,10 @@ let lastTrace: readonly TraceEntry[] = [];
 /** A body without faces, which a failed feature leaves behind; there is nothing to mesh. */
 const isEmptyBody = (v: unknown) => v instanceof features.Body && v.topo.faces.length === 0;
 
-/** Wraps a model module so that its `main` result is recorded, without empty bodies. */
+/**
+ * Wraps a model module so that its `main` result is recorded, without empty bodies. The evaluator
+ * gets it without sketches, which it can't show; the view draws them itself.
+ */
 function recordMain(module: Record<string, unknown>): Record<string, unknown> {
   const main = module["default"];
   if (typeof main !== "function") return module;
@@ -74,7 +77,7 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
     default: (...args: unknown[]) => {
       const value = (main as (...a: unknown[]) => unknown)(...args);
       returned = Array.isArray(value) ? value.filter((v) => !isEmptyBody(v)) : isEmptyBody(value) ? [] : value;
-      return returned;
+      return Array.isArray(returned) ? returned.filter((v) => !(v instanceof features.Sketch)) : returned instanceof features.Sketch ? [] : returned;
     },
   };
 }
@@ -119,15 +122,26 @@ interface BuiltShape {
 }
 
 /**
- * Bodies that no feature consumed and main didn't return: geometry that a branch in the model
- * silently drops, e.g. after a feature was retargeted to an earlier body.
+ * Bodies and sketches that no feature used and main didn't return: geometry that a branch in the
+ * model silently drops, e.g. after a feature was retargeted to an earlier body.
  */
-function unusedBodies(values: unknown[]): Set<features.Body> {
+function unusedResults(trace: readonly TraceEntry[], values: unknown[]): Set<features.Body | features.Sketch> {
   const shown = new Set(values.flatMap((v) => (v instanceof features.Body ? [v.shape] : v && typeof v === "object" && "shape" in v ? [(v as { shape: unknown }).shape] : [])));
-  return new Set(liveBodies().filter((b) => !shown.has(b.shape)));
+  const used = new Set(trace.flatMap((t) => t.sketches));
+  const sketches = trace.flatMap((t) => (t.sketch && !used.has(t.sketch) && !values.includes(t.sketch) ? [t.sketch] : []));
+  return new Set([...liveBodies().filter((b) => !shown.has(b.shape)), ...sketches]);
 }
 
-const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body> = new Set()): FeatureTrace[] =>
+const shownSketch = (sketch: features.Sketch): ShownSketch[] => (sketch.broken ? [] : [{ name: sketch.name, outline: outline(sketch) }]);
+
+/** The sketches that the first `end` features of a trace made and didn't use, e.g. at a rollback. */
+function liveSketches(trace: readonly TraceEntry[], end: number): ShownSketch[] {
+  const ran = trace.slice(0, end);
+  const used = new Set(ran.flatMap((t) => t.sketches));
+  return ran.flatMap((t) => (t.sketch && !used.has(t.sketch) ? shownSketch(t.sketch) : []));
+}
+
+const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | features.Sketch> = new Set()): FeatureTrace[] =>
   trace.map((t) => ({
     name: t.name,
     type: t.type,
@@ -141,7 +155,7 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body> = ne
     results: t.results.map((b) => b.name),
     names: t.names,
     outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
-    unused: t.results.length > 0 && t.results.every((b) => unused.has(b)),
+    unused: t.sketch ? unused.has(t.sketch) : t.results.length > 0 && t.results.every((b) => unused.has(b)),
     ms: t.ms,
     namingMs: t.namingMs,
   }));
@@ -216,7 +230,9 @@ async function build(id: number, source: string): Promise<void> {
   });
   lastTrace = [...currentTrace()];
   const timings: BuildTimings = { build: t2 - t1, total: performance.now() - t0 };
-  post({ type: "built", id, shapes, dropped: values.length - kept.length, trace: serialize(lastTrace, unusedBodies(values)), timings, heapBytes: heapBytes() });
+  const sketches = values.flatMap((v) => (v instanceof features.Sketch ? shownSketch(v) : []));
+  const dropped = values.filter((v) => !(v instanceof features.Sketch)).length - kept.length;
+  post({ type: "built", id, shapes, sketches, dropped, trace: serialize(lastTrace, unusedResults(lastTrace, values)), timings, heapBytes: heapBytes() });
 }
 
 /**
@@ -244,9 +260,11 @@ async function check(id: number, source: string): Promise<void> {
 function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): void {
   const bodies = bodiesOf(lastTrace);
   if (request.type === "rollback") {
-    const entry = lastTrace.find((t) => t.name === request.feature);
+    const index = lastTrace.findIndex((t) => t.name === request.feature);
+    const entry = lastTrace[index];
     if (!entry) throw new Error(`No feature ${request.feature} in the last build`);
-    post({ type: "rolledBack", id: request.id, shapes: (request.after ? entry.after : entry.before).filter((b) => b.topo.faces.length > 0).map(meshBody) });
+    const shapes = (request.after ? entry.after : entry.before).filter((b) => b.topo.faces.length > 0).map(meshBody);
+    post({ type: "rolledBack", id: request.id, shapes, sketches: liveSketches(lastTrace, request.after ? index + 1 : index) });
   } else if (request.type === "result") {
     const result = bodies.get(request.body);
     post({ type: "resultMeshed", id: request.id, shape: result && meshBody(result) });

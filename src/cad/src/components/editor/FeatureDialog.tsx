@@ -4,7 +4,7 @@ import { parseExpressionAt, type Expression } from "acorn";
 import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
-import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, retarget, setProp, usedFunctions } from "../../model/splice.ts";
+import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, setProp, usedFunctions } from "../../model/splice.ts";
 import type { FeatureEntry } from "../../model/timeline.ts";
 import { schemaOf, type Editor } from "./state.ts";
 
@@ -140,8 +140,8 @@ function VariableField(props: FieldProps & { of: "body" | "sketch" }) {
           return [
             ...(chosen === "" && props.spec.optional ? removeProp(call, props.name) : setProp(call, props.name, chosen)),
             // The result shows the feature instead of the body it now works on, and the body it no
-            // longer works on, if nothing else uses it, instead of dropping it.
-            ...(props.of === "body" ? retarget(analysis, call, props.entry.name, previous, chosen || undefined) : []),
+            // longer works on, if nothing else uses it, instead of dropping it; likewise for sketches.
+            ...(props.of === "body" ? retarget(analysis, call, props.entry.name, previous, chosen || undefined) : resketch(analysis, call, previous, chosen || undefined)),
           ];
         });
       }}

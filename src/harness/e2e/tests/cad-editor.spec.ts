@@ -1,4 +1,5 @@
-import { CAD_MODULES, clickEntity, dialog, editorView, entities, isVisible, modelSource, setModelSource, timelineEntry } from "../cad.ts";
+import type { Page } from "@playwright/test";
+import { CAD_MODULES, clickEntity, dialog, editorView, entities, isVisible, modelSource, setField, setModelSource, timelineEntry, toolbarButton } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu } from "../ui.ts";
 
@@ -155,4 +156,56 @@ test("a result that nothing uses is marked, and retargeting keeps bodies in the 
   await target.selectOption("fillet2");
   await expect.poll(() => modelSource(page)).toContain("return [extrude1, chamfer1];");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
+});
+
+const shownSketches = (page: Page) => page.locator(".cad-model__viewer").getAttribute("data-sketches");
+
+// A sketch shows while nothing uses it: a new one goes into what main returns, an extrusion takes
+// its place there, and deleting the extrusion brings it back. One that isn't returned is unused.
+test("sketches that no feature uses show in the view", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createViaMenu(page, "CAD Model");
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expect.poll(() => shownSketches(page)).toBe("");
+
+  await toolbarButton(page, "Sketch").click();
+  await expect.poll(() => modelSource(page)).toContain("return [fillet1, sketch3];");
+  await expect.poll(() => shownSketches(page)).toBe("sketch3");
+  await expect(page.locator(".cad-model__warning")).toHaveCount(0);
+  // On the plate's top face, where it shows without the open dialog's highlight.
+  await setField(page, "Offset", "height");
+  await expect.poll(() => modelSource(page)).toContain('plane("XY", height)');
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready");
+  await timelineEntry(page, "sketch3").click();
+  await page.mouse.move(0, 0);
+  if (shots) await page.screenshot({ path: `${shots}/editor-sketch-shown.png` });
+
+  await toolbarButton(page, "Extrude").click();
+  await expect.poll(() => modelSource(page)).toContain("return [fillet1, extrude1];");
+  await expect.poll(() => shownSketches(page)).toBe("");
+  // Rolled back before the extrusion, the sketch is unused again.
+  const marker = page.getByRole("slider", { name: "Timeline marker" });
+  await marker.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(() => shownSketches(page)).toBe("sketch3");
+  await page.keyboard.press("End");
+  await expect.poll(() => shownSketches(page)).toBe("");
+
+  // The toolbar left the extrusion's dialog open.
+  await expect(dialog(page)).toHaveAttribute("data-feature", "extrude1");
+  await dialog(page).getByRole("button", { name: "Delete", exact: true }).click();
+  await dialog(page).getByRole("button", { name: "Delete extrude1" }).click();
+  await expect.poll(() => modelSource(page)).toContain("return [fillet1, sketch3];");
+  await expect.poll(() => shownSketches(page)).toBe("sketch3");
+
+  await setModelSource(page, (await modelSource(page)).replace("return [fillet1, sketch3];", "return fillet1;"));
+  await expect(timelineEntry(page, "sketch3")).toHaveAttribute("data-status", "unused");
+  await expect.poll(() => shownSketches(page)).toBe("");
+  await timelineEntry(page, "sketch3").click();
+  await dialog(page).getByRole("button", { name: "Add to result" }).click();
+  await expect.poll(() => shownSketches(page)).toBe("sketch3");
+  await expect(timelineEntry(page, "sketch3")).toHaveAttribute("data-status", "ok");
 });

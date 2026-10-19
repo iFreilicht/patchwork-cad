@@ -1,6 +1,6 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
-import type { MeshedShape } from "../../kernel/protocol.ts";
+import type { MeshedShape, ShownSketch } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import { ownersOf, type Entry, type FeatureEntry } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
@@ -72,21 +72,23 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     return editor.pickTarget() && entry?.trace ? { feature: entry.trace.name, after: false } : atMarker();
   };
   const rollbackKey = () => JSON.stringify(rollbackTo() ?? null);
-  const [rolledBack, setRolledBack] = createSignal<MeshedShape[]>();
+  const [rolledBackTo, setRolledBack] = createSignal<{ shapes: MeshedShape[]; sketches: ShownSketch[] }>();
   createEffect(() => {
     const to = rollbackTo();
     const key = rollbackKey();
     model.last();
     if (!to || to === "nothing") {
-      setRolledBack(to ? [] : undefined);
+      setRolledBack(to ? { shapes: [], sketches: [] } : undefined);
       return;
     }
     model.engine.rollback(to.feature, to.after).then(
-      (shapes) => rollbackKey() === key && setRolledBack(shapes),
+      (state) => rollbackKey() === key && setRolledBack(state),
       () => setRolledBack(undefined),
     );
   });
+  const rolledBack = () => rolledBackTo()?.shapes;
   const shown = () => rolledBack() ?? model.shapes() ?? [];
+  const shownSketches = () => rolledBackTo()?.sketches ?? model.sketches();
   const references = (): Highlight[] =>
     rolledBack() && editor.pickTarget() ? (editor.open()?.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches, style: "accent" })) : [];
 
@@ -211,6 +213,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           selectionAction={entityComments.selectionAction()}
           peers={peerMarkers(peers())}
           overlays={overlays()}
+          sketches={shownSketches()}
           view={ui.view(EDITOR_TOOL_ID)}
           onViewChange={(view) => ui.setView(EDITOR_TOOL_ID, view)}
           createView={viewsOf(props.handle)}

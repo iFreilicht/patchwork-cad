@@ -52,11 +52,18 @@ export interface FeatureTrace {
   names: string[] | undefined;
   /** A sketch's profile as a closed polyline in world coordinates. */
   outline: [number, number, number][] | undefined;
-  /** The feature's body is used by no later feature and not returned by main, so it doesn't show. */
+  /** The feature's body or sketch is used by no later feature and not returned by main, so it doesn't show. */
   unused: boolean;
   /** Milliseconds the feature took, and the part spent naming faces and edges. */
   ms: number;
   namingMs: number;
+}
+
+/** A sketch the view shows: one that main returned, or at a rollback one that no feature used yet. */
+export interface ShownSketch {
+  name: string;
+  /** Its profile as a closed polyline in world coordinates. */
+  outline: [number, number, number][];
 }
 
 /** A reference to faces or edges as data (`RefData` of the feature library), e.g. a collaborator's pick; its names are opaque here. */
@@ -92,9 +99,9 @@ export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
   /** `dropped`: how many of the values main returned can't be shown, e.g. a string. */
-  | { type: "built"; id: number; shapes: MeshedShape[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
+  | { type: "built"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
-  | { type: "rolledBack"; id: number; shapes: MeshedShape[] }
+  | { type: "rolledBack"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[] }
   | { type: "picked"; id: number; code: string; ref: RefData }
   /** For each of the request's refs, the entities it names, by body. */
   | { type: "located"; id: number; found: { body: string; indices: number[] }[][] }

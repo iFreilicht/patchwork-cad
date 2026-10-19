@@ -105,6 +105,8 @@ export interface TraceEntry {
   before: Body[];
   /** The bodies it consumed, e.g. an extrusion's target (`inputs` of its definition). */
   inputs: Body[];
+  /** The sketches among its parameters, e.g. an extrusion's profile. */
+  sketches: Sketch[];
   /** The feature's result, if it is a body; the first of several bodies. */
   result?: Body;
   /** All bodies the feature made, e.g. several adopted with `body()`. */
@@ -219,7 +221,7 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
     const count = (context.counts.get(def.type) ?? 0) + 1;
     context.counts.set(def.type, count);
     const name = meta.name ?? `${def.type}${meta.line !== undefined ? `@L${meta.line}` : ""}#${count}`;
-    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], inputs: [], results: [], after: [], ms: 0, namingMs: 0 };
+    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], inputs: [], sketches: Object.values(params ?? {}).filter((v): v is Sketch => v instanceof Sketch), results: [], after: [], ms: 0, namingMs: 0 };
     if (meta.line !== undefined) entry.line = meta.line;
     if (meta.names) entry.names = meta.names;
     context.trace.push(entry);

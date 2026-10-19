@@ -3,7 +3,7 @@ import * as A from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { expect, test } from "vitest";
 import { analyze } from "../src/model/analyze.ts";
-import { apply, appendElement, deleteFeature, insertFeature, retarget, setProp, type Edit } from "../src/model/splice.ts";
+import { apply, appendElement, deleteFeature, insertFeature, resketch, retarget, setProp, type Edit } from "../src/model/splice.ts";
 import { timeline, type FeatureEntry } from "../src/model/timeline.ts";
 import type { FeatureTrace } from "../src/kernel/protocol.ts";
 import type { CadModelDoc } from "../src/types.ts";
@@ -55,13 +55,13 @@ test("a picked edge is appended to the edge list", () => {
 
 test("a new feature goes before the return, which shows its result", () => {
   const source = example("m1");
-  const out = edit(source, (a) => insertFeature(source, a, "fillet2", "fillet({ body: extrude2, edges: [], radius: 1 })", { consumes: "extrude2", body: true }));
+  const out = edit(source, (a) => insertFeature(source, a, "fillet2", "fillet({ body: extrude2, edges: [], radius: 1 })", { consumes: "extrude2", shows: true }));
   expect(out).toContain("  const fillet2 = fillet({ body: extrude2, edges: [], radius: 1 });\n  return fillet2;");
 });
 
 test("a new body is added to the return, and its functions are imported", () => {
   const source = example("m1");
-  const out = edit(source, (a) => insertFeature(source, a, "extrude3", "extrude({ sketch: polygon({}), distance: 1 })", { body: true }));
+  const out = edit(source, (a) => insertFeature(source, a, "extrude3", "extrude({ sketch: polygon({}), distance: 1 })", { shows: true }));
   expect(out).toContain("return [extrude2, extrude3];");
   expect(out).toContain('chamfer, edge, polygon } from "@patchwork-cad/features"');
 });
@@ -74,6 +74,46 @@ test("deleting a feature rewires its users and turns references to it into ref l
   expect(out).toContain(".piece(ref.notch, 1, ");
   expect(out).toContain('edge, ref } from "@patchwork-cad/features"');
   expect(analyze(out).calls).toHaveLength(analyze(source).calls.length - 1);
+});
+
+/** A plate and two sketches on its top face; `returned` is what main returns. */
+const sketches = (returned: string) => `import { sketch, plane, rect, circle, extrude } from "@patchwork-cad/features";
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [60, 40] }) });
+  const plate = extrude({ sketch: sketch1, distance: 10 });
+  const sketch2 = sketch({ body: plate, plane: plate.end, profile: circle({ center: [10, 10], radius: 4 }) });
+  const sketch3 = sketch({ body: plate, plane: plate.end, profile: circle({ center: [30, 10], radius: 4 }) });
+  return ${returned};
+}
+`;
+const returnOf = (source: string) => /return .*;/.exec(source)![0];
+
+test("a new extrusion shows in place of the sketch it uses", () => {
+  const source = sketches("[plate, sketch2, sketch3]");
+  const out = edit(source, (a) => insertFeature(source, a, "extrude1", "extrude({ sketch: sketch2, distance: 4 })", { shows: true, hides: "sketch2" }));
+  expect(returnOf(out)).toBe("return [plate, extrude1, sketch3];");
+});
+
+test("deleting an extrusion shows its sketch again, unless another feature uses it", () => {
+  const source = sketches("[plate, sketch2]").replace("  return", "  const boss = extrude({ sketch: sketch3, distance: 4 });\n  return");
+  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "boss"))))).toBe("return [plate, sketch2, sketch3];");
+  const shared = source.replace("  return", "  const boss2 = extrude({ sketch: sketch3, distance: 8 });\n  return");
+  expect(returnOf(edit(shared, (a) => deleteFeature(shared, a, feature(shared, "boss"))))).toBe("return [plate, sketch2];");
+});
+
+test("deleting a sketch on a face takes it out of the result, without showing the face's body twice", () => {
+  const source = sketches("[plate, sketch2]");
+  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "sketch2"))))).toBe("return plate;");
+});
+
+test("an extrusion that switches sketches hides the new one and shows the old one again", () => {
+  const source = sketches("[plate, sketch3]").replace("  return", "  const boss = extrude({ sketch: sketch2, distance: 4 });\n  return");
+  const out = edit(source, (a) => {
+    const call = a.calls.find((c) => c.variable === "boss")!;
+    return [...setProp(call, "sketch", "sketch3"), ...resketch(a, call, "sketch2", "sketch3")];
+  });
+  expect(out).toContain("extrude({ sketch: sketch3, distance: 4 })");
+  expect(returnOf(out)).toBe("return [plate, sketch2];");
 });
 
 /** A plate whose chamfer runs around a filleted edge, with an extrusion that is retargeted. */
