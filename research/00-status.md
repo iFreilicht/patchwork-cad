@@ -13,7 +13,7 @@
 | [10-view-state.md](10-view-state.md) | Per-user UI state in the account's tool storage; instance identity; view documents | Done. Open: orphan views of cancelled drags, the UX of listing and editing views |
 | [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Done. Open: history of adopted library bodies, scalar calculations; touch deferred |
 | [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
-| [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence done (editor and viewer). Open: presence provider upstream, follow mode; comments to do |
+| [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence done (editor and viewer). Open: presence provider upstream, follow mode, Patchwork release with patchwork-system#451 (presence lost in 0.8.4, #450); comments to do |
 
 ## Not started
 
