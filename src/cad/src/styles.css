@@ -625,15 +625,23 @@
   filter: grayscale(1);
 }
 
-/* The hovered, dragged or open entry stands out most, the open one thicker, as a selected edge; what it relates to gets a coloured border. */
-.cad-editor__entry[data-focused="true"] {
+/*
+ * As hovered and selected edges (research/14): the open entry has a thick outline, the hovered or
+ * dragged one a thin one, and hovering the open one adds the thin line inside the thick one; outside,
+ * the scrolling timeline would clip it. What the focused entry relates to gets a coloured border.
+ */
+.cad-editor__entry[data-hovered="true"] {
   outline: 1px solid var(--cad-model-fg);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .cad-editor__entry[aria-pressed="true"] {
-  outline: 2px solid var(--cad-model-fg);
+  outline: 3px solid var(--cad-model-fg);
   outline-offset: 1px;
+}
+
+.cad-editor__entry[aria-pressed="true"][data-hovered="true"] {
+  box-shadow: inset 0 0 0 1px var(--cad-model-fg);
 }
 
 .cad-editor__entry[data-relation="dependency"] {

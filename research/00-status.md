@@ -14,7 +14,7 @@
 | [11-adopting-shapes.md](11-adopting-shapes.md) | `body()`: replicad shapes as bodies of the feature library; context menus in the timeline | Done. Open: history of adopted library bodies, scalar calculations; touch deferred |
 | [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
 | [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence and comments done (editor and viewer). Open: presence provider upstream, follow mode, Patchwork release with patchwork-system#451 (presence lost in 0.8.4, #450), comments outside Patchwork |
-| [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights, hover thinner than selection). Open: the grey per mode, face highlights, sketch outlines |
+| [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights; hover a thin line, selection a thick one, both together on a hovered selection). Open: the grey per mode, sketch outlines |
 
 ## Not started
 

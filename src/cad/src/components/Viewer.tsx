@@ -164,6 +164,29 @@ const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index
 const same = (a: Entity | undefined, b: Entity | undefined) => !!a && !!b && a.body === b.body && a.kind === b.kind && a.index === b.index;
 
 /**
+ * The outline of non-indexed triangles: the triangle edges that only one of them has. Vertices are
+ * matched by position, as a mesh repeats them along seams and between faces, so edges between two
+ * of the faces cancel out too.
+ */
+function outline(triangles: THREE.BufferGeometry): THREE.BufferGeometry {
+  const p = triangles.getAttribute("position");
+  const key = (i: number) => `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
+  const edges = new Map<string, [number, number] | undefined>();
+  for (let t = 0; t + 2 < p.count; t += 3) {
+    for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]] as const) {
+      const [ka, kb] = [key(a), key(b)];
+      const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      // A second triangle with this edge: it is inside.
+      if (edges.has(k)) edges.set(k, undefined);
+      else edges.set(k, [a, b]);
+    }
+  }
+  const values: number[] = [];
+  for (const edge of edges.values()) if (edge) for (const v of edge) values.push(p.getX(v), p.getY(v), p.getZ(v));
+  return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(values, 3));
+}
+
+/**
  * A copy of the triangles or segments of the mesh groups whose entity is in `indices`, as a
  * non-indexed geometry of its own (a geometry that shares attributes would free them on dispose).
  */
@@ -270,7 +293,10 @@ export function Viewer(props: ViewerProps) {
     // A highlighted edge is a line over a wider halo in the theme's dark or light ink, whichever
     // contrasts with it, so one of the two contrasts with whatever is behind it.
     const inks = [themeColor(container, "--cad-model-bg"), themeColor(container, "--cad-model-fg")].sort((a, b) => luminance(a) - luminance(b));
-    const highlightLine = (color: THREE.Color, width: number) => ({ core: wideLine(color, width, true), halo: wideLine(luminance(color) > 0.35 ? inks[0]! : inks[1]!, width + 3.5, true) });
+    const inkFor = (color: THREE.Color) => (luminance(color) > 0.35 ? inks[0]! : inks[1]!);
+    const highlightLine = (color: THREE.Color, width: number) => ({ core: wideLine(color, width, true), halo: wideLine(inkFor(color), width + 3.5, true) });
+    // Hovering a selected edge adds the hover's thin line as a ring around the selection, in its halo.
+    const ringMaterials = { line: wideLine(accentLine, 10, true), halo: wideLine(inkFor(accentLine), 13.5, true) };
     // Hovered and selected edges have one colour; a hover is thinner.
     const highlightMaterials: Record<Exclude<HighlightStyle, "peer">, { face: THREE.Material; line: { core: LineMaterial; halo: LineMaterial } }> = {
       hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine, 2) },
@@ -549,6 +575,10 @@ export function Viewer(props: ViewerProps) {
       highlightGroup.clear();
       const own = (entity: Entity | undefined, style: HighlightStyle): Highlight[] => (entity ? [{ body: entity.body, kind: entity.kind, indices: [entity.index], style }] : []);
       const all = [...(props.highlight ?? []), ...own(selected(), "accent"), ...own(hovered(), "hover")];
+      /** The selected edge is hovered: it gets the ring, and the hover no line of its own. */
+      const ringed = selected()?.kind === "edge" && same(selected(), hovered());
+      /** The selected face is hovered: it keeps the selection's fill, and gets the hover's outline. */
+      const hoveredSelectedFace = selected()?.kind === "face" && same(selected(), hovered());
       highlighted = all.flatMap((h) => h.indices.map((index) => ({ style: h.style, entity: { body: h.body, kind: h.kind, index } })));
       for (const h of all) {
         const r = h.shape ? undefined : rendered.find((x) => x.id === h.body);
@@ -567,11 +597,24 @@ export function Viewer(props: ViewerProps) {
         const geometry = subset(source, indexOf, h.indices);
         temporary?.dispose();
         const { face, line } = materialsOf(h);
-        if (h.kind === "face") highlightGroup.add(new THREE.Mesh(geometry, face));
-        else {
-          highlightGroup.add(Object.assign(wideSegments(geometry, line.halo), { renderOrder: 0 }), Object.assign(wideSegments(geometry, line.core), { renderOrder: 1 }));
-          geometry.dispose();
+        if (h.kind === "face") {
+          const ownHover = h.style === "hover" && h.indices.length === 1 && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, hovered());
+          if (!(hoveredSelectedFace && ownHover)) highlightGroup.add(new THREE.Mesh(geometry, face));
+          // A hover, of a face or of a feature's faces, is outlined with the hover's thin line, also over a selection.
+          if (h.style === "hover") {
+            const edges = outline(geometry);
+            highlightGroup.add(...[line.halo, line.core].map((material, i) => Object.assign(wideSegments(edges, material), { renderOrder: i })));
+            edges.dispose();
+          }
+          if (hoveredSelectedFace && ownHover) geometry.dispose();
         }
+        else if (!(ringed && h.style === "hover" && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, hovered()))) {
+          const ring = ringed && h.style === "accent" && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, selected());
+          // Outermost first.
+          const layers = [...(ring ? [ringMaterials.halo, ringMaterials.line] : []), line.halo, line.core];
+          highlightGroup.add(...layers.map((material, i) => Object.assign(wideSegments(geometry, material), { renderOrder: i })));
+          geometry.dispose();
+        } else geometry.dispose();
       }
     });
 
@@ -915,7 +958,7 @@ export function Viewer(props: ViewerProps) {
       dotGeometry.dispose();
       pmrem.dispose();
       scene.environment?.dispose();
-      for (const m of [faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
+      for (const m of [ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
     });
   });

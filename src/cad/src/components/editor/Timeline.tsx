@@ -296,6 +296,9 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     get "data-focused"() {
       return editor.focused() === index ? "true" : undefined;
     },
+    get "data-hovered"() {
+      return editor.hovered() === index ? "true" : undefined;
+    },
     get "data-cross-hover"() {
       return editor.crossHovered().has(index) ? "true" : undefined;
     },

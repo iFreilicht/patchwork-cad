@@ -16,10 +16,10 @@ test.use({ siteModules: CAD_MODULES, viewport: { width: 900, height: 700 } });
 
 const viewer = (page: Page) => page.locator(".cad-model__viewer").first();
 type Hook = { cadViewer: { screenPoint(e: Entity): { x: number; y: number } | undefined; centroid(e: Entity): number[] | undefined } };
-/** The visible edge whose centroid is nearest to a point of M1 (a 60 × 40 × 20 block, seen from the front right). */
-async function edgeNear(page: Page, near: [number, number, number]): Promise<Entity> {
+/** The visible edge or face whose centroid is nearest to a point of M1 (a 60 × 40 × 20 block, seen from the front right). */
+async function edgeNear(page: Page, near: [number, number, number], kind: "edge" | "face" = "edge"): Promise<Entity> {
   let best: { e: Entity; d: number } | undefined;
-  for (const e of await entities(page, "edge")) {
+  for (const e of await entities(page, kind)) {
     const c = await viewer(page).evaluate((el, x) => (el as unknown as Hook).cadViewer.centroid(x), e);
     const d = c ? Math.hypot(c[0]! - near[0], c[1]! - near[1], c[2]! - near[2]) : Infinity;
     if ((!best || d < best.d) && (await isVisible(page, e))) best = { e, d };
@@ -68,7 +68,36 @@ for (const [colorScheme, contrast] of [["dark", "no-preference"], ["light", "no-
         await page.waitForTimeout(300);
         await viewer(page).screenshot({ path: `${dir}/${mode}.png` });
         // Details around both edges, for the edges themselves.
-        for (const [name, p] of [["selected", s], ["hovered", h]] as const) await page.screenshot({ path: `${dir}/${mode}-${name}.png`, clip: { x: p.x - 80, y: p.y - 60, width: 160, height: 120 } });
+        const detail = (name: string, p: { x: number; y: number }) => page.screenshot({ path: `${dir}/${mode}-${name}.png`, clip: { x: p.x - 80, y: p.y - 60, width: 160, height: 120 } });
+        await detail("selected", s);
+        await detail("hovered", h);
+        // Hovering the selected edge, and a selected face.
+        await page.mouse.move(s.x, s.y);
+        await expect(viewer(page)).toHaveAttribute("data-hovered", `${selected.body}:edge:${selected.index}`);
+        await page.waitForTimeout(300);
+        await detail("selected-hovered", s);
+        const top = await edgeNear(page, [45, 25, 20], "face");
+        const t = (await screenPoint(page, top))!;
+        // Hovered alone first; the edge stays selected.
+        await page.mouse.move(t.x, t.y);
+        await expect(viewer(page)).toHaveAttribute("data-hovered", `${top.body}:face:${top.index}`);
+        await page.waitForTimeout(300);
+        await detail("face-hovered", t);
+        await page.mouse.click(t.x, t.y);
+        await expect(viewer(page)).toHaveAttribute("data-selected", `${top.body}:face:${top.index}`);
+        await page.waitForTimeout(300);
+        await detail("face-selected-hovered", t);
+        await page.mouse.move(5, 5);
+        await page.waitForTimeout(300);
+        await detail("face-selected", t);
+        // The timeline: sketch2 open, sketch1 hovered; then sketch2 hovered too.
+        const timeline = page.locator(".cad-editor__timeline-wrap");
+        await timelineEntry(page, "sketch2").click();
+        await timelineEntry(page, "sketch1").hover();
+        await timeline.screenshot({ path: `${dir}/${mode}-timeline.png` });
+        await timelineEntry(page, "sketch2").hover();
+        await timeline.screenshot({ path: `${dir}/${mode}-timeline-open-hovered.png` });
+        await timelineEntry(page, "sketch2").click();
         // From the back left and above, where the fixed light doesn't reach the faces in view.
         await clickViewCube(page, [-1, 1, 1]);
         await expect(viewer(page)).toHaveAttribute("data-turning", "false");

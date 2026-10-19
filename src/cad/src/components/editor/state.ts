@@ -57,6 +57,7 @@ export interface Editor {
   /** Where another marker, e.g. a collaborator's, is in the timeline. */
   markerOf(marker: TimelineMarker | undefined): number;
   /** The entry being hovered or dragged in the timeline. */
+  hovered: Accessor<number | undefined>;
   setHovered(index: number | undefined): void;
   setDragging(index: number | undefined): void;
   dragging: Accessor<number | undefined>;
@@ -477,6 +478,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     marker,
     markerOf: (m: TimelineMarker | undefined) => (syntaxError() ? tl().entries.length : markerIn(tl(), m)),
     setMarker,
+    hovered: () => dragging() ?? hovered(),
     setHovered,
     setDragging,
     dragging,
