@@ -200,5 +200,11 @@ export function createEntityComments(options: {
   };
   const openDetached = (at: { x: number; y: number }) => setPopover({ threads: detached(), createNow: false, label: "Detached comments", at, caption, actions, above: true });
 
-  return { pins, onPin, highlight, selectionAction, popover, close: () => setPopover(undefined), detached, openDetached };
+  // Opening a face's threads made its statement the focus selection, which highlights the face; closing them ends that.
+  const close = () => {
+    setPopover(undefined);
+    comments.select(undefined);
+  };
+
+  return { pins, onPin, highlight, selectionAction, popover, close, detached, openDetached };
 }

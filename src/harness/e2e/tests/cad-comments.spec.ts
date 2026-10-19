@@ -186,6 +186,14 @@ test("a comment on a face shows as a pin for the other user, on the timeline ent
   await pin.click();
   await expect(b.getByRole("dialog", { name: /^Comments on extrude1\.side/ }).locator(".comment-content")).toHaveText("Polish this side");
   if (shots) await b.screenshot({ path: `${shots}/comments-3-pin.png` });
+
+  // The open thread highlights its face; closing it with a click elsewhere in the view ends that.
+  const accent = () => viewer(b).evaluate((el) => (el as unknown as { cadViewer: { highlighted(style: "accent"): unknown[] } }).cadViewer.highlighted("accent").length);
+  await expect.poll(accent).toBeGreaterThan(0);
+  await viewer(b).click({ position: { x: 10, y: 10 } });
+  await expect(b.getByRole("dialog", { name: /^Comments on / })).toHaveCount(0);
+  await expect.poll(accent).toBe(0);
+  await expect(pin).toHaveAttribute("data-focused", "false");
 });
 
 test("the viewer tool shows pins and comments on faces", async ({ users }) => {
