@@ -6,7 +6,7 @@ import { cursor, initSubduction, Repo, type DocHandle } from "@automerge/automer
 import { splice } from "@automerge/automerge";
 import { beforeAll, expect, test } from "vitest";
 import { analyze } from "../src/model/analyze.ts";
-import { entryOf, placeThreads, reanchorTarget, sourceRange } from "../src/model/comments.ts";
+import { entryOf, isDetached, placeThreads, reanchorTarget, sourceRange } from "../src/model/comments.ts";
 import { timeline } from "../src/model/timeline.ts";
 import type { CadAnchor, CadModelDoc } from "../src/types.ts";
 
@@ -74,4 +74,25 @@ test("resolved threads, other documents' refs and other paths are left out", () 
   expect(sourceRange(handle.doc(), handle.url, other.sub("source", cursor(0, 5)).url)).toBeUndefined();
   expect(sourceRange(handle.doc(), handle.url, handle.sub("title").url)).toBeUndefined();
   expect(sourceRange(handle.doc(), handle.url, handle.url)).toBeUndefined();
+});
+
+test("a thread on the whole document, as the Comments panel's Add comment makes it, is not detached", () => {
+  const handle = model();
+  handle.change((d) => {
+    d["@comments"] = { threads: [{ id: "doc", refs: [handle.url], isResolved: false, comments: [] }] };
+  });
+  const [placed] = placeThreads(handle.doc(), handle.url);
+  expect(placed!.document).toBe(true);
+  expect(isDetached(placed!)).toBe(false);
+  expect(reanchorTarget(placed!, entries(handle))).toBeUndefined();
+});
+
+test("a feature thread whose statement is deleted and the name gone stays detached", () => {
+  const handle = model();
+  const entry = commentOn(handle, "chamfer1");
+  // Deletes the statement, and with it the only `chamfer1`.
+  edit(handle, entry.span.start, entry.span.end - entry.span.start);
+  const [placed] = placeThreads(handle.doc(), handle.url);
+  expect(isDetached(placed!)).toBe(true);
+  expect(reanchorTarget(placed!, entries(handle))).toBeUndefined();
 });

@@ -1,7 +1,8 @@
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
+import { createLocated } from "./locate.ts";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
-import type { MeshedShape, RefData } from "../kernel/protocol.ts";
+import type { MeshedShape } from "../kernel/protocol.ts";
 import type { Model } from "./createModel.ts";
 import type { ViewPresence } from "../types.ts";
 import type { Highlight, PeerMarker } from "./Viewer.tsx";
@@ -92,23 +93,8 @@ export function ContactToken(props: { contactUrl: string }) {
  * another build or rolled back to another feature; features are names.
  */
 export function createPeerHighlights(model: Model, shown: Accessor<MeshedShape[]>, peers: Accessor<PeerView[]>): Accessor<Highlight[]> {
-  /** The references to resolve, as a string, so that the worker is asked only when they change, not on every pointer move. */
-  const refs = createMemo(() => JSON.stringify(peers().flatMap((p) => [p.state.hover, p.state.selected].flatMap((ref) => (ref ? [{ ref, color: p.color }] : [])))));
-  const [located, setLocated] = createSignal<Highlight[]>([]);
-  let request = 0;
-  createEffect(() => {
-    const wanted = JSON.parse(refs()) as { ref: RefData; color: string }[];
-    const bodies = [...new Set(shown().flatMap((s) => (s.body ? [s.body] : [])))];
-    const id = ++request;
-    if (!wanted.length || !bodies.length) {
-      setLocated([]);
-      return;
-    }
-    model.engine.locate(bodies, wanted.map((w) => w.ref)).then(
-      (found) => id === request && setLocated(found.flatMap((parts, i) => parts.map(({ body, indices }) => ({ body, kind: wanted[i]!.ref.kind, indices, style: "peer" as const, color: wanted[i]!.color })))),
-      () => undefined,
-    );
-  });
+  const found = createLocated(model, shown, () => peers().flatMap((p) => [p.state.hover, p.state.selected].flatMap((ref) => (ref ? [{ ref, color: p.color }] : []))));
+  const located = () => found().flatMap(({ item, found }) => found.map(({ body, indices }) => ({ body, kind: item.ref.kind, indices, style: "peer" as const, color: item.color })));
   const features = () =>
     peers().flatMap(({ state, color }) =>
       (state.features ?? []).flatMap((name) =>

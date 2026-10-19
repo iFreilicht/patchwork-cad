@@ -91,3 +91,12 @@ export function markerPosition(tl: Timeline, offset: number | undefined, next: s
   const index = tl.entries.findIndex((e) => e.span.end > offset);
   return index < 0 ? n : index;
 }
+
+/** The owner names of what an entry made (see `ownerNames`): a feature's, or those of the features a Custom Script ran. */
+export const ownersOf = (entry: Entry | undefined): string[] => (!entry ? [] : entry.kind === "feature" ? (entry.trace ? [entry.trace] : []) : entry.features).flatMap(ownerNames);
+
+/**
+ * The names that the faces a traced feature made carry as their owner (`owners` in the feature
+ * library): the feature's, and its bodies', which differ for a body() that adopts several (research/11).
+ */
+export const ownerNames = (t: FeatureTrace) => [...new Set([t.name, ...t.results])];

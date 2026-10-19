@@ -2,7 +2,7 @@ import { createEffect, createSignal, Show } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import type { MeshedShape } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
-import type { Entry, FeatureEntry } from "../../model/timeline.ts";
+import { ownersOf, type Entry, type FeatureEntry } from "../../model/timeline.ts";
 import type { CadModelDoc } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, modelAttributes } from "../createModel.ts";
@@ -10,7 +10,7 @@ import { StatusBar } from "../StatusBar.tsx";
 import { Viewer, type Entity, type Highlight } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
 import { FeatureDialog } from "./FeatureDialog.tsx";
-import { createEditor, ownersOf } from "./state.ts";
+import { createEditor } from "./state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
@@ -18,6 +18,8 @@ import { createPeerHighlights, joinPresence, peerMarkers } from "../presence.ts"
 import type { TimelinePeer } from "./Timeline.tsx";
 import { viewsOf } from "../viewDoc.ts";
 import { createComments } from "../comments.ts";
+import { CommentsPopover } from "../CommentsPopover.tsx";
+import { createEntityComments, DetachedButton } from "../entityComments.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -124,6 +126,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   // Hovering a face or edge marks the features that made it in the timeline and code; the status bar names it, or the selected one.
   const hoverName = createEntityName(model, 100);
   const selectedName = createEntityName(model, 0);
+  const [selectedEntity, setSelectedEntity] = createSignal<Entity>();
+  const onSelect = (entity: Entity | undefined) => {
+    setSelectedEntity(entity);
+    selectedName.set(entity);
+  };
   const [viewFeatures, setViewFeatures] = createSignal<string[]>([]);
   const onHover = (entity: Entity | undefined) => {
     hoverName.set(entity);
@@ -176,6 +183,22 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   createEffect(() => presence.set({ open: editor.open()?.name }));
   const peers = presence.peers;
   const peerHighlights = createPeerHighlights(model, shown, peers);
+  const entityComments = createEntityComments({
+    comments,
+    model,
+    shown,
+    entries: () => editor.timeline().entries,
+    source: editor.source,
+    selected: () => {
+      const entity = selectedEntity();
+      const ref = selectedName.ref();
+      const name = selectedName.name();
+      return entity && ref && name ? { entity, ref, name } : undefined;
+    },
+    current: () => !editor.syntaxError(),
+    complete: () => !rolledBack(),
+  });
+  let stage!: HTMLDivElement;
   const timelinePeers = (): TimelinePeer[] => {
     const entries = editor.timeline().entries;
     return presence
@@ -203,15 +226,18 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   return (
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} />
-      <div class="cad-editor__stage">
+      <div class="cad-editor__stage" ref={stage}>
         <Viewer
           shapes={rolledBack() ?? model.shapes()}
           pick={editor.pickTarget()?.kind}
           onPick={pick}
           onHover={onHover}
-          onSelect={selectedName.set}
+          onSelect={onSelect}
           onPointer={(pointer) => presence.set({ pointer })}
-          highlight={[...peerHighlights(), ...references(), ...featureHighlight()]}
+          highlight={[...peerHighlights(), ...entityComments.highlight(), ...references(), ...featureHighlight()]}
+          pins={entityComments.pins()}
+          onPin={entityComments.onPin}
+          selectionAction={entityComments.selectionAction()}
           peers={peerMarkers(peers())}
           overlays={overlays()}
           view={ui.view(EDITOR_TOOL_ID)}
@@ -220,6 +246,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
+        <Show when={comments.enabled() && entityComments.detached().length}>
+          <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
+        </Show>
+        <Show when={entityComments.popover()} keyed>
+          {(p) => <CommentsPopover comments={comments} threads={p.threads} create={p.create} createNow={p.createNow} caption={p.caption} actions={p.actions} label={p.label} at={p.at} wrap={stage} above={!!p.above} onClose={entityComments.close} />}
+        </Show>
         <Show when={editor.syntaxError()}>{(message) => <p class="cad-editor__banner">The code doesn't parse ({message()}); the timeline shows its last valid state.</p>}</Show>
       </div>
       <Show when={codeOpen()}>

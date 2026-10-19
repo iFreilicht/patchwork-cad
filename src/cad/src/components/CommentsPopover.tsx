@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
 import { threadView } from "./codeComments.ts";
 import type { CommentStore } from "./comments.ts";
@@ -12,8 +12,11 @@ export function CommentsPopover(props: {
   comments: CommentStore;
   /** The threads to show, by id. */
   threads: string[];
-  /** Starts a thread on the target. */
-  create: () => AutomergeUrl | undefined;
+  /** Starts a thread on the target; without it, e.g. for threads whose target is gone, there is no New comment. */
+  create?: (() => AutomergeUrl | undefined) | undefined;
+  /** A line above a thread, e.g. what it was about, and buttons below it, by thread URL. */
+  caption?: ((url: AutomergeUrl) => string | undefined) | undefined;
+  actions?: ((url: AutomergeUrl) => { label: string; run: () => void }[]) | undefined;
   /** Starts a thread at once, e.g. for a target without one. */
   createNow?: boolean;
   label: string;
@@ -28,7 +31,7 @@ export function CommentsPopover(props: {
   /** A thread started here, shown at once, before the threads of the target catch up with it. */
   const [fresh, setFresh] = createSignal<AutomergeUrl[]>([]);
   const create = () => {
-    const url = props.create();
+    const url = props.create?.();
     if (!url) return;
     created.push(url);
     setFresh([...fresh(), url]);
@@ -57,10 +60,26 @@ export function CommentsPopover(props: {
       aria-label={props.label}
       style={{ left: `${Math.max(0, props.at.x - box.left)}px`, ...(props.above ? { bottom: `${box.bottom - props.at.y}px` } : { top: `${props.at.y - box.top}px` }) }}
     >
-      <For each={urls()}>{(url) => <div class="cad-model__comments-popover-thread">{threadView(url)}</div>}</For>
-      <button class="cad-model__comment-new" onClick={create}>
-        New comment
-      </button>
+      <For each={urls()}>
+        {(url) => (
+          <div class="cad-model__comments-popover-thread">
+            <Show when={props.caption?.(url)}>{(caption) => <p class="cad-model__comment-caption">{caption()}</p>}</Show>
+            {threadView(url)}
+            <For each={props.actions?.(url) ?? []}>
+              {(action) => (
+                <button class="cad-model__comment-new" onClick={action.run}>
+                  {action.label}
+                </button>
+              )}
+            </For>
+          </div>
+        )}
+      </For>
+      <Show when={props.create}>
+        <button class="cad-model__comment-new" onClick={create}>
+          New comment
+        </button>
+      </Show>
     </div>
   );
 }

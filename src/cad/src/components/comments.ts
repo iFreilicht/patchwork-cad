@@ -18,6 +18,8 @@ export interface CommentStore {
   /** Comments need Patchwork: a contact to write as and the focus provider. */
   enabled: Accessor<boolean>;
   threads: Accessor<PlacedThread[]>;
+  /** The model's source, which the threads are on. */
+  source: Accessor<string>;
   /** The threads whose refs are in Patchwork's focus (selection or highlight), by id. */
   focused: Accessor<Set<string>>;
   /** The thread's sub-handle URL, which the `comment-thread` tool renders. */
@@ -32,6 +34,8 @@ export interface CommentStore {
   select(range: Span | undefined): void;
   /** Anchors a thread to a range again, e.g. when the feature it was about came back. */
   reanchor(id: string, range: Span): void;
+  /** Moves a thread to another range and anchor, e.g. a face's thread to the face that replaced it. */
+  retag(id: string, range: Span, anchor: CadAnchor): void;
 }
 
 /** CBOR and Automerge have no `undefined`; drop such fields. */
@@ -87,6 +91,10 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
   return {
     enabled: () => !!contact() && !!focusHandle(),
     threads,
+    source: () => {
+      version();
+      return handle.doc()?.source ?? "";
+    },
     focused,
     urlOf,
     create(range, anchor) {
@@ -151,7 +159,19 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
         const current = thread?.refs[0];
         // Another user may have anchored it meanwhile.
         if (!thread || (current && sourceRange(doc, handle.url, current))) return;
-        thread.refs.splice(0, thread.refs.length, ref);
+        // An assignment, which merges with another user's to one ref, where a splice would leave both.
+        if (thread.refs.length) thread.refs[0] = ref;
+        else thread.refs.push(ref);
+      });
+    },
+    retag(id, range, anchor) {
+      const ref = handle.sub("source", cursor(range.start, range.end)).url;
+      handle.change((doc) => {
+        const thread = doc["@comments"]?.threads.find((t) => t.id === id);
+        if (!thread) return;
+        if (thread.refs.length) thread.refs[0] = ref;
+        else thread.refs.push(ref);
+        thread["@cad"] = plain(anchor);
       });
     },
   };

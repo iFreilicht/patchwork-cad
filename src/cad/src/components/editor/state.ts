@@ -12,8 +12,7 @@ import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts
 import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Relation } from "../../model/deps.ts";
 import { apply, applyToText, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
 import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
-import { markerPosition, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
-import type { FeatureTrace } from "../../kernel/protocol.ts";
+import { markerPosition, ownerNames, ownersOf, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { CadModelDoc, TimelineMarker } from "../../types.ts";
 import type { Model } from "../createModel.ts";
 import type { UiState } from "../uiState.ts";
@@ -113,15 +112,6 @@ const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => 
   fillet: ({ body }) => `fillet({ body: ${body}, edges: [], radius: 1 })`,
   chamfer: ({ body }) => `chamfer({ body: ${body}, edges: [], distance: 1 })`,
 };
-
-/** The owner names of what an entry made (see `ownerNames`): a feature's, or those of the features a Custom Script ran. */
-export const ownersOf = (entry: Entry | undefined): string[] => (!entry ? [] : entry.kind === "feature" ? (entry.trace ? [entry.trace] : []) : entry.features).flatMap(ownerNames);
-
-/**
- * The names that the faces a traced feature made carry as their owner (`owners` in the feature
- * library): the feature's, and its bodies', which differ for a body() that adopts several (research/11).
- */
-const ownerNames = (t: FeatureTrace) => [...new Set([t.name, ...t.results])];
 
 const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 

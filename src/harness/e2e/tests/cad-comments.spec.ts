@@ -4,7 +4,7 @@
  * tool, between two users.
  */
 import type { Locator, Page } from "@playwright/test";
-import { CAD_MODULES, cadView, createModel, docPathWith, exampleSource, hideSidebars, openCode, setModelSource, timelineEntry } from "../cad.ts";
+import { CAD_MODULES, cadView, clickEntity, createModel, docPathWith, entities, exampleSource, hideSidebars, openCode, setModelSource, timelineEntry, type Entity } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -151,4 +151,123 @@ test("the context menu starts a comment; a second one on the same entry adds to 
   await expect(popover.locator(".comment-content")).toHaveText(["Through all?", "Or 10 mm deep"]);
   await a.keyboard.press("Escape");
   await expect(timelineEntry(a, "notch")).toHaveAttribute("data-comments", "2");
+});
+
+const viewer = (page: Page) => page.locator(".cad-model__viewer").first();
+
+/** A face whose reference starts with `name`, and that a click reaches. */
+async function faceNamed(page: Page, name: string): Promise<Entity> {
+  for (const face of await entities(page, "face")) {
+    const point = await viewer(page).evaluate((el, e) => (el as unknown as { cadViewer: { screenPoint(e: Entity): unknown } }).cadViewer.screenPoint(e), face);
+    if (!point) continue;
+    await clickEntity(page, face);
+    const reference = page.locator(".cad-model__reference code");
+    await expect(reference).toHaveCount(1);
+    if (((await reference.textContent()) ?? "").startsWith(name)) return face;
+  }
+  throw new Error(`no visible face named ${name}…`);
+}
+
+test("a comment on a face shows as a pin for the other user, on the timeline entry of the feature that made it", async ({ users }) => {
+  const { a, b } = await twoUsers(users);
+  await expect.poll(() => entities(b, "face").then((f) => f.length), { timeout: 60_000 }).toBeGreaterThan(0);
+  await faceNamed(a, "extrude1.side");
+  await a.locator(".cad-model__selection-action", { hasText: "Comment" }).click();
+  const popover = a.getByRole("dialog", { name: /^Comments on extrude1\.side/ });
+  await writeComment(popover, "Polish this side");
+  await a.keyboard.press("Escape");
+  await expect(a.locator(".cad-model__pin")).toHaveText("1");
+  await expect(timelineEntry(a, "extrude1")).toHaveAttribute("data-comments", "1");
+  // Selecting the face again offers its thread.
+  await expect(a.locator(".cad-model__selection-action")).toHaveText("Comments (1)");
+
+  const pin = b.locator(".cad-model__pin");
+  await expect(pin).toHaveText("1", { timeout: 15_000 });
+  await pin.click();
+  await expect(b.getByRole("dialog", { name: /^Comments on extrude1\.side/ }).locator(".comment-content")).toHaveText("Polish this side");
+  if (shots) await b.screenshot({ path: `${shots}/comments-3-pin.png` });
+});
+
+test("the viewer tool shows pins and comments on faces", async ({ users }) => {
+  const { a, b } = await twoUsers(users, "cad-model-viewer");
+  await expect.poll(() => entities(b, "face").then((f) => f.length), { timeout: 60_000 }).toBeGreaterThan(0);
+  await faceNamed(a, "extrude1.side");
+  await a.locator(".cad-model__selection-action", { hasText: "Comment" }).click();
+  await writeComment(a.getByRole("dialog", { name: /^Comments on extrude1\.side/ }), "From the editor");
+  await a.keyboard.press("Escape");
+
+  await expect(b.locator(".cad-model__pin")).toHaveText("1", { timeout: 15_000 });
+  // The viewer has no status bar naming the selection: any face without a thread.
+  const action = b.locator(".cad-model__selection-action");
+  for (const face of await entities(b, "face")) {
+    const point = await viewer(b).evaluate((el, e) => (el as unknown as { cadViewer: { screenPoint(e: Entity): unknown } }).cadViewer.screenPoint(e), face);
+    if (!point) continue;
+    await clickEntity(b, face);
+    await expect(action).toBeVisible();
+    if ((await action.textContent()) === "Comment") break;
+  }
+  await action.click();
+  await writeComment(b.getByRole("dialog", { name: /^Comments on / }), "From the viewer");
+  await b.keyboard.press("Escape");
+  await expect(b.locator(".cad-model__pin")).toHaveCount(2);
+
+  await expect(a.locator(".cad-model__pin")).toHaveCount(2, { timeout: 15_000 });
+  // Each on the timeline entry of the feature that made its face.
+  const counts = () => a.locator(".cad-editor__entry[data-comments]").evaluateAll((els) => els.reduce((n, el) => n + Number((el as HTMLElement).dataset["comments"]), 0));
+  await expect.poll(counts).toBe(2);
+});
+
+/** Deletes a timeline entry through its context menu. */
+async function deleteEntry(page: Page, name: string) {
+  await timelineEntry(page, name).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: `Delete ${name}` }).click();
+  await expect(timelineEntry(page, name)).toHaveCount(0);
+}
+
+test("a feature's comment is detached while the feature is deleted, and back on it when the statement comes back", async ({ users }) => {
+  const { a, b } = await twoUsers(users);
+  const popover = await openEntryComments(a, "extrude2");
+  await writeComment(popover, "Taller boss");
+  await a.keyboard.press("Escape");
+  await expect(timelineEntry(b, "extrude2")).toHaveAttribute("data-comments", "1", { timeout: 15_000 });
+
+  await deleteEntry(a, "extrude2");
+  const detached = b.locator(".cad-model__detached");
+  await expect(detached).toHaveText("Detached comments (1)", { timeout: 15_000 });
+  await detached.click();
+  const list = b.getByRole("dialog", { name: "Detached comments" });
+  await expect(list.locator(".cad-model__comment-caption")).toHaveText(/^Feature extrude2 deleted: const extrude2 = extrude\(/);
+  await expect(list.locator(".comment-content")).toHaveText("Taller boss");
+  await b.keyboard.press("Escape");
+
+  // Its text again, as an undo inserts it: new text, on which the thread's cursors are not.
+  await setModelSource(a, exampleSource("m1"));
+  await expect(timelineEntry(b, "extrude2")).toHaveAttribute("data-comments", "1", { timeout: 15_000 });
+  await expect(detached).toHaveCount(0);
+  await expect(a.locator(".cad-model__detached")).toHaveCount(0);
+});
+
+test("a comment on a face that is gone can be attached to another face", async ({ users }) => {
+  const { a } = await twoUsers(users);
+  await expect.poll(() => entities(a, "face").then((f) => f.length), { timeout: 60_000 }).toBeGreaterThan(0);
+  await faceNamed(a, "extrude2.end");
+  await a.locator(".cad-model__selection-action", { hasText: "Comment" }).click();
+  await writeComment(a.getByRole("dialog", { name: /^Comments on extrude2\.end/ }), "Round this");
+  await a.keyboard.press("Escape");
+  await expect(a.locator(".cad-model__pin")).toHaveCount(1);
+
+  await deleteEntry(a, "extrude2");
+  await expect(a.locator(".cad-model__pin")).toHaveCount(0);
+  const detached = a.locator(".cad-model__detached");
+  await expect(detached).toHaveText("Detached comments (1)");
+
+  await faceNamed(a, "extrude1.end");
+  await detached.click();
+  const list = a.getByRole("dialog", { name: "Detached comments" });
+  await expect(list.locator(".cad-model__comment-caption")).toHaveText("Face not found: extrude2.end");
+  await list.getByRole("button", { name: /^Attach to extrude1\.end/ }).click();
+  await expect(detached).toHaveCount(0);
+  await expect(a.locator(".cad-model__pin")).toHaveCount(1);
+  await expect(timelineEntry(a, "extrude1")).toHaveAttribute("data-comments", "1");
 });

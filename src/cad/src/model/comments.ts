@@ -17,6 +17,8 @@ export interface PlacedThread {
   thread: CommentThread;
   /** Its range in `source`; undefined if the text was deleted (the range collapsed) or its ref doesn't resolve. */
   range: Span | undefined;
+  /** It is on the whole document, as the Comments panel's "Add comment" makes it, not on a range. */
+  document: boolean;
   anchor: CadAnchor | undefined;
 }
 
@@ -44,12 +46,25 @@ export function sourceRange(doc: Doc<CadModelDoc>, docUrl: AutomergeUrl, ref: Au
   }
 }
 
+/** A ref to the whole document: its URL without a path (heads allowed), as Patchwork's panel tells them apart. */
+const isDocumentRef = (ref: AutomergeUrl, docUrl: AutomergeUrl) => {
+  try {
+    const parsed = parseAutomergeUrl(ref);
+    return !parsed.segments?.length && parsed.documentId === parseAutomergeUrl(docUrl).documentId;
+  } catch {
+    return false;
+  }
+};
+
+/** A thread whose text is gone: not on the whole document, and its range collapsed or doesn't resolve. */
+export const isDetached = (thread: PlacedThread) => !thread.range && !thread.document;
+
 /** The open threads (resolved ones are left out, as in Patchwork's Comments panel) and where they are. */
 export function placeThreads(doc: Doc<CadModelDoc>, docUrl: AutomergeUrl): PlacedThread[] {
   return (doc["@comments"]?.threads ?? []).flatMap((thread) => {
     if (thread.isResolved) return [];
     const ref = thread.refs[0];
-    return [{ id: thread.id, thread, range: ref ? sourceRange(doc, docUrl, ref) : undefined, anchor: thread["@cad"] }];
+    return [{ id: thread.id, thread, range: ref ? sourceRange(doc, docUrl, ref) : undefined, document: !!ref && isDocumentRef(ref, docUrl), anchor: thread["@cad"] }];
   });
 }
 
@@ -65,7 +80,7 @@ export const entryOf = (entries: readonly Entry[], range: Span): number | undefi
  */
 export function reanchorTarget(thread: PlacedThread, entries: readonly Entry[]): Span | undefined {
   const name = thread.anchor?.feature;
-  if (thread.range || !name) return undefined;
+  if (!isDetached(thread) || !name) return undefined;
   const entry = entries.find((e) => e.kind === "feature" && e.names.includes(name));
   return entry && { ...entry.span };
 }

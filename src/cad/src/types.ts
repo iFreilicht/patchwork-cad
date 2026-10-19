@@ -85,6 +85,8 @@ export interface CadAnchor {
   statement?: string;
   /** A face or edge, as a pick names it. */
   entity?: RefData;
+  /** That face or edge as code, e.g. `extrude1.side.front`, shown when it is gone. */
+  entityName?: string;
 }
 
 /** A view of a model: which model, seen with which camera (research/10-view-state.md). */

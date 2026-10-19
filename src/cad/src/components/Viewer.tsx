@@ -49,6 +49,17 @@ export interface PeerMarker {
   contactUrl: string;
 }
 
+/** Comments on faces or edges (research/13-collaboration.md, "Comments"): a pin on them, labelled with how many threads. */
+export interface Pin {
+  key: string;
+  body: string;
+  kind: EntityKind;
+  indices: number[];
+  label: string;
+  /** One of its threads is focused, e.g. in the Comments panel. */
+  focused: boolean;
+}
+
 export interface ViewerProps {
   shapes: MeshedShape[] | undefined;
   /** Which entities hover and click pick; nothing is pickable without it, and hover takes edges, else faces. */
@@ -75,6 +86,11 @@ export interface ViewerProps {
   createView?: (view: CameraState, name: string) => { url: AutomergeUrl; title: string } | undefined;
   /** Starts with the ViewCube collapsed to its toggle. The state is local to this mount. */
   collapseViewCube?: boolean;
+  /** Comment pins, and what clicking one does, with the pin's position on the screen. */
+  pins?: Pin[] | undefined;
+  onPin?: (key: string, at: { x: number; y: number }) => void;
+  /** A button at the selected face or edge, e.g. to comment on it. */
+  selectionAction?: { label: string; run: (at: { x: number; y: number }) => void } | undefined;
 }
 
 /** Two cameras are the same; storage may reorder an object's keys. */
@@ -157,6 +173,37 @@ function subset(source: THREE.BufferGeometry, indexOf: number[] | undefined, ind
     }
   });
   return new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(values, 3));
+}
+
+/**
+ * Points on an entity's faces or edges, biggest first: triangle centroids by area, segment midpoints
+ * by length. The first is where a pin goes; tests click them.
+ */
+function candidatesOf(r: Rendered, kind: EntityKind, indices: ReadonlySet<number>): { point: THREE.Vector3; size: number }[] {
+  const candidates: { point: THREE.Vector3; size: number }[] = [];
+  if (kind === "face") {
+    const position = r.mesh.geometry.getAttribute("position");
+    const index = r.mesh.geometry.getIndex();
+    r.mesh.geometry.groups.forEach((g, gi) => {
+      if (!indices.has(r.shape.faceIndex?.[gi] ?? -1) || !index) return;
+      for (let t = g.start; t < g.start + g.count; t += 3) {
+        const [p0, p1, p2] = [0, 1, 2].map((k) => new THREE.Vector3().fromBufferAttribute(position, index.getX(t + k))) as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
+        const area = new THREE.Vector3().crossVectors(p1.clone().sub(p0), p2.clone().sub(p0)).length() / 2;
+        candidates.push({ point: p0.clone().add(p1).add(p2).divideScalar(3), size: area });
+      }
+    });
+  } else if (r.lines) {
+    const position = r.lines.geometry.getAttribute("position");
+    r.lines.geometry.groups.forEach((g, gi) => {
+      if (!indices.has(r.shape.edgeIndex?.[gi] ?? -1)) return;
+      for (let v = g.start; v + 1 < g.start + g.count; v += 2) {
+        const a = new THREE.Vector3().fromBufferAttribute(position, v);
+        const b = new THREE.Vector3().fromBufferAttribute(position, v + 1);
+        candidates.push({ point: a.clone().add(b).multiplyScalar(0.5), size: a.distanceTo(b) });
+      }
+    });
+  }
+  return candidates.sort((x, y) => y.size - x.size);
 }
 
 export function Viewer(props: ViewerProps) {
@@ -410,6 +457,7 @@ export function Viewer(props: ViewerProps) {
       step(now);
       controls.update();
       placeMarkers();
+      placeFloating();
       renderer.render(scene, camera);
       if (!collapsed()) renderCube();
       frameId = requestAnimationFrame(tick);
@@ -546,6 +594,76 @@ export function Viewer(props: ViewerProps) {
         m.label.style.transform = `translate(${((v.x + 1) / 2) * rect.width}px, ${((1 - v.y) / 2) * rect.height}px)`;
         const unitsPerPixel = camera === perspective ? (2 * m.point.distanceTo(camera.position) * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) / rect.height : orthoHeight / orthographic.zoom / rect.height;
         m.dot.scale.setScalar(4 * unitsPerPixel);
+      }
+    };
+
+    // ---------- comment pins and the selection's action ----------
+
+    /** Where a pin on entities goes: on their biggest triangle or longest segment. */
+    const anchorOf = (body: string, kind: EntityKind, indices: number[]) => {
+      const r = rendered.find((x) => x.shape.body === body);
+      return r && candidatesOf(r, kind, new Set(indices))[0]?.point;
+    };
+    /** Buttons over the canvas at points on the model, which the render loop places. */
+    const floating = new Map<string, { el: HTMLButtonElement; point: THREE.Vector3 | undefined; onClick: (at: { x: number; y: number }) => void }>();
+    const float = (key: string, className: string, onClick: (at: { x: number; y: number }) => void) => {
+      let f = floating.get(key);
+      if (!f) {
+        const el = document.createElement("button");
+        const created = { el, point: undefined, onClick };
+        el.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const r = el.getBoundingClientRect();
+          created.onClick({ x: r.left, y: r.bottom });
+        });
+        container.append(el);
+        floating.set(key, created);
+        f = created;
+      }
+      f.onClick = onClick;
+      f.el.className = className;
+      return f;
+    };
+    const unfloat = (keep: (key: string) => boolean) => {
+      for (const [key, f] of floating) {
+        if (keep(key)) continue;
+        f.el.remove();
+        floating.delete(key);
+      }
+    };
+    createEffect(() => {
+      props.shapes;
+      const pins = props.pins ?? [];
+      const keys = new Set(pins.map((p) => `pin:${p.key}`));
+      unfloat((key) => !key.startsWith("pin:") || keys.has(key));
+      for (const pin of pins) {
+        const f = float(`pin:${pin.key}`, "cad-model__pin", (at) => props.onPin?.(pin.key, at));
+        f.el.textContent = pin.label;
+        f.el.title = "Comments";
+        f.el.setAttribute("aria-label", `Comments (${pin.label})`);
+        f.el.dataset["key"] = pin.key;
+        f.el.dataset["focused"] = pin.focused ? "true" : "false";
+        f.point = anchorOf(pin.body, pin.kind, pin.indices);
+      }
+    });
+    createEffect(() => {
+      props.shapes;
+      const entity = selected();
+      const action = props.selectionAction;
+      unfloat((key) => key !== "action" || (!!entity && !!action));
+      if (!entity || !action) return;
+      const f = float("action", "cad-model__selection-action", action.run);
+      f.el.textContent = action.label;
+      f.point = anchorOf(entity.body, entity.kind, [entity.index]);
+    });
+    const placeFloating = () => {
+      if (!floating.size) return;
+      const rect = canvas.getBoundingClientRect();
+      for (const f of floating.values()) {
+        const v = f.point?.clone().project(camera);
+        const visible = !!v && v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
+        f.el.hidden = !visible;
+        if (v) f.el.style.transform = `translate(${((v.x + 1) / 2) * rect.width}px, ${((1 - v.y) / 2) * rect.height}px)`;
       }
     };
 
@@ -728,31 +846,7 @@ export function Viewer(props: ViewerProps) {
       screenPoint(entity) {
         const r = rendered.find((x) => x.shape.body === entity.body);
         if (!r) return undefined;
-        // Candidate points with their size: triangle centroids by area, segment midpoints by length.
-        const candidates: { point: THREE.Vector3; size: number }[] = [];
-        if (entity.kind === "face") {
-          const position = r.mesh.geometry.getAttribute("position");
-          const index = r.mesh.geometry.getIndex();
-          r.mesh.geometry.groups.forEach((g, gi) => {
-            if (r.shape.faceIndex?.[gi] !== entity.index || !index) return;
-            for (let t = g.start; t < g.start + g.count; t += 3) {
-              const [p0, p1, p2] = [0, 1, 2].map((k) => new THREE.Vector3().fromBufferAttribute(position, index.getX(t + k))) as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
-              const area = new THREE.Vector3().crossVectors(p1.clone().sub(p0), p2.clone().sub(p0)).length() / 2;
-              candidates.push({ point: p0.clone().add(p1).add(p2).divideScalar(3), size: area });
-            }
-          });
-        } else if (r.lines) {
-          const position = r.lines.geometry.getAttribute("position");
-          r.lines.geometry.groups.forEach((g, gi) => {
-            if (r.shape.edgeIndex?.[gi] !== entity.index) return;
-            for (let v = g.start; v + 1 < g.start + g.count; v += 2) {
-              const a = new THREE.Vector3().fromBufferAttribute(position, v);
-              const b = new THREE.Vector3().fromBufferAttribute(position, v + 1);
-              candidates.push({ point: a.clone().add(b).multiplyScalar(0.5), size: a.distanceTo(b) });
-            }
-          });
-        }
-        candidates.sort((x, y) => y.size - x.size);
+        const candidates = candidatesOf(r, entity.kind, new Set([entity.index]));
         // A point that a click hits reliably: whole pixels, and the same entity a few pixels around it.
         const margin = entity.kind === "face" ? 3 : 1;
         for (const { point } of candidates) {

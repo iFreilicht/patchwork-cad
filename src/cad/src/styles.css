@@ -30,6 +30,8 @@
 }
 
 .cad-model {
+  /* For popovers, e.g. a face's comments in the viewer. */
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
@@ -939,6 +941,72 @@
   border: 1px solid var(--cad-model-border);
   border-radius: 3px;
   background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* A pin on commented faces and edges, with how many threads; its tail on the point. */
+.cad-model__pin,
+.cad-model__selection-action {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cad-model__pin {
+  min-width: 18px;
+  margin: -1.6em 0 0 0;
+  padding: 0 5px;
+  border: 1px solid var(--cad-model-comment-line);
+  border-radius: 8px 8px 8px 2px;
+  background: var(--cad-model-comment-focused);
+  color: var(--cad-model-fg);
+}
+
+.cad-model__pin[data-focused="true"] {
+  outline: 2px solid var(--cad-model-comment-line);
+}
+
+/* Up and to the right of the selected face or edge, like a collaborator's name next to their pointer. */
+.cad-model__selection-action {
+  margin: -2em 0 0 8px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--cad-model-accent);
+  color: white;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.cad-model__comment-caption {
+  margin: 0 0 4px;
+  color: var(--cad-model-muted);
+  font-size: 12px;
+}
+
+.cad-model__comment-caption code,
+.cad-model__detached code {
+  font-family: var(--cad-model-family-code);
+}
+
+/* Threads whose target is gone, listed from the bottom left of the 3D view. */
+.cad-model__detached {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 1;
+  padding: 2px 8px;
+  border: 1px solid var(--cad-model-comment-line);
+  border-radius: 3px;
+  background: var(--cad-model-comment);
   color: var(--cad-model-fg);
   font: inherit;
   font-size: 12px;
