@@ -901,7 +901,7 @@
   max-width: 100%;
 }
 
-/* A timeline entry's threads: their count on a speech bubble, and an outline while one is focused, e.g. in the Comments panel. */
+/* A timeline entry's threads: their count on a speech bubble. */
 .cad-editor__entry[data-comments]::after {
   content: attr(data-comments);
   margin-left: 4px;
@@ -913,9 +913,10 @@
   line-height: 1.4;
 }
 
-.cad-editor__entry[data-comment-focused="true"] {
-  outline: 2px solid var(--cad-model-comment-line);
-  outline-offset: 1px;
+/* A focused thread, e.g. of the selected entry or clicked in the Comments panel, fills its badge; the outline is the hover's and the selection's. */
+.cad-editor__entry[data-comment-focused="true"]::after {
+  background: var(--cad-model-comment-line);
+  color: var(--cad-model-bg);
 }
 
 .cad-editor__comment {

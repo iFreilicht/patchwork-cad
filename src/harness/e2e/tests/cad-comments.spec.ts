@@ -131,7 +131,7 @@ test("a comment on a timeline entry shows on it for the other user, also in the 
   if (shots) await b.screenshot({ path: `${shots}/comments-1-timeline.png` });
   await b.keyboard.press("Escape");
 
-  // Its statement is a range in the code, so Patchwork's panel lists it; focusing it there outlines the entry.
+  // Its statement is a range in the code, so Patchwork's panel lists it; focusing it there fills the entry's comment badge.
   await timelineEntry(b, "sketch1").click();
   await expect(timelineEntry(b, "extrude1")).not.toHaveAttribute("data-comment-focused", "true");
   const panel = await commentsPanel(b);
@@ -151,6 +151,19 @@ test("the context menu starts a comment; a second one on the same entry adds to 
   await expect(popover.locator(".comment-content")).toHaveText(["Through all?", "Or 10 mm deep"]);
   await a.keyboard.press("Escape");
   await expect(timelineEntry(a, "notch")).toHaveAttribute("data-comments", "2");
+
+  // Selected, its threads are focused, which fills the badge; the outline stays the selection's thick one in the text colour.
+  await timelineEntry(a, "notch").click();
+  await a.mouse.move(0, 0);
+  await expect(timelineEntry(a, "notch")).toHaveAttribute("data-comment-focused", "true");
+  const style = await timelineEntry(a, "notch").evaluate((e) => {
+    const s = getComputedStyle(e);
+    const badge = getComputedStyle(e, "::after");
+    return { outline: `${s.outlineStyle} ${s.outlineWidth}`, outlineColor: s.outlineColor, fg: getComputedStyle(e.closest(".cad-model")!).color, badge: badge.backgroundColor, badgeLine: badge.borderTopColor };
+  });
+  expect(style.outline).toBe("solid 3px");
+  expect(style.outlineColor).toBe(style.fg);
+  expect(style.badge).toBe(style.badgeLine);
 });
 
 const viewer = (page: Page) => page.locator(".cad-model__viewer").first();
