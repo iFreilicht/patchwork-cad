@@ -8,7 +8,8 @@ import { loadOC } from "./oc.ts";
 beforeAll(loadOC);
 
 async function m1() {
-  const model = (await import("../examples/m1.js")) as { default: (p: unknown) => unknown; defaultParams: unknown };
+  const name = "m1";
+  const model = (await import(`../examples/${name}.js`)) as { default: (p: unknown) => unknown; defaultParams: unknown };
   beginBuild({ lenient: false });
   model.default(model.defaultParams);
   const trace = currentTrace();
