@@ -28,6 +28,8 @@ export interface Highlight {
   color?: string;
   /** The body's mesh, if it isn't shown, e.g. a feature's result past the timeline marker. */
   shape?: MeshedShape;
+  /** A volume a feature added or removed: its faces without the hover's outline, its edges as thin as the model's. */
+  ghost?: boolean;
 }
 
 export type HighlightStyle = "hover" | "accent" | "peer";
@@ -301,6 +303,17 @@ export function Viewer(props: ViewerProps) {
     const highlightMaterials: Record<Exclude<HighlightStyle, "peer">, { face: THREE.Material; line: { core: LineMaterial; halo: LineMaterial } }> = {
       hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine, 2) },
       accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine, 3.5) },
+    };
+    /** A ghost's edges, as wide as the model's, in the highlight's colour. */
+    const ghostLines = new Map<string, LineMaterial>();
+    const ghostLine = (h: Highlight) => {
+      const css = h.style === "peer" ? (h.color ?? "#888") : "";
+      let m = ghostLines.get(css);
+      if (!m) {
+        m = wideLine(css ? new THREE.Color().setStyle(css, THREE.SRGBColorSpace) : accentLine, 1.5, true);
+        ghostLines.set(css, m);
+      }
+      return m;
     };
     const wideSegments = (geometry: THREE.BufferGeometry, material: LineMaterial) => new LineSegments2(new LineSegmentsGeometry().setPositions(geometry.getAttribute("position").array as Float32Array), material);
     /** Collaborators' highlights, by colour. */
@@ -601,7 +614,7 @@ export function Viewer(props: ViewerProps) {
           const ownHover = h.style === "hover" && h.indices.length === 1 && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, hovered());
           if (!(hoveredSelectedFace && ownHover)) highlightGroup.add(new THREE.Mesh(geometry, face));
           // A hover, of a face or of a feature's faces, is outlined with the hover's thin line, also over a selection.
-          if (h.style === "hover") {
+          if (h.style === "hover" && !h.ghost) {
             const edges = outline(geometry);
             highlightGroup.add(...[line.halo, line.core].map((material, i) => Object.assign(wideSegments(edges, material), { renderOrder: i })));
             edges.dispose();
@@ -610,8 +623,8 @@ export function Viewer(props: ViewerProps) {
         }
         else if (!(ringed && h.style === "hover" && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, hovered()))) {
           const ring = ringed && h.style === "accent" && same({ body: h.body, kind: h.kind, index: h.indices[0]! }, selected());
-          // Outermost first.
-          const layers = [...(ring ? [ringMaterials.halo, ringMaterials.line] : []), line.halo, line.core];
+          // Outermost first; a ghost's edges are a thin line alone.
+          const layers = h.ghost ? [ghostLine(h)] : [...(ring ? [ringMaterials.halo, ringMaterials.line] : []), line.halo, line.core];
           highlightGroup.add(...layers.map((material, i) => Object.assign(wideSegments(geometry, material), { renderOrder: i })));
           geometry.dispose();
         } else geometry.dispose();
@@ -958,7 +971,7 @@ export function Viewer(props: ViewerProps) {
       dotGeometry.dispose();
       pmrem.dispose();
       scene.environment?.dispose();
-      for (const m of [ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
+      for (const m of [...ghostLines.values(), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
     });
   });

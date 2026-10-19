@@ -81,6 +81,8 @@ export type WorkerRequest =
   | { type: "pick"; id: number; body: string; kind: "face" | "edge"; index: number }
   /** Body `body` of the last build, meshed, e.g. a feature's result past the timeline marker. */
   | { type: "result"; id: number; body: string }
+  /** The volume feature `feature` of the last build added or removed, meshed, for hovering a feature whose schema says `hover: "difference"`. */
+  | { type: "difference"; id: number; feature: string }
   /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
   | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
@@ -97,6 +99,7 @@ export type WorkerResponse =
   /** For each of the request's refs, the entities it names, by body. */
   | { type: "located"; id: number; found: { body: string; indices: number[] }[][] }
   | { type: "resultMeshed"; id: number; shape: MeshedShape | undefined }
+  | { type: "differenceMeshed"; id: number; shapes: MeshedShape[] }
   /** The trial build's error, or how many of its features are broken or failed. */
   | { type: "checked"; id: number; error: ModelError | undefined; problems: number }
   | { type: "requestFailed"; id: number; message: string };

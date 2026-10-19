@@ -5,7 +5,7 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
 import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
@@ -250,6 +250,17 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
   } else if (request.type === "result") {
     const result = bodies.get(request.body);
     post({ type: "resultMeshed", id: request.id, shape: result && meshBody(result) });
+  } else if (request.type === "difference") {
+    const entry = lastTrace.find((t) => t.name === request.feature);
+    const shapes = entry ? changedVolume(entry) : [];
+    post({
+      type: "differenceMeshed",
+      id: request.id,
+      shapes: shapes.map((shape, i) => {
+        const meshable = shape as unknown as { mesh(o: typeof MESH): MeshedShape["faces"]; meshEdges(o: typeof MESH): NonNullable<MeshedShape["edges"]> };
+        return { name: `${request.feature}:changed:${i}`, color: undefined, opacity: undefined, faces: meshable.mesh(MESH), edges: meshable.meshEdges(MESH), body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
+      }),
+    });
   } else if (request.type === "locate") {
     const shown = request.bodies.flatMap((name) => {
       const body = bodies.get(name);

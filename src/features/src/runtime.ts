@@ -9,7 +9,8 @@ import { body, chamfer, extrude, fillet, sketch } from "./features.ts";
 import { pick as pickRef, type Body, type TraceEntry } from "./feature.ts";
 import { owningFeatures, refForm, setFeaturePrinter, type Name, type Vec } from "./names.ts";
 import { Ref, resolve } from "./refs.ts";
-import { oc, type Kind } from "./oc.ts";
+import { cast, type AnyShape } from "replicad";
+import { oc, progress, subShapes, type Kind } from "./oc.ts";
 import { entities } from "./topo.ts";
 
 /** The built-in features by function name, for recognizing calls and rendering their forms. */
@@ -56,6 +57,29 @@ export interface RefData {
 export function pickData(b: Body, kind: Kind, index: number): RefData {
   const ref = pickRef(b, kind, index);
   return { kind: ref.kind, names: [...ref.names], ...(ref.near ? { near: ref.near } : {}) };
+}
+
+/**
+ * The volume a feature added to or removed from the bodies it consumed: what its results have and
+ * its inputs don't, and the other way round, i.e. a join's added and a cut's removed material. A
+ * feature without inputs made all of its results. For features whose schema says `hover: "difference"`.
+ */
+export function changedVolume(entry: TraceEntry): AnyShape[] {
+  if (!entry.inputs.length) return entry.results.map((b) => b.shape);
+  const o = oc();
+  const parts: AnyShape[] = [];
+  for (const result of entry.results)
+    for (const input of entry.inputs)
+      for (const [from, minus] of [
+        [result, input],
+        [input, result],
+      ] as const) {
+        const cut = new o.BRepAlgoAPI_Cut(from.topo.shape, minus.topo.shape, progress());
+        if (!cut.IsDone()) continue;
+        const shape = cut.Shape();
+        if (subShapes(shape, "face").length) parts.push(cast(shape));
+      }
+  return parts;
 }
 
 /**

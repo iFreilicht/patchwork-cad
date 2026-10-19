@@ -19,12 +19,21 @@ export interface FeatureSchema {
   /** A lucide icon name. */
   icon: string;
   params: Record<string, ParamSpec>;
+  /**
+   * What hovering the feature shows in an editor. `faces`: the faces it made or split, which suits a
+   * feature that changes a body near its faces, e.g. a fillet. `difference`: the volume it added to or
+   * removed from its input bodies, as a ghost, which suits one whose faces are mostly faces it split,
+   * e.g. a join extrusion. Every feature has to choose.
+   */
+  hover: "faces" | "difference";
 }
 
 export const schemas = {
   sketch: {
     label: "Sketch",
     icon: "PenLine",
+    // A sketch makes no faces; editors show its profile.
+    hover: "faces",
     params: {
       plane: { kind: "plane", label: "Plane" },
       profile: { kind: "profile", label: "Profile" },
@@ -34,6 +43,8 @@ export const schemas = {
   extrude: {
     label: "Extrude",
     icon: "ArrowUpFromLine",
+    // A join or cut splits many faces of its target; the volume shows what it did.
+    hover: "difference",
     params: {
       sketch: { kind: "sketch", label: "Sketch" },
       distance: { kind: "length", label: "Distance", optional: true, default: 10 },
@@ -45,6 +56,7 @@ export const schemas = {
   fillet: {
     label: "Fillet",
     icon: "SquareRoundCorner",
+    hover: "faces",
     params: {
       body: { kind: "body", label: "Body" },
       edges: { kind: "edges", label: "Edges", multi: true },
@@ -54,6 +66,7 @@ export const schemas = {
   chamfer: {
     label: "Chamfer",
     icon: "Slash",
+    hover: "faces",
     params: {
       body: { kind: "body", label: "Body" },
       edges: { kind: "edges", label: "Edges", multi: true },
@@ -63,6 +76,8 @@ export const schemas = {
   body: {
     label: "Body",
     icon: "Box",
+    // Its bodies are new: their faces are all it made.
+    hover: "faces",
     params: {
       source: { kind: "code", label: "Shapes" },
     },

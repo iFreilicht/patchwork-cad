@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import { createLocated } from "./locate.ts";
+import { createFeatureHighlights } from "./featureHighlights.ts";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
 import type { MeshedShape } from "../kernel/protocol.ts";
@@ -95,19 +96,8 @@ export function ContactToken(props: { contactUrl: string }) {
 export function createPeerHighlights(model: Model, shown: Accessor<MeshedShape[]>, peers: Accessor<PeerView[]>): Accessor<Highlight[]> {
   const found = createLocated(model, shown, () => peers().flatMap((p) => [p.state.hover, p.state.selected].flatMap((ref) => (ref ? [{ ref, color: p.color }] : []))));
   const located = () => found().flatMap(({ item, found }) => found.map(({ body, indices }) => ({ body, kind: item.ref.kind, indices, style: "peer" as const, color: item.color })));
-  const features = () =>
-    peers().flatMap(({ state, color }) =>
-      (state.features ?? []).flatMap((name) =>
-        shown().flatMap((s) => {
-          const owned = s.body ? s.features?.[name] : undefined;
-          if (!s.body || !owned) return [];
-          return [
-            { body: s.body, kind: "face" as const, indices: owned.faces, style: "peer" as const, color },
-            { body: s.body, kind: "edge" as const, indices: owned.edges, style: "peer" as const, color },
-          ];
-        }),
-      ),
-    );
+  const featureHighlights = createFeatureHighlights(model, shown);
+  const features = () => peers().flatMap(({ state, color }) => featureHighlights(state.features ?? [], "peer", color));
   return () => [...located(), ...features()];
 }
 

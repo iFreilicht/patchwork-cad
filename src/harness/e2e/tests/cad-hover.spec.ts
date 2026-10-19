@@ -27,6 +27,8 @@ interface Hook {
 /** The hover-style highlights of `kind`, e.g. the faces of a feature hovered in the timeline. */
 const hoverHighlight = (page: Page, kind: EntityKind) => viewer(page).evaluate((el, k) => (el as unknown as Hook).cadViewer.highlighted("hover").filter((e) => e.kind === k), kind);
 const count = async (page: Page, kind: EntityKind) => (await hoverHighlight(page, kind)).length;
+/** The bodies of the highlighted faces, each once. */
+const hoveredBodies = async (page: Page) => [...new Set((await hoverHighlight(page, "face")).map((e) => e.body))];
 
 /** Moves the mouse onto `e` and waits until the view hovers it; false if another entity is hovered there. */
 async function hover(page: Page, e: Entity): Promise<boolean> {
@@ -116,10 +118,11 @@ test("hovering a feature in the timeline or code highlights what it made, also p
   const { page } = a;
   await openM1(page);
 
-  // The notch's wall and the two pieces of the front face it split (owners.test.ts).
+  // An extrusion shows the volume it removed or added, as a ghost, not the faces it split (schema `hover: "difference"`).
   await timelineEntry(page, "notch").hover();
-  await expect.poll(() => count(page, "face")).toBe(3);
+  await expect.poll(() => hoveredBodies(page)).toEqual(["notch:changed:0"]);
   await expect.poll(() => count(page, "edge")).toBeGreaterThan(0);
+  // A fillet shows its faces (`hover: "faces"`).
   if (shots) await page.screenshot({ path: `${shots}/hover-3-feature.png` });
   await timelineEntry(page, "fillet1").hover();
   await expect.poll(() => count(page, "face")).toBe(1);
@@ -142,7 +145,7 @@ test("hovering a feature in the timeline or code highlights what it made, also p
   await page.keyboard.press("ArrowUp");
   await expect(timelineEntry(page, "notch")).toHaveAttribute("data-cross-hover", "true");
   await expect(timelineEntry(page, "fillet1")).not.toHaveAttribute("data-cross-hover", "true");
-  await expect.poll(() => count(page, "face")).toBe(3);
+  await expect.poll(() => hoveredBodies(page)).toEqual(["notch:changed:0"]);
   await page.locator(".cad-model__code .cm-line", { hasText: "const chamfer1" }).hover({ position: { x: 30, y: 5 } });
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-cross-hover", "true");
   await expect(timelineEntry(page, "notch")).not.toHaveAttribute("data-cross-hover", "true");
@@ -153,17 +156,17 @@ test("hovering a feature in the timeline or code highlights what it made, also p
   await expect.poll(() => count(page, "face")).toBe(0);
   await expect(page.locator('.cad-editor__entry[data-cross-hover="true"]')).toHaveCount(0);
 
-  // Rolled back before the notch, it is shown on its own result, which the view doesn't show.
+  // Rolled back before the notch, its ghost is the same: the volume doesn't depend on what the view shows.
   await marker(page).focus();
   for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowLeft");
   await expect(editorView(page)).toHaveAttribute("data-marker", "3");
   await expect(editorView(page)).toHaveAttribute("data-rolled-back", "true");
   await timelineEntry(page, "notch").hover();
-  await expect.poll(async () => (await hoverHighlight(page, "face")).map((e) => e.body)).toEqual(["notch", "notch", "notch"]);
+  await expect.poll(() => hoveredBodies(page)).toEqual(["notch:changed:0"]);
   if (shots) await page.screenshot({ path: `${shots}/hover-4-past-marker.png` });
-  // extrude1 is before the marker: on the shown body.
+  // extrude1 makes a new body: all of it, the block before the notch.
   await timelineEntry(page, "extrude1").hover();
-  await expect.poll(async () => (await hoverHighlight(page, "face")).map((e) => e.body)).toEqual(Array(6).fill("extrude1"));
+  await expect.poll(async () => (await hoverHighlight(page, "face")).map((e) => e.body)).toEqual(Array(6).fill("extrude1:changed:0"));
 });
 
 /** Two plates adopted with one body(), and a feature after them (research/11). */
@@ -218,7 +221,8 @@ test("a body() entry highlights all its bodies, and opening code highlights at i
   await expect(timelineEntry(page, "sketch1")).toHaveAttribute("data-cross-hover", "true");
   await expect.poll(bodies).toEqual([]);
   await page.keyboard.press("ArrowDown");
-  await expect.poll(async () => [...new Set(await bodies())]).toEqual(["extrude1"]);
+  // An extrusion: its volume, the new body.
+  await expect.poll(async () => [...new Set(await bodies())]).toEqual(["extrude1:changed:0"]);
 
   // "Edit code" in the context menu puts the cursor at the feature, too.
   await timelineEntry(page, "left").click({ button: "right" });
@@ -276,7 +280,7 @@ export default function main() {
   await hoverNamed(page, "face", "right.");
   await expect(timelineEntry(page, "right")).toHaveAttribute("data-cross-hover", "true");
   await expect(timelineEntry(page, "left")).not.toHaveAttribute("data-cross-hover", "true");
-  // Hovering the entry highlights the right body's six faces.
+  // Hovering the entry highlights the right body, a new extrusion, as its volume of six faces.
   await timelineEntry(page, "right").hover();
-  await expect.poll(async () => (await hoverHighlight(page, "face")).map((f) => f.body)).toEqual(Array(6).fill("right"));
+  await expect.poll(async () => (await hoverHighlight(page, "face")).map((f) => f.body)).toEqual(Array(6).fill("right:changed:0"));
 });

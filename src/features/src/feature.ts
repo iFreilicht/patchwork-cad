@@ -103,6 +103,8 @@ export interface TraceEntry {
   refs: RefDiagnostic[];
   /** Bodies visible before this feature ran (the rollback state for picking). */
   before: Body[];
+  /** The bodies it consumed, e.g. an extrusion's target (`inputs` of its definition). */
+  inputs: Body[];
   /** The feature's result, if it is a body; the first of several bodies. */
   result?: Body;
   /** All bodies the feature made, e.g. several adopted with `body()`. */
@@ -201,6 +203,8 @@ export interface FeatureDefinition<P extends Record<string, unknown>, R> {
   label: string;
   icon: string;
   params: { [K in keyof P]-?: ParamSpec };
+  /** What hovering it shows in an editor (`FeatureSchema.hover`); every feature has to choose. */
+  hover: "faces" | "difference";
   /** Bodies this call consumes; one of them is passed through when the feature fails in a lenient build. */
   inputs?(params: P): (Body | undefined)[];
   /** The result in a lenient build when the feature fails and has no input body to pass through. */
@@ -215,11 +219,12 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
     const count = (context.counts.get(def.type) ?? 0) + 1;
     context.counts.set(def.type, count);
     const name = meta.name ?? `${def.type}${meta.line !== undefined ? `@L${meta.line}` : ""}#${count}`;
-    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], results: [], after: [], ms: 0, namingMs: 0 };
+    const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], inputs: [], results: [], after: [], ms: 0, namingMs: 0 };
     if (meta.line !== undefined) entry.line = meta.line;
     if (meta.names) entry.names = meta.names;
     context.trace.push(entry);
     const inputs = (def.inputs?.(params) ?? []).filter((b): b is Body => b instanceof Body);
+    entry.inputs = inputs;
     const t0 = performance.now();
     const naming0 = namingTime.ms;
     const timed = () => {

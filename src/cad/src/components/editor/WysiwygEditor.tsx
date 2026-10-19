@@ -20,6 +20,7 @@ import { viewsOf } from "../viewDoc.ts";
 import { createComments } from "../comments.ts";
 import { CommentsPopover } from "../CommentsPopover.tsx";
 import { createEntityComments, DetachedButton } from "../entityComments.tsx";
+import { createFeatureHighlights } from "../featureHighlights.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -89,39 +90,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const references = (): Highlight[] =>
     rolledBack() && editor.pickTarget() ? (editor.open()?.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches, style: "accent" })) : [];
 
-  // A hovered feature that made nothing in the shown bodies, e.g. one past the marker, or whose faces later features removed, is shown on its own result (research/12):
-  // the body of that name, which owner names (ownersOf) are, too.
-  let resultCache = new Map<string, Promise<MeshedShape | undefined>>();
-  createEffect(() => {
-    model.last();
-    resultCache = new Map();
-  });
-  const [results, setResults] = createSignal<MeshedShape[]>([]);
-  /** Counts requests, so that only the latest hover's answer shows. */
-  let resultRequest = 0;
-  createEffect(() => {
-    const request = ++resultRequest;
-    const names = editor.hoveredFeatures().filter((name) => model.trace().some((t) => t.results.includes(name)) && !shown().some((s) => s.features?.[name]));
-    const requests = names.map((name) => {
-      if (!resultCache.has(name)) resultCache.set(name, model.engine.result(name).catch(() => undefined));
-      return resultCache.get(name)!;
-    });
-    void Promise.all(requests).then((found) => request === resultRequest && setResults(found.filter((s) => s !== undefined)));
-  });
-  /** What the features hovered in the timeline or code made: in the shown bodies, or else in their own results. */
-  const featureHighlight = (): Highlight[] =>
-    editor.hoveredFeatures().flatMap((name) => {
-      const inShown = shown().filter((s) => s.features?.[name]);
-      const sources = inShown.length ? inShown.map((s) => ({ s, own: false })) : results().filter((s) => s.features?.[name]).map((s) => ({ s, own: true }));
-      return sources.flatMap(({ s, own }) => {
-        const owned = s.features![name]!;
-        const base = { body: s.body ?? s.name, style: "hover" as const, ...(own ? { shape: s } : {}) };
-        return [
-          { ...base, kind: "face" as const, indices: owned.faces },
-          { ...base, kind: "edge" as const, indices: owned.edges },
-        ];
-      });
-    });
+  /** What the features hovered in the timeline or code made, by their schema's `hover`. */
+  const featureHighlights = createFeatureHighlights(model, shown);
+  const featureHighlight = (): Highlight[] => featureHighlights(editor.hoveredFeatures(), "hover");
 
   // Hovering a face or edge marks the features that made it in the timeline and code; the status bar names it, or the selected one.
   const hoverName = createEntityName(model, 100);

@@ -5,7 +5,7 @@ export type BuildResult =
   | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "checked" | "located" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -96,6 +96,12 @@ export class Engine {
     return answer.type === "resultMeshed" ? answer.shape : undefined;
   }
 
+  /** The volume feature `feature` of the last build added to or removed from its input bodies, meshed (see `changedVolume`). */
+  async difference(feature: string): Promise<MeshedShape[]> {
+    const answer = await this.#request({ type: "difference", id: this.#nextId++, feature });
+    return answer.type === "differenceMeshed" ? answer.shapes : [];
+  }
+
   /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
   async check(source: string): Promise<{ error: ModelError | undefined; problems: number }> {
     const answer = await this.#request({ type: "check", id: this.#nextId++, source });
@@ -126,7 +132,7 @@ export class Engine {
         this.#loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "checked" || message.type === "located" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "differenceMeshed" || message.type === "checked" || message.type === "located" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));
