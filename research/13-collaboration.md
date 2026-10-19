@@ -145,17 +145,22 @@ Both tools show collaborators ([`presenceSession.ts`](../src/cad/src/components/
 
 ### Comments
 
-`@comments` lives in the model document next to `source`. That keeps the model portable ([02](02-model-storage.md#design-goal-portable-models)): the module is `source` alone.
+Both tools show and start comments ([`comments.ts`](../src/cad/src/components/comments.ts), [`entityComments.tsx`](../src/cad/src/components/entityComments.tsx), the logic without the DOM in [`model/comments.ts`](../src/cad/src/model/comments.ts)); tests: [`comments.test.ts`](../src/cad/test/comments.test.ts), [`cad-comments.spec.ts`](../src/harness/e2e/tests/cad-comments.spec.ts) in Chromium, Firefox and WebKit, against Patchwork's own Comments panel.
 
-| Target | Ref | Works in the Comments panel |
-|---|---|---|
-| code | `sub("source", cursor(from, to))` | yes, as in any text document |
-| feature | the cursor range of its statement in `source` | yes; hovering the thread highlights its code, our editor maps it to the entry |
-| face, edge | the range of its owner's statement ([12](12-hover-highlighting.md#design)), plus the reference itself in an extra thread field, e.g. `"@cad": { entity: "edge(extrude1.end, notch.side.c)" }` | listed, but the `comment-thread` tool shows neither the entity nor a pin; our tools draw the pin and highlight the entity |
+- **Threads are Patchwork's**, under `@comments` in the model document next to `source`. That keeps the model portable ([02](02-model-storage.md#design-goal-portable-models)): the module is `source` alone. Patchwork's `comment-thread` tool renders every thread, in a popover; a thread started and dismissed without text is removed, as in Patchwork's text editor.
+- **Every target is a range in `source`**, because the panel hides anything else, so the panel lists every thread:
 
-- **Every target is a range in `source`** because the panel hides anything else. A comment on an entity that is not a range would need our own list of threads, or a change upstream.
-- **Our tools have to join the focus protocol:** write the selected feature's or entity's statement range to `selection`, so the panel brings its threads up, and highlight the entities of the threads in `highlight` and `selection`.
-- **Deleted targets:** Patchwork hides the thread; Google Docs, WordPress and Figma keep it and say so. A deleted feature in a CAD model is often undone or retyped, which collapses the range for good (see above), so we should store a fallback with the thread, the variable name and the quoted statement, as the timeline marker keeps `next` ([07](07-poc-modelling-ui.md#feature-identity-across-re-parses)), re-anchor when the name reappears, and otherwise list the thread as "Feature deleted". For a face or edge whose reference breaks, the thread shows the broken reference and the suggestion the feature library already makes ([03](03-topological-naming.md#recommendation)), and lets the user re-tag the entity as in Onshape.
+  | Target | Ref, and `"@cad"` on the thread | Started from | Shown as |
+  |---|---|---|---|
+  | code | `sub("source", cursor(from, to))` | a "Comment" button on the selection, ported from codemirror-base's `commentUI.ts` | marked code; a click opens its thread |
+  | feature, Custom Script | the range of its statement; `{ feature, statement }` | the comment button next to the selected entry's ⋯, or "Comment" in its context menu | the number of threads on the entry; the button opens them |
+  | face, edge | the range of the statement of the feature that made it, the first of its owners in the timeline ([12](12-hover-highlighting.md#design)); `{ feature, statement, entity, entityName }`, the reference as data and as code | a "Comment" button at the selected face or edge, in the editor and the viewer | a pin with the number of threads, where the worker resolves the reference (`locate`, as for presence), so it follows the face through rebuilds and rollbacks |
+
+  A thread belongs to the timeline entry its range starts in, so the threads on a face count on the feature that made it.
+- **The focus protocol:** the code pane's cursor, the selected timeline entry and the statement of the selected face's feature are Patchwork's focus `selection`, so the panel brings their threads up. Threads whose refs are in `selection` or `highlight`, e.g. clicked in the panel, are focused: their code is marked stronger and scrolled to, their entries are outlined and scrolled to, and their pins are outlined and their faces highlighted. The panel's overlap test is strict (`DocHandle.overlaps`), so a cursor at the very end of a commented range doesn't bring it up.
+- **Deleted targets:** a thread on a feature keeps its variable and statement. When its statement is deleted, the range collapses; once a feature of that name is in the timeline again, e.g. after an undo, which inserts the text anew, any client anchors the thread to it again, by assigning `refs[0]`, so that two clients doing it at once merge to one ref. Until then, and for a face or edge that even the reference's geometric suggestion doesn't find in the whole model (not while rolled back), the thread is listed under "Detached comments" at the bottom left of the 3D view, with what it was about ("Feature extrude2 deleted: const extrude2 = …", "Face not found: extrude2.end"); a thread on a face that is gone can be attached to the selected one, as in Onshape. Patchwork's panel hides detached threads; threads on the whole document, from the panel's "Add comment", are not detached.
+- **Off outside Patchwork:** without a contact and the focus provider, the tools show no comments.
+- **Limits:** the panel lists the threads of the document open in the center, so not those of a saved view's model, which the viewer shows; the panel's `comment-thread` shows neither the face nor a pin; resolved threads are hidden in our tools, as in the panel, and are reopened there.
 
 ## Open
 
