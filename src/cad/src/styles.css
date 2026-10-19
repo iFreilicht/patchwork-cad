@@ -18,6 +18,10 @@
     /* Behind code and timeline entries whose features made what the 3D view hovers: pale, so that text keeps its contrast. */
     --cad-model-cross-hover: color-mix(in oklch, var(--studio-primary, #2f6fde), var(--editor-fill, white) 70%);
     --cad-model-warning: var(--studio-warning, #c77700);
+    /* Commented code, as Patchwork's text editor marks it: the secondary colour over the editor fill, stronger when focused. */
+    --cad-model-comment: color-mix(in oklch, var(--studio-secondary, #e0a800), var(--editor-fill, white) 82%);
+    --cad-model-comment-focused: color-mix(in oklch, var(--studio-secondary, #e0a800), var(--editor-fill, white) 56%);
+    --cad-model-comment-line: var(--editor-secondary-text, #a07800);
     --cad-model-panel: var(--editor-fill-offset-10, #f0f0f0);
     --cad-model-family-code: var(--editor-family-code, ui-monospace, monospace);
     --cad-model-family: var(--editor-family-sans, system-ui, sans-serif);
@@ -824,4 +828,54 @@
   z-index: 150;
   white-space: nowrap;
   user-select: none;
+}
+
+/* Comments (research/13-collaboration.md, "Comments"). */
+
+.cad-model__comment {
+  border-bottom: 2px solid var(--cad-model-comment-line);
+  background: var(--cad-model-comment);
+}
+
+.cad-model__comment--focused {
+  background: var(--cad-model-comment-focused);
+}
+
+/* The popover's own element is the tooltip. */
+.cad-model .cm-tooltip:has(.cad-model__comment-button),
+.cad-model .cm-tooltip.cad-model__comment-popover {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cad-model__comment-button {
+  padding: 4px 9px;
+  border: none;
+  border-radius: 6px;
+  background: var(--cad-model-accent);
+  color: white;
+  font: inherit;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The thread tool draws its own card. */
+.cad-model__comment-popover {
+  width: min(360px, 92vw);
+  margin-top: 6px;
+  font-family: var(--cad-model-family);
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.25));
+}
+
+.cad-model__comment-popover .comments-thread-card {
+  border: 0;
+  box-shadow: none;
+}
+
+.cad-model__comment-popover .comment-draft-textarea {
+  box-sizing: border-box;
+  max-width: 100%;
 }

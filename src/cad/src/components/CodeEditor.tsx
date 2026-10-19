@@ -10,6 +10,8 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { CadModelDoc } from "../types.ts";
 import { contactToken } from "./presence.ts";
+import { codeComments, setCommentMarks } from "./codeComments.ts";
+import type { CommentStore } from "./comments.ts";
 
 /** A collaborator's selection in the code, as automerge cursors into `source`. */
 export interface PeerSelection {
@@ -246,6 +248,8 @@ export function CodeEditor(props: {
   onSelection?: (selection: { anchor: string; head: string } | undefined) => void;
   /** Collaborators' selections. */
   peerSelections?: PeerSelection[];
+  /** The model's comment threads; the pane marks their code and offers to comment on a selection. */
+  comments?: CommentStore | undefined;
 }) {
   let hovered: number | undefined;
   const hover = (offset: number | undefined) => {
@@ -275,6 +279,7 @@ export function CodeEditor(props: {
     props.onSelection?.(cursors);
   };
   const patchwork = new Compartment();
+  const commenting = new Compartment();
   /** Whether the `focus` span is marked. */
   let marked = false;
   /** Removes the mark, after the event or update that asked for it: nothing here may interfere with CodeMirror's input handling. */
@@ -319,10 +324,16 @@ export function CodeEditor(props: {
       EditorView.updateListener.of((update) => {
         if (update.selectionSet || update.focusChanged || update.docChanged) reportCursor(update.view.hasFocus ? update.state.selection.main.head : undefined);
         if (update.selectionSet || update.focusChanged) reportSelection(update.view.hasFocus ? update.state.selection.main : undefined);
+        // The Comments panel brings up the threads at the selection.
+        if ((update.selectionSet || update.focusChanged) && update.view.hasFocus) {
+          const { from, to } = update.state.selection.main;
+          queueMicrotask(() => props.comments?.select({ start: from, end: to }));
+        }
         // Others' cursors resolve against the document, which a change may have moved them in.
         if (update.docChanged) queueMicrotask(resolvePeers);
       }),
       peerSelections,
+      commenting.of([]),
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
     ],
@@ -385,6 +396,39 @@ export function CodeEditor(props: {
   createEffect(() => {
     props.peerSelections;
     queueMicrotask(resolvePeers);
+  });
+  createEffect(() => {
+    const comments = props.comments;
+    const extension = comments?.enabled()
+      ? codeComments({
+          create: (from, to) => comments.create({ start: from, end: to }),
+          threadAt: (pos) => {
+            const hit = comments.threads().find((t) => t.range && t.range.start <= pos && pos <= t.range.end);
+            return hit && { url: comments.urlOf(hit.id), from: hit.range!.start };
+          },
+          watchClose: comments.watchClose,
+          onClose: comments.discardEmptyDraft,
+        })
+      : [];
+    dispatchSoon({ effects: commenting.reconfigure(extension) });
+  });
+  createEffect(() => {
+    const focused = props.comments?.focused() ?? new Set<string>();
+    const threads = (props.comments?.threads() ?? []).filter((t) => t.range);
+    dispatchSoon({ effects: setCommentMarks.of(threads.map((t) => ({ from: t.range!.start, to: t.range!.end, focused: focused.has(t.id) }))) });
+  });
+  // A thread focused elsewhere, e.g. in the Comments panel, scrolls into view.
+  let shownFocus = "";
+  createEffect(() => {
+    const focused = props.comments?.focused() ?? new Set<string>();
+    const ranges = (props.comments?.threads() ?? []).flatMap((t) => (t.range && focused.has(t.id) ? [t.range] : []));
+    const key = [...focused].sort().join();
+    if (key === shownFocus) return;
+    shownFocus = key;
+    if (!ranges.length) return;
+    // Its start, so that a long statement doesn't scroll its line's start out of view.
+    const from = Math.min(...ranges.map((r) => r.start), view.state.doc.length);
+    dispatchSoon({ effects: EditorView.scrollIntoView(from, { y: "nearest" }) });
   });
   onCleanup(() => {
     hover(undefined);

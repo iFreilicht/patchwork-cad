@@ -54,6 +54,37 @@ export interface CadModelDoc {
   title: string;
   /** The model: a plain ES module that imports replicad or the feature library and default-exports a function returning shapes. */
   source: string;
+  /** Patchwork's comment threads (research/13-collaboration.md, "Comments"). */
+  "@comments"?: { threads: CommentThread[] };
+}
+
+/** A comment thread in Patchwork's format (patchwork-base codemirror-base/src/lib/extensions/comments.ts), with our anchor. */
+export interface CommentThread {
+  id: string;
+  /** Sub-handle URLs of what it is about; ours are cursor ranges into `source`. */
+  refs: AutomergeUrl[];
+  isResolved: boolean;
+  comments: Comment[];
+  "@patchwork"?: { type: string; title?: string };
+  "@cad"?: CadAnchor;
+}
+
+export interface Comment {
+  id: string;
+  content?: string;
+  draftContent?: string;
+  contactUrl: AutomergeUrl;
+  timestamp: number;
+}
+
+/** What a thread on a feature, face or edge is about, beyond its range in `source`. */
+export interface CadAnchor {
+  /** The commented feature's variable, to anchor the thread again when its statement is deleted and comes back. */
+  feature?: string;
+  /** The statement when the thread was made, shown when it is gone. */
+  statement?: string;
+  /** A face or edge, as a pick names it. */
+  entity?: RefData;
 }
 
 /** A view of a model: which model, seen with which camera (research/10-view-state.md). */

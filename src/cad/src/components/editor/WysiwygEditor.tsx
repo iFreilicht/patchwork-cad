@@ -17,6 +17,7 @@ import { createUiState } from "../uiState.ts";
 import { createPeerHighlights, joinPresence, peerMarkers } from "../presence.ts";
 import type { TimelinePeer } from "./Timeline.tsx";
 import { viewsOf } from "../viewDoc.ts";
+import { createComments } from "../comments.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -35,6 +36,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const ui = createUiState(props.element, props.handle.url);
   const editor = createEditor(props.handle, model, ui);
   const presence = joinPresence(props.element, props.handle, "editor");
+  const comments = createComments(props.element, props.handle);
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -234,6 +236,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             crossHover={viewHoveredCode()}
             onSelection={(code) => presence.set({ code })}
             peerSelections={presence.peers().flatMap((p) => (p.state.code ? [{ key: p.key, color: p.color, contactUrl: p.contactUrl, ...p.state.code }] : []))}
+            comments={comments}
           />
         </div>
       </Show>
