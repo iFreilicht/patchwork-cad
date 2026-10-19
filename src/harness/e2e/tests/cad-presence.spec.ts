@@ -102,6 +102,8 @@ test("two editors show each other's selections, pointers, timeline and code", as
   await b.keyboard.press("End");
 
   // The marker has the colour of A's name: the hashed one, and then the one A chooses.
+  // The name token shows once A's contact document has loaded, which takes long under load.
+  await expect(b.locator(".cad-editor__peer-name .contact-cursor-token")).toBeVisible({ timeout: 60_000 });
   const colours = () => Promise.all([b.locator(".cad-editor__peer-marker"), b.locator(".cad-editor__peer-name .contact-cursor-token")].map((l) => l.evaluate((el) => getComputedStyle(el).backgroundColor)));
   await expect.poll(colours, { timeout: 15_000 }).toEqual([expect.stringMatching(/^rgb\(/), expect.stringMatching(/^rgb\(/)]);
   const [hashed, name] = await colours();
