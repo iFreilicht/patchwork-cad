@@ -707,13 +707,20 @@
 }
 
 /*
- * The ⋯ button of the selected entry's context menu (research/11): visible, not only on hover, and
- * floating above the entry, right-aligned with it, so that it shifts nothing in the timeline.
+ * The selected entry's buttons: its comments and the ⋯ button of its context menu (research/11);
+ * visible, not only on hover, and floating above the entry, right-aligned with it, so that they
+ * shift nothing in the timeline.
  */
-.cad-editor__more {
+.cad-editor__actions {
   position: absolute;
   z-index: 2;
   translate: -100% calc(-100% - 3px);
+  display: flex;
+  gap: 3px;
+}
+
+.cad-editor__more,
+.cad-editor__comment {
   min-width: 24px;
   min-height: 18px;
   padding: 0 4px;
@@ -878,4 +885,62 @@
 .cad-model__comment-popover .comment-draft-textarea {
   box-sizing: border-box;
   max-width: 100%;
+}
+
+/* A timeline entry's threads: their count on a speech bubble, and an outline while one is focused, e.g. in the Comments panel. */
+.cad-editor__entry[data-comments]::after {
+  content: attr(data-comments);
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px 8px 8px 2px;
+  background: var(--cad-model-comment-focused);
+  border: 1px solid var(--cad-model-comment-line);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.cad-editor__entry[data-comment-focused="true"] {
+  outline: 2px solid var(--cad-model-comment-line);
+  outline-offset: 1px;
+}
+
+.cad-editor__comment {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+}
+
+.cad-model__comments-popover {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, 92vw);
+  max-height: 60vh;
+  overflow: auto;
+  margin: 4px 0;
+  padding: 6px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 6px;
+  background: var(--cad-model-bg);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+}
+
+.cad-model__comments-popover .comment-draft-textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.cad-model__comment-new {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }

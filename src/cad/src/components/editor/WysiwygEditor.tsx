@@ -240,7 +240,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           />
         </div>
       </Show>
-      <Timeline editor={editor} onOpenCode={openCode} peers={timelinePeers()} />
+      <Timeline editor={editor} onOpenCode={openCode} peers={timelinePeers()} comments={comments} />
       <StatusBar model={model} notice={editor.notice()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );

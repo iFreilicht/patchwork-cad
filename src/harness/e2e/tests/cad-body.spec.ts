@@ -159,7 +159,7 @@ test("the context menu: keyboard, ⋯ button, rename, unwrap and delete", async 
   await page.keyboard.press("Shift+F10");
   await expect(menu(page)).toBeVisible();
   await expect(menu(page).getByRole("menuitem").first()).toBeFocused();
-  await expect(menu(page).getByRole("menuitem")).toHaveText(["Edit", "Edit code", "Roll back to here", "Rename", "Delete"]);
+  await expect(menu(page).getByRole("menuitem")).toHaveText(["Edit", "Edit code", "Roll back to here", "Comment", "Rename", "Delete"]);
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await expect(menu(page).getByRole("menuitem", { name: "Roll back to here" })).toBeFocused();

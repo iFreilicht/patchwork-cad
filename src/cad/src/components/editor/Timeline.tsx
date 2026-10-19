@@ -1,10 +1,13 @@
-import { createEffect, createSignal, For, Index, Match, onCleanup, Show, Switch, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Index, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js";
 import { schemas } from "@patchwork-cad/features/schema";
 import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import type { Entry, FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { Editor } from "./state.ts";
 import { ContactToken } from "../presence.ts";
+import type { CommentStore } from "../comments.ts";
+import { CommentsPopover } from "../CommentsPopover.tsx";
+import { entryOf } from "../../model/comments.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
@@ -112,7 +115,7 @@ interface Drop {
  * them within the range their dependencies allow ("Reordering"); hovering, dragging or opening one
  * marks what it depends on and what depends on it.
  */
-export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[] }) {
+export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined }) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -172,6 +175,28 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   /** Runs an action of the editor and shows why it didn't happen, if it didn't. */
   const report = (action: Promise<string | undefined>) => void action.then(editor.setNotice);
 
+  // Comments (research/13-collaboration.md, "Comments"): an entry's threads are those whose range starts in its code.
+  const comments = () => (props.comments?.enabled() ? props.comments : undefined);
+  const threadsByEntry = createMemo(() => {
+    const byEntry = new Map<number, string[]>();
+    const entries = editor.timeline().entries;
+    for (const t of props.comments?.threads() ?? []) {
+      const index = t.range && entryOf(entries, t.range);
+      if (index !== undefined) byEntry.set(index, [...(byEntry.get(index) ?? []), t.id]);
+    }
+    return byEntry;
+  });
+  const commentFocused = (index: number) => (threadsByEntry().get(index) ?? []).some((id) => props.comments?.focused().has(id));
+  /** The open comments popover: whose, where it was asked for, and whether it starts a thread. */
+  const [commenting, setCommenting] = createSignal<{ index: number; x: number; y: number; createNow: boolean }>();
+  const openComments = (index: number, x: number, y: number, createNow = false) => setCommenting({ index, x, y, createNow: createNow || !threadsByEntry().get(index)?.length });
+  /** Starts a thread on an entry's statement, keeping its name and text for when the statement is deleted. */
+  const createThread = (index: number) => {
+    const e = entryAt(index);
+    if (!e) return undefined;
+    return comments()?.create(e.span, { ...(e.kind === "feature" ? { feature: e.name } : {}), statement: editor.source().slice(e.span.start, e.span.end) });
+  };
+
   /** The context menu's actions for an entry: secondary ones; selecting the entry opens it. */
   const menuItems = (index: number): MenuItem[] => {
     const e = entryAt(index);
@@ -180,6 +205,8 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     if (e.kind === "feature" && e.type !== "body") items.push({ label: "Edit", run: () => editor.openFeature(e) });
     items.push({ label: "Edit code", run: () => props.onOpenCode(e.span) });
     items.push({ label: "Roll back to here", run: () => editor.setMarker(index + 1) });
+    const m = menu();
+    if (comments() && m) items.push({ label: "Comment", run: () => void openComments(index, m.x, m.y, true) });
     if (e.kind === "feature") for (const name of e.names) items.push({ label: e.names.length > 1 ? `Rename ${name}` : "Rename", run: () => startRename(index, name) });
     if (e.kind === "script") items.push({ label: "Wrap in body()", run: () => report(editor.wrap(index)) });
     if (e.kind === "feature" && e.type === "body") items.push({ label: "Unwrap", run: () => report(editor.unwrap(index)) });
@@ -274,6 +301,13 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     },
     get "data-dragging"() {
       return editor.dragging() === index ? "true" : undefined;
+    },
+    get "data-comments"() {
+      const n = threadsByEntry().get(index)?.length;
+      return n ? String(n) : undefined;
+    },
+    get "data-comment-focused"() {
+      return commentFocused(index) ? "true" : undefined;
     },
     onPointerEnter: () => editor.setHovered(index),
     onPointerLeave: () => editor.setHovered(undefined),
@@ -398,6 +432,24 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     nav?.removeEventListener("scroll", place);
   });
 
+  // The selected entry is Patchwork's focus selection, so that the Comments panel brings up its threads.
+  createEffect(
+    on(active, (index) => {
+      const e = index === undefined ? undefined : entryAt(index);
+      if (e) comments()?.select(e.span);
+    }),
+  );
+  // An entry whose thread is focused elsewhere, e.g. in the Comments panel, scrolls into view.
+  createEffect(
+    on(
+      () => props.comments?.focused(),
+      () => {
+        const index = editor.timeline().entries.findIndex((_, i) => commentFocused(i));
+        if (index >= 0) entryElement(index)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      },
+    ),
+  );
+
   return (
     <div class="cad-editor__timeline-wrap" ref={wrap}>
       <nav
@@ -474,13 +526,27 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
         )}
       </Show>
       <Show when={moreAt() !== undefined && active() !== undefined && active()! < count()}>
+        <span class="cad-editor__actions" style={{ left: `${moreAt()!.right}px`, top: `${moreAt()!.top}px` }}>
+          <Show when={comments()}>
+            <button
+              class="cad-editor__comment"
+              aria-label={`Comments on ${entryLabel(active()!)}`}
+              title={`Comments on ${entryLabel(active()!)}`}
+              onClick={(event) => {
+                const r = event.currentTarget.getBoundingClientRect();
+                openComments(active()!, r.left, r.top);
+              }}
+            >
+              <CommentIcon />
+              {threadsByEntry().get(active()!)?.length || ""}
+            </button>
+          </Show>
         <button
           class="cad-editor__more"
           aria-label={`Actions for ${entryLabel(active()!)}`}
           aria-haspopup="menu"
           aria-expanded={menu()?.index === active()}
           title={`Actions for ${entryLabel(active()!)}`}
-          style={{ left: `${moreAt()!.right}px`, top: `${moreAt()!.top}px` }}
           onClick={(event) => {
             const r = event.currentTarget.getBoundingClientRect();
             openMenu(active()!, r.left, r.top);
@@ -488,6 +554,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
         >
           ⋯
         </button>
+        </span>
       </Show>
       <Index each={props.peers ?? []}>
         {(peer) => (
@@ -501,9 +568,34 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
         )}
       </Index>
       <Show when={menu()}>{(m) => <Menu items={menuItems(m().index)} label={`Actions for ${entryLabel(m().index)}`} at={m()} wrap={wrap} onClose={closeMenu} />}</Show>
+      <Show when={comments() && commenting()}>
+        {(c) => (
+          <CommentsPopover
+            comments={props.comments!}
+            threads={threadsByEntry().get(c().index) ?? []}
+            create={() => createThread(c().index)}
+            createNow={c().createNow}
+            label={`Comments on ${entryLabel(c().index)}`}
+            at={c()}
+            wrap={wrap}
+            above
+            onClose={() => setCommenting(undefined)}
+          />
+        )}
+      </Show>
     </div>
   );
 }
+
+/** A speech bubble, as on Patchwork's Comment button (codemirror-base commentUI.ts). */
+const CommentIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+      fill="currentColor"
+    />
+  </svg>
+);
 
 interface MenuItem {
   label: string;

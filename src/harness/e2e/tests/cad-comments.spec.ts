@@ -10,6 +10,8 @@ import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
+const shots = process.env["CAD_SHOTS"];
+
 /** A opens M1 in the editor; B opens the same model, in `tool` if given, and keeps the context sidebar if `panel`. */
 async function twoUsers(users: (n: number) => Promise<{ page: Page }[]>, tool?: string, panel = false) {
   const [a, b] = await users(2);
@@ -105,4 +107,48 @@ test("Patchwork's Comments panel lists threads on the model and focuses them in 
   // Moving the cursor into the other commented code brings that thread up in the panel.
   await codeLine(b, "const extrude1").click({ position: { x: 60, y: 4 } });
   await expect(focused).toHaveText(/const extrude1/);
+});
+
+/** Selects a timeline entry and opens its comments. */
+async function openEntryComments(page: Page, name: string): Promise<Locator> {
+  await timelineEntry(page, name).click();
+  await page.locator(".cad-editor__comment").click();
+  return page.getByRole("dialog", { name: `Comments on ${name}` });
+}
+
+test("a comment on a timeline entry shows on it for the other user, also in the Comments panel", async ({ users }) => {
+  const { a, b } = await twoUsers(users, undefined, true);
+  const popover = await openEntryComments(a, "extrude1");
+  await writeComment(popover, "Make it 25");
+  await expect(popover.locator(".comment-content")).toHaveText("Make it 25");
+  await a.keyboard.press("Escape");
+  await expect(popover).toHaveCount(0);
+  await expect(timelineEntry(a, "extrude1")).toHaveAttribute("data-comments", "1");
+
+  await expect(timelineEntry(b, "extrude1")).toHaveAttribute("data-comments", "1", { timeout: 15_000 });
+  const theirs = await openEntryComments(b, "extrude1");
+  await expect(theirs.locator(".comment-content")).toHaveText("Make it 25");
+  if (shots) await b.screenshot({ path: `${shots}/comments-1-timeline.png` });
+  await b.keyboard.press("Escape");
+
+  // Its statement is a range in the code, so Patchwork's panel lists it; focusing it there outlines the entry.
+  await timelineEntry(b, "sketch1").click();
+  await expect(timelineEntry(b, "extrude1")).not.toHaveAttribute("data-comment-focused", "true");
+  const panel = await commentsPanel(b);
+  await panel.locator(".comments-thread .comment-content", { hasText: "Make it 25" }).click();
+  await expect(timelineEntry(b, "extrude1")).toHaveAttribute("data-comment-focused", "true");
+  if (shots) await b.screenshot({ path: `${shots}/comments-2-panel.png` });
+});
+
+test("the context menu starts a comment; a second one on the same entry adds to its threads", async ({ users }) => {
+  const { a } = await twoUsers(users);
+  await timelineEntry(a, "notch").click({ button: "right" });
+  await a.getByRole("menuitem", { name: "Comment" }).click();
+  const popover = a.getByRole("dialog", { name: "Comments on notch" });
+  await writeComment(popover, "Through all?");
+  await popover.getByRole("button", { name: "New comment" }).click();
+  await writeComment(popover, "Or 10 mm deep");
+  await expect(popover.locator(".comment-content")).toHaveText(["Through all?", "Or 10 mm deep"]);
+  await a.keyboard.press("Escape");
+  await expect(timelineEntry(a, "notch")).toHaveAttribute("data-comments", "2");
 });
