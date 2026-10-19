@@ -1,6 +1,10 @@
 import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape } from "../kernel/protocol.ts";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
@@ -124,6 +128,9 @@ const HOME_DIRECTION = new THREE.Vector3(0.55, -0.85, 0.65).normalize();
 /** How long the camera turns to a ViewCube region. */
 const TURN_MS = 300;
 
+/** Relative luminance (WCAG), from a colour's linear components. */
+const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+
 /** Reads a theme colour that the stylesheet derived for this tool. */
 function themeColor(element: Element, name: string): THREE.Color {
   const value = getComputedStyle(element).getPropertyValue(name).trim();
@@ -231,32 +238,52 @@ export function Viewer(props: ViewerProps) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     const controls = new OrbitControls<THREE.PerspectiveCamera | THREE.OrthographicCamera>(camera, renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
-    const light = new THREE.DirectionalLight(0xffffff, 1.5);
-    light.position.set(1, -1, 2);
-    scene.add(light);
-
-    const faceMaterial = new THREE.MeshStandardMaterial({ color: themeColor(container, "--cad-model-shape"), roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 });
-    const lineMaterial = new THREE.LineBasicMaterial({ color: themeColor(container, "--cad-model-edge") });
+    // Bodies in a grey between the background and the text, lit from the camera, so that the shading
+    // follows it and edges in the text colour read on every face (research/14-edge-contrast.md).
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.9));
+    const light = new THREE.DirectionalLight(0xffffff, 2.4);
+    scene.add(light, light.target);
+    /** Places the key light above and to the left of the camera. */
+    const placeLight = () => {
+      light.position.copy(camera.position).add(new THREE.Vector3(-0.4, 0.7, 0).applyQuaternion(camera.quaternion).multiplyScalar(distance()));
+      light.target.position.copy(controls.target);
+    };
+    // Soft reflections, which move with the camera too.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.35;
+    const faceMaterial = new THREE.MeshStandardMaterial({ color: themeColor(container, "--cad-model-shape"), roughness: 0.45, metalness: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 });
+    // Lines in CSS pixels, as WebGL's own lines are never wider than one; wider with `prefers-contrast: more`.
+    const contrast = matchMedia("(prefers-contrast: more)").matches ? 1.5 : 1;
+    const wideLine = (color: THREE.Color, width: number, overlay: boolean) =>
+      new LineMaterial({ color: color.getHex(), linewidth: width * contrast, ...(overlay ? { transparent: true, depthTest: false, depthWrite: false } : {}) });
+    const edgeMaterial = wideLine(themeColor(container, "--cad-model-edge"), 1.5, false);
+    // Picking raycasts 1 px lines, which aren't drawn.
+    const lineMaterial = new THREE.LineBasicMaterial({ visible: false });
     const accent = themeColor(container, "--cad-model-accent");
-    // Thin lines need the contrast of the text variant, e.g. a sketch outline against a light background.
+    // Lines need the contrast of the text variant, e.g. a sketch outline against a light background.
     const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
     const overlayMaterial = new THREE.LineBasicMaterial({ color: accentLine, depthTest: false });
     // Highlights show through the model, so that they also show what other faces hide.
     const highlightFace = (color: THREE.Color, opacity: number) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
-    const highlightLine = (color: THREE.Color) => new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false });
-    const highlightMaterials: Record<Exclude<HighlightStyle, "peer">, { face: THREE.Material; line: THREE.Material }> = {
-      hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine) },
-      accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine) },
+    // A highlighted edge is a line over a wider halo in the theme's dark or light ink, whichever
+    // contrasts with it, so one of the two contrasts with whatever is behind it.
+    const inks = [themeColor(container, "--cad-model-bg"), themeColor(container, "--cad-model-fg")].sort((a, b) => luminance(a) - luminance(b));
+    const highlightLine = (color: THREE.Color, width: number) => ({ core: wideLine(color, width, true), halo: wideLine(luminance(color) > 0.35 ? inks[0]! : inks[1]!, width + 3.5, true) });
+    // Hovered and selected edges have one colour; a hover is thinner.
+    const highlightMaterials: Record<Exclude<HighlightStyle, "peer">, { face: THREE.Material; line: { core: LineMaterial; halo: LineMaterial } }> = {
+      hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine, 2) },
+      accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine, 3.5) },
     };
+    const wideSegments = (geometry: THREE.BufferGeometry, material: LineMaterial) => new LineSegments2(new LineSegmentsGeometry().setPositions(geometry.getAttribute("position").array as Float32Array), material);
     /** Collaborators' highlights, by colour. */
-    const peerMaterials = new Map<string, { face: THREE.Material; line: THREE.Material; marker: THREE.Material }>();
+    const peerMaterials = new Map<string, { face: THREE.Material; line: { core: LineMaterial; halo: LineMaterial }; marker: THREE.Material }>();
     const peerMaterial = (css: string) => {
       let m = peerMaterials.get(css);
       if (!m) {
         const color = new THREE.Color().setStyle(css, THREE.SRGBColorSpace);
-        m = { face: highlightFace(color, 0.3), line: highlightLine(color), marker: new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }) };
+        m = { face: highlightFace(color, 0.3), line: highlightLine(color, 3), marker: new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }) };
         peerMaterials.set(css, m);
       }
       return m;
@@ -456,6 +483,7 @@ export function Viewer(props: ViewerProps) {
     const tick = (now: number) => {
       step(now);
       controls.update();
+      placeLight();
       placeMarkers();
       placeFloating();
       renderer.render(scene, camera);
@@ -501,6 +529,7 @@ export function Viewer(props: ViewerProps) {
           syncLines(geometry, shape.edges);
           lines = new THREE.LineSegments(geometry, lineMaterial);
           group.add(lines);
+          group.add(wideSegments(geometry, edgeMaterial));
         }
         return { shape, id: shape.body ?? `#${i}`, mesh, lines };
       });
@@ -538,7 +567,11 @@ export function Viewer(props: ViewerProps) {
         const geometry = subset(source, indexOf, h.indices);
         temporary?.dispose();
         const { face, line } = materialsOf(h);
-        highlightGroup.add(h.kind === "face" ? new THREE.Mesh(geometry, face) : new THREE.LineSegments(geometry, line));
+        if (h.kind === "face") highlightGroup.add(new THREE.Mesh(geometry, face));
+        else {
+          highlightGroup.add(Object.assign(wideSegments(geometry, line.halo), { renderOrder: 0 }), Object.assign(wideSegments(geometry, line.core), { renderOrder: 1 }));
+          geometry.dispose();
+        }
       }
     });
 
@@ -880,7 +913,9 @@ export function Viewer(props: ViewerProps) {
       dispose([...group.children, ...overlayGroup.children, ...highlightGroup.children]);
       for (const m of markers.values()) m.label.remove();
       dotGeometry.dispose();
-      for (const m of [faceMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line, m.marker])]) m.dispose();
+      pmrem.dispose();
+      scene.environment?.dispose();
+      for (const m of [faceMaterial, edgeMaterial, lineMaterial, overlayMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
     });
   });

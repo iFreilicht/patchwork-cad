@@ -8,9 +8,9 @@
     --cad-model-muted: var(--editor-line-offset-50, #888);
     --cad-model-danger: var(--studio-danger, red);
     --cad-model-error-line: color-mix(in oklch, var(--studio-danger, red), var(--editor-fill, white) 85%);
-    /* Bodies stay white in every theme; the lighting shades them. */
-    --cad-model-shape: white;
-    --cad-model-edge: var(--editor-line, black);
+    /* Bodies in a grey between the background and the text, and their edges in the text colour, which read against each other in every theme (research/14). */
+    --cad-model-shape: color-mix(in oklch, var(--editor-fill, white), var(--editor-line, black) 30%);
+    --cad-model-edge: color-mix(in oklch, var(--editor-line, black), var(--editor-fill, white) 15%);
     --cad-model-accent: var(--studio-primary, #2f6fde);
     /* The accent for text and borders: the primary color mixed towards the text color, so it stays readable. */
     --cad-model-accent-text: var(--editor-primary-text, #2f6fde);
@@ -625,8 +625,12 @@
   filter: grayscale(1);
 }
 
-/* The hovered, dragged or open entry stands out most; what it relates to gets a coloured border. */
-.cad-editor__entry[data-focused="true"],
+/* The hovered, dragged or open entry stands out most, the open one thicker, as a selected edge; what it relates to gets a coloured border. */
+.cad-editor__entry[data-focused="true"] {
+  outline: 1px solid var(--cad-model-fg);
+  outline-offset: 1px;
+}
+
 .cad-editor__entry[aria-pressed="true"] {
   outline: 2px solid var(--cad-model-fg);
   outline-offset: 1px;

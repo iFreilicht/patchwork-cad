@@ -265,8 +265,8 @@ test("highlights keep their colours past the marker, and the focused entry stand
       return result;
     });
 
-  // The hovered and the open entry get the thick outline, and the open one no extra border.
-  expect(await style(timelineEntry(page, "notch"))).toMatchObject({ outline: "solid 2px" });
+  // The hovered entry gets a thin outline, the open one a thick outline and no extra border, as hovered and selected edges.
+  expect(await style(timelineEntry(page, "notch"))).toMatchObject({ outline: "solid 1px" });
   const open = await style(timelineEntry(page, "chamfer1"));
   expect(open.outline).toBe("solid 2px");
   // chamfer1 is past the marker and depends on notch through a reference: a solid border in the dependent colour, not greyed.
