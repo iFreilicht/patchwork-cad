@@ -101,6 +101,18 @@ test("two editors show each other's selections, pointers, timeline and code", as
   await expect(b.locator(".cad-editor__peer-marker")).toHaveAttribute("data-position", String(end));
   await b.keyboard.press("End");
 
+  // The marker has the colour of A's name: the hashed one, and then the one A chooses.
+  const colours = () => Promise.all([b.locator(".cad-editor__peer-marker"), b.locator(".cad-editor__peer-name .contact-cursor-token")].map((l) => l.evaluate((el) => getComputedStyle(el).backgroundColor)));
+  await expect.poll(colours, { timeout: 15_000 }).toEqual([expect.stringMatching(/^rgb\(/), expect.stringMatching(/^rgb\(/)]);
+  const [hashed, name] = await colours();
+  expect(name).toBe(hashed);
+  await a.evaluate(async () => {
+    const url = Object.values((window as unknown as { cadPresence(): Record<string, { contactUrl: string }> }).cadPresence())[0]!.contactUrl;
+    const contact = await (globalThis as unknown as { repo: { find(url: string): Promise<{ change(f: (d: { color?: string }) => void): void }> } }).repo.find(url);
+    contact.change((d) => (d.color = "rgb(200, 100, 0)"));
+  });
+  await expect.poll(colours, { timeout: 15_000 }).toEqual(["rgb(200, 100, 0)", "rgb(200, 100, 0)"]);
+
   // A's caret shows in B's code pane while A's code pane has the focus.
   await openCode(a);
   await openCode(b);

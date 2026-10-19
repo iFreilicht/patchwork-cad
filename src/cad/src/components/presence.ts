@@ -36,7 +36,8 @@ export function joinPresence(element: HTMLElement, handle: DocHandle<unknown>, t
     session = created;
   }
   const view = session.join({ tool });
-  const [peers, setPeers] = createSignal<PeerView[]>(session.peers());
+  const [sessionPeers, setPeers] = createSignal<PeerView[]>(session.peers());
+  const peers = createMemo(() => sessionPeers().map((p) => ({ ...p, color: contactColor(p.contactUrl)() ?? p.color })));
   const s = session;
   const off = s.onChange(() => setPeers(s.peers()));
   const unsubscribe = subscribe<AutomergeUrl>(element, { type: "patchwork:contact" }, (url) => url && s.setContact(url));
@@ -46,6 +47,27 @@ export function joinPresence(element: HTMLElement, handle: DocHandle<unknown>, t
     view.leave();
   });
   return { set: view.set, peers };
+}
+
+/** Contacts' own presence colours, which they choose in Patchwork's account picker, by contact; shared by all sessions in this tab. */
+const contactColors = new Map<AutomergeUrl, Accessor<string | undefined>>();
+
+/** The colour a contact chose, as Patchwork's `contact-cursor` shows it; `undefined` until loaded or if they chose none. */
+function contactColor(contactUrl: AutomergeUrl): Accessor<string | undefined> {
+  let color = contactColors.get(contactUrl);
+  if (!color) {
+    const [get, set] = createSignal<string>();
+    contactColors.set(contactUrl, (color = get));
+    globalThis.repo?.find<{ color?: string }>(contactUrl).then(
+      (contact) => {
+        const update = () => set(contact.doc()?.color);
+        contact.on("change", update);
+        update();
+      },
+      () => undefined,
+    );
+  }
+  return color;
 }
 
 /** A contact's name on a pill in their colour: Patchwork's `contact-cursor` tool, as on its text carets. */

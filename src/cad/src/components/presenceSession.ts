@@ -183,8 +183,8 @@ export class PresenceSession {
   };
 }
 
-// Patchwork's presence colours (patchwork-base account/src/user-colors.ts), so that a user has the
-// same colour here as on Patchwork's carets, which hash the contact URL the same way.
+// Patchwork's presence colours (patchwork-base account/src/user-colors.ts), hashed from the contact URL
+// as on Patchwork's text carets, for contacts who chose no colour (see `contactColor` in presence.ts).
 const PALETTE = [
   "hsl(200, 70%, 50%)",
   "hsl(10, 75%, 58%)",

@@ -781,6 +781,11 @@
   white-space: nowrap;
 }
 
+/* Patchwork's `contact-cursor` draws the contact's chosen colour, else this one. */
+.cad-model__contact {
+  --contact-cursor-color: var(--peer-color);
+}
+
 .cad-editor__entry[data-peer="true"] {
   box-shadow: 0 0 0 2px var(--peer-color);
 }
