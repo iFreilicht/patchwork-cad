@@ -15,12 +15,13 @@
 | [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
 | [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence and comments done (editor and viewer). Open: presence provider upstream, follow mode, Patchwork release with patchwork-system#451 (presence lost in 0.8.4, #450), comments outside Patchwork |
 | [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights; hover a thin line, selection a thick one, both together on a hovered selection). Open: the grey per mode |
+| [15-visibility.md](15-visibility.md) | Hiding and showing results through the return; how other CAD tools present visibility | Prior art done; UI to decide |
 
 ## Not started
 
 - Add a "Move" feature that creates a copy of a body at a different location. Translating by a set number of mm in X, Y or Z axis is enough for now.
 - Allow disabling tangent selection of edges when creating fillet or chamfer
-- Allow toggling visibility of sketches
+- Toggle the visibility of any feature's result ([15](15-visibility.md#ux-ideas))
 - A build timer and an abort button in the status bar, in place of the fixed 10 s kernel timeout ([08](08-module-evaluation.md#conclusions)), for very complex models
 - Per-feature caching ([review, risk 4](01-basic-idea-and-literature.md#problems-and-risks)); not needed for PoC 2's parts ([07](07-poc-modelling-ui.md#rebuild-performance))
 - Licensing obligations for the OCCT wasm build (risk 6)
