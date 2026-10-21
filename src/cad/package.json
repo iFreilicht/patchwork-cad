@@ -29,7 +29,7 @@
     "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.14",
-    "@inkandswitch/patchwork-bootloader": "0.8.1",
+    "@inkandswitch/patchwork-bootloader": "0.8.4",
     "@inkandswitch/patchwork-plugins": "1.2.6",
     "@inkandswitch/patchwork-providers": "0.5.3",
     "@types/node": "24.19.2",

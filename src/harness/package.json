@@ -9,7 +9,7 @@
     "dev": "node dev.ts"
   },
   "dependencies": {
-    "@inkandswitch/patchwork": "0.8.4",
+    "@inkandswitch/patchwork": "0.8.6",
     "@inkandswitch/patchwork-pkg-base": "0.0.72"
   },
   "devDependencies": {
