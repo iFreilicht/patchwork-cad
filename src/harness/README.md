@@ -7,7 +7,7 @@ Real browsers (Chromium, Firefox, WebKit) drive a local Patchwork site against a
 ```sh
 nix develop
 pnpm install
-pnpm test:e2e                      # builds the site and the CAD tool, then runs every browser
+pnpm test:e2e                      # builds the site, the CAD tool and research/16's tldraw tool, then runs every browser
 pnpm test:e2e --project=firefox    # arguments go to `playwright test`
 CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure cad-pushwork   # timings for research/06
 CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timings for research/07

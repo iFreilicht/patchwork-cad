@@ -1,13 +1,14 @@
 import { createEffect, onCleanup } from "solid-js";
 import { EditorView, Decoration, GutterMarker, WidgetType, gutter, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, type DecorationSet } from "@codemirror/view";
 import { Compartment, EditorState, Prec, RangeSet, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, defaultHighlightStyle, indentUnit, syntaxHighlighting } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
 import { automergeSyncPlugin } from "@automerge/automerge-codemirror";
 import { getRegistry, type PluginDescription } from "@inkandswitch/patchwork-plugins";
 import type { DocHandle } from "@automerge/automerge-repo";
-import { getCursor, getCursorPosition } from "@automerge/automerge";
+import { getCursor, getCursorPosition, type Patch } from "@automerge/automerge";
+import { markUndoBoundaries, type UndoManager } from "@patchwork-cad/undo";
 import type { CadModelDoc } from "../types.ts";
 import { contactToken } from "./presence.ts";
 import { codeComments, setCommentMarks } from "./codeComments.ts";
@@ -226,6 +227,8 @@ async function patchworkExtensions(): Promise<Extension[]> {
 
 export function CodeEditor(props: {
   handle: DocHandle<CadModelDoc>;
+  /** The document's undo history: after an undo or redo, the cursor goes to what changed, as with CodeMirror's own history. */
+  undo?: UndoManager<CadModelDoc>;
   errorLine: number | undefined;
   /**
    * A source span to mark, e.g. the timeline entry whose code was asked for: the editor takes the
@@ -297,11 +300,16 @@ export function CodeEditor(props: {
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightActiveLine(),
-      history(),
+      // No history(): the document's undo history (`undo`) covers the code and the GUI edits alike;
+      // this ends its steps where CodeMirror's history would. Before the sync plugin writes the change.
+      EditorState.transactionExtender.of((tr) => {
+        if (props.undo) markUndoBoundaries(props.undo, tr);
+        return null;
+      }),
       bracketMatching(),
       indentUnit.of("  "),
       EditorState.tabSize.of(2),
-      keymap.of([indentWithTab, ...historyKeymap, ...defaultKeymap]),
+      keymap.of([indentWithTab, ...defaultKeymap]),
       javascript(),
       patchwork.of([]),
       // Only applies when no theme provides a highlighter, e.g. outside Patchwork.
@@ -430,7 +438,18 @@ export function CodeEditor(props: {
     const from = Math.min(...ranges.map((r) => r.start), view.state.doc.length);
     dispatchSoon({ effects: EditorView.scrollIntoView(from, { y: "nearest" }) });
   });
+  const toChange = (patches: Patch[]) => {
+    let at: number | undefined;
+    for (const p of patches) {
+      if (p.path[0] !== "source" || typeof p.path[1] !== "number") continue;
+      at = p.path[1] + (p.action === "splice" ? p.value.length : 0);
+    }
+    // After the sync plugin has applied the same patches.
+    if (at !== undefined && view.hasFocus) queueMicrotask(() => !disposed && view.dispatch({ selection: { anchor: Math.min(at, view.state.doc.length) }, scrollIntoView: true }));
+  };
+  const offApplied = props.undo?.onApplied(toChange);
   onCleanup(() => {
+    offApplied?.();
     hover(undefined);
     reportCursor(undefined);
     reportSelection(undefined);

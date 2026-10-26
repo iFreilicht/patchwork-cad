@@ -16,6 +16,7 @@
 | [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence and comments done (editor and viewer). Open: presence provider upstream, follow mode, presence in the tiling frame, comments outside Patchwork |
 | [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights; hover a thin line, selection a thick one, both together on a hovered selection). Open: the grey per mode |
 | [15-visibility.md](15-visibility.md) | Hiding and showing results through the return; how other CAD tools present visibility | Prior art done; UI to decide |
+| [16-undo-redo.md](16-undo-redo.md) | Undo as the document's history, per tab, for every tool; undo runs as steps; inverting Automerge changes | Prototype done ([src/undo](../src/undo/), used by the CAD editor; CodeMirror and tldraw compared). Open: restoring selections, showing undos that don't change the geometry, steps across documents, conflict policy, upstreaming |
 
 ## Not started
 

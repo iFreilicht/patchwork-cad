@@ -1,0 +1,25 @@
+{
+  "name": "@patchwork-cad/undo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "bench": "node bench.ts"
+  },
+  "peerDependencies": {
+    "@automerge/automerge": "3.4.1"
+  },
+  "devDependencies": {
+    "@automerge/automerge": "3.4.1",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/state": "6.7.6",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}

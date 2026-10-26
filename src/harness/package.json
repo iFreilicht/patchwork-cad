@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build site",
-    "test:e2e": "pnpm build && pnpm --filter patchwork-cad build && playwright test -c e2e/playwright.config.ts",
+    "test:e2e": "pnpm build && pnpm --filter patchwork-cad --filter undo-tldraw-experiment build && playwright test -c e2e/playwright.config.ts",
     "typecheck": "tsc --noEmit",
     "dev": "node dev.ts"
   },

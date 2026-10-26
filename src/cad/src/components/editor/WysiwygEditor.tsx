@@ -1,5 +1,6 @@
-import { createEffect, createSignal, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
+import { bindUndo } from "@patchwork-cad/undo";
 import type { MeshedShape, ShownSketch } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import { ownersOf, type Entry, type FeatureEntry } from "../../model/timeline.ts";
@@ -40,6 +41,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const editor = createEditor(props.handle, model, ui);
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
+  // Comments and Patchwork's metadata (`@…`) aren't undone (research/16-undo-redo.md).
+  const undo = bindUndo(props.element, props.handle, { ignore: (path) => String(path[0]).startsWith("@") });
+  onCleanup(undo.unbind);
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -232,6 +236,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         <div class="cad-editor__code">
           <CodeEditor
             handle={props.handle}
+            undo={undo.manager}
             errorLine={model.error()?.line}
             focus={codeFocus()}
             onFocusDone={() => setCodeFocus(undefined)}

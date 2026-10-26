@@ -1,8 +1,10 @@
 packages:
   - research/08-module-evaluation/experiment
+  - research/16-undo-redo/tldraw
   - src/cad
   - src/features
   - src/harness
+  - src/undo
 allowBuilds:
   cbor-extract: true
   esbuild: true
