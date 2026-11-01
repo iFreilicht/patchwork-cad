@@ -1,6 +1,6 @@
 # Undo and Redo
 
-Can undo and redo be one feature of Patchwork, for every tool, instead of each editor's own? Automerge already records who changed what, so an undo can be a new change that reverts one tab's earlier changes and leaves everyone else's alone. Prototype: [src/undo](../src/undo/), used by the CAD editor and a tldraw tool.
+Can undo and redo be one feature of Patchwork, for every tool, instead of each editor's own? Automerge already records who changed what, so an undo can be a new change that reverts one tab's earlier changes and leaves everyone else's alone. Prototype: [src/undo](../src/undo/), used by the CAD editor and a tldraw tool. Proposed for Patchwork in [patchwork-system#469](https://github.com/inkandswitch/patchwork-system/pull/469) (draft, see [What Patchwork would need](#what-patchwork-would-need)).
 
 AM = [`@automerge/automerge` 3.4.1](../node_modules/.pnpm/@automerge+automerge@3.4.1/node_modules/@automerge/automerge/dist), the version we bundle; PB = the vendored [patchwork-base](../.claude/skills/writing-patchwork-tools/reference/patchwork-base).
 
@@ -74,8 +74,10 @@ In the CAD editor, a step can change the code without changing the geometry, e.g
 
 ## What Patchwork would need
 
+[patchwork-system#469](https://github.com/inkandswitch/patchwork-system/pull/469) proposes this as a provider ("add a provider and API that enables tool authors to support undo/redo actions with minimal effort"), a draft to "talk about the general idea and API first". It covers the points below and differs from the prototype where noted: the history belongs to a realm (the JS context a tool runs in, usually a tab, also an iframe or worker) and survives reloads, rebuilt from the document because each change's `author` is the signer's verifying key; tools call `undoFor(element, handle)`; and it adds helpers for ProseMirror. Its open topics include that the author value is shared by all tabs of a browser profile.
+
 - **One history per document and tab, shared by all tools on it** ([`undoManagerFor`](../src/undo/src/keys.ts)), so that the CAD editor's code pane and timeline, or two panes on one document, undo together.
-- **One keyboard binding for the page** ([`bindUndo`](../src/undo/src/keys.ts)): Mod+Z, Mod+Shift+Z, Mod+Y outside macOS, caught before any tool, for the document of the focused tool or else the tool used last (a 3D view takes no focus). Form fields keep the browser's undo of their text.
+- **One keyboard binding for the page** ([`bindUndo`](../src/undo/src/keys.ts)): Mod+Z, Mod+Shift+Z, Mod+Y outside macOS, caught before any tool, for the document of the focused tool or else the tool used last (a 3D view takes no focus). Form fields keep the browser's undo of their text; in the proposal, fields that show document content opt in with `data-patchwork-undo`.
 - **A small API for tools,** e.g. through a provider like `patchwork:focus`: `checkpoint()` where a step ends, `onApplied(patches)` to move the selection to what changed (Loro's `onPush`/`onPop` store cursors with each step for that), and paths that are not undoable (`@comments`, `@patchwork`). Tools drop their own history, as the CAD editor's code pane did.
 - **Handles at the document's root.** The manager needs the whole document (`getActorId`, change history); a sub-handle's `doc()` is "the value at the handle's path". A draft swap (`scopeReplaced`) resets the history, as PB's tools do today.
 
