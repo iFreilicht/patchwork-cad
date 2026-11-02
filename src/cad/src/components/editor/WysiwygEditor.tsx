@@ -308,6 +308,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
           onPick={pick}
           hoverHighlight={!editor.pickingVersion()}
+          pickable={editor.boundBody() === undefined ? undefined : (body) => body === editor.boundBody()}
           onHover={onHover}
           onSelect={onSelect}
           onPointer={(pointer) => presence.set({ pointer })}

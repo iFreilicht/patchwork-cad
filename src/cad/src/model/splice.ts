@@ -8,7 +8,7 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
 import { FEATURES_MODULE, type Analysis, type FeatureCall, type Prop, type Span } from "./analyze.ts";
-import { graph, inputOf as consumedInput, type Graph } from "./deps.ts";
+import { graph, inputOf as consumedInput, type Graph, type Use } from "./deps.ts";
 import type { FeatureEntry, Timeline } from "./timeline.ts";
 
 export interface Edit {
@@ -377,6 +377,39 @@ export function setChainMode(source: string, analysis: Analysis, tl: Timeline, i
   if (returned) edits.push(...setReturned(returned, mode === "join" ? returned.names.filter((n) => n !== own) : returned.names.includes(own) ? returned.names : [...returned.names, own]));
   else if (mode === "branch") edits.push(...addToReturn(source, analysis, own));
   return edits;
+}
+
+/**
+ * Moves feature `index` from the body it works on to `next`, as if it had been inserted on `next`
+ * (research/15, "Availability"): the later features of its old chain that it joined work on its old
+ * body again, which comes back into the result if nothing uses it any more; on `next`, it joins the
+ * chain as an insertion does, so the later features and the return that used `next` use its result.
+ * Whether it branched off its old chain doesn't carry over. Empty if its body isn't a variable it consumes.
+ */
+export function rebody(analysis: Analysis, tl: Timeline, index: number, next: string): Edit[] {
+  const g = graph(analysis, tl);
+  const n = tl.entries.length;
+  const input = consumedInput(g, index);
+  const own = g.declares[index]?.[0];
+  if (!input || !own || input.name === next) return [];
+  const previous = input.name;
+  const branches = chainMode(g, index) === "branch";
+  const later = (u: Use) => u.owner > index && u.owner < n && (u.role === "consume" || u.role === "tool");
+  const names = g.uses.map((u) => {
+    if (u === input) return next;
+    if (u.name === own && later(u)) return previous;
+    if (u.name === next && later(u)) return own;
+    return u.name;
+  });
+  // The return is rewritten as a whole: a name may come into it.
+  const edits = renames(g, names.map((name, k) => (g.uses[k]!.owner >= n ? g.uses[k]!.name : name)), undefined);
+  const returned = returnedNames(analysis);
+  if (!returned) return edits;
+  // Its result stood in the return for its old body, unless it branched off it; it stands for `next` now.
+  let result = returned.names.map((name) => (name === own && !branches ? previous : name === next ? own : name)).filter((name, i, all) => all.indexOf(name) === i);
+  const usedLater = (name: string) => g.uses.some((u, k) => names[k] === name && u.owner < n && u.owner !== index && (u.role === "consume" || u.role === "tool"));
+  if (!result.includes(previous) && !usedLater(previous)) result = [...result, previous];
+  return [...edits, ...setReturned(returned, result)];
 }
 
 /**

@@ -7,7 +7,7 @@
 import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
-import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
+import { schemas, type FeatureType, type ParamSpec } from "@patchwork-cad/features/schema";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
 import { allowedRange, canMove, graph, inputOf, paramRole, relations, type Graph, type Relation } from "../../model/deps.ts";
 import {
@@ -25,6 +25,7 @@ import {
   moveEntry,
   removeElement,
   removeFromReturn,
+  rebody,
   resketch,
   retarget,
   retool,
@@ -85,6 +86,11 @@ export interface Editor {
   deleteOpen(): void;
   /** Fills the pick target with the picked entity's reference, or with its body's variable. */
   pick(entity: Entity): Promise<void>;
+  /**
+   * While faces or edges are picked that decide the open feature's body, and it has some already:
+   * that body, whose entities alone can be picked (research/15, "Availability").
+   */
+  boundBody: Accessor<string | undefined>;
   /** Fills a body or sketch pick target with a version, by its variable; a list gains or loses it. Resolves to why not. */
   pickVersion(name: string): string | undefined;
   /** Whether a version can fill the current body or sketch pick target: one of the right kind before the open feature. */
@@ -199,6 +205,10 @@ const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => 
 const RETURN = "return";
 
 const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** The body parameter of feature `type` that the faces or edges of parameter `param` decide (`from`), if any. */
+export const derivedBody = (type: string, param: string): string | undefined =>
+  Object.entries((schemas as Record<string, { params: Record<string, ParamSpec> }>)[type]?.params ?? {}).find(([, spec]) => spec.kind === "body" && spec.from === param)?.[0];
 
 /** A label of an entry for messages. */
 const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.names.join(", ") : `the Custom Script at lines ${entry.lines.join("–")}`);
@@ -321,6 +331,14 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     apply(handle, deleteFeature(text, a, fresh));
   };
 
+  const boundBody = () => {
+    const target = pickTarget();
+    const entry = open();
+    if (!target?.multi || (target.kind !== "face" && target.kind !== "edge") || !entry) return undefined;
+    if (!derivedBody(entry.type, target.param) || elements(entry.call, target.param).length === 0) return undefined;
+    // The body it got in the last build, which picks name: its variable may be another's, e.g. one a Custom Script reassigns.
+    return entry.trace?.inputs[0];
+  };
   const pick = async (entity: Entity) => {
     const target = pickTarget();
     if (!target) return;
@@ -329,6 +347,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       if (why) throw new Error(why);
       return;
     }
+    const bound = boundBody();
+    if (bound !== undefined && bound !== entity.body) throw new Error(`${open()?.name ?? "The feature"} works on ${bound}`);
     const { code } = await model.engine.pick(entity.body, entity.kind, entity.index);
     const bodyIsVariable = model.trace().some((t) => t.variable && t.result === entity.body);
     editOpen((call, a, text) => {
@@ -337,10 +357,15 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
         const existing = elements(call, target.param).findIndex((s) => text.slice(s.start, s.end) === code);
         edits.push(...(existing >= 0 ? removeElement(call, target.param, existing) : appendElement(call, target.param, code)));
       } else edits.push(...setProp(call, target.param, code));
-      // The feature works on the body the user picked from.
-      const bodyParam = call.type === "sketch" || call.type === "fillet" || call.type === "chamfer" ? "body" : undefined;
+      // The feature works on the body the user picked from, as if it had been inserted on it.
+      const bodyParam = derivedBody(call.type, target.param);
       const currentBody = call.props?.find((p) => p.key === bodyParam);
-      if (bodyParam && bodyIsVariable && (!currentBody || text.slice(currentBody.value.start, currentBody.value.end) !== entity.body)) edits.push(...setProp(call, bodyParam, entity.body));
+      if (bodyParam && bodyIsVariable && (!currentBody || text.slice(currentBody.value.start, currentBody.value.end) !== entity.body)) {
+        const fresh = timeline(text, a, []);
+        const index = fresh.entries.findIndex((e) => e.kind === "feature" && e.name === open()?.name);
+        const moved = currentBody && index >= 0 ? rebody(a, fresh, index, entity.body) : [];
+        edits.push(...(moved.length ? moved : setProp(call, bodyParam, entity.body)));
+      }
       return edits;
     });
     if (!target.multi) setPickTarget(undefined);
@@ -710,6 +735,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     insert,
     deleteOpen,
     pick,
+    boundBody,
     pickVersion,
     pickable,
     pickingVersion,

@@ -6,7 +6,12 @@
 export type ParamSpec =
   | { kind: "length" | "number"; label: string; optional?: boolean; default?: number }
   | { kind: "choice"; options: readonly string[]; label: string; optional?: boolean; default?: string }
-  | { kind: "sketch" | "body" | "profile"; label: string; optional?: boolean }
+  | { kind: "sketch" | "profile"; label: string; optional?: boolean }
+  /**
+   * A body. `from`: the faces or edges that decide it, e.g. a fillet's `edges`. An editor then
+   * doesn't offer it as a field: picking them picks their body, and one body per feature.
+   */
+  | { kind: "body"; label: string; optional?: boolean; from?: string }
   /** An array of bodies, e.g. a combine's tools. */
   | { kind: "bodies"; label: string; optional?: boolean }
   /** Face or edge references; `multi`: an array of references. */
@@ -39,7 +44,7 @@ export const schemas = {
     params: {
       plane: { kind: "plane", label: "Plane" },
       profile: { kind: "profile", label: "Profile" },
-      body: { kind: "body", label: "Body of the face", optional: true },
+      body: { kind: "body", label: "Body of the face", optional: true, from: "plane" },
     },
   },
   extrude: {
@@ -60,7 +65,7 @@ export const schemas = {
     icon: "SquareRoundCorner",
     hover: "faces",
     params: {
-      body: { kind: "body", label: "Body" },
+      body: { kind: "body", label: "Body", from: "edges" },
       edges: { kind: "edges", label: "Edges", multi: true },
       radius: { kind: "length", label: "Radius" },
     },
@@ -70,7 +75,7 @@ export const schemas = {
     icon: "Slash",
     hover: "faces",
     params: {
-      body: { kind: "body", label: "Body" },
+      body: { kind: "body", label: "Body", from: "edges" },
       edges: { kind: "edges", label: "Edges", multi: true },
       distance: { kind: "length", label: "Distance" },
     },
@@ -89,7 +94,7 @@ export const schemas = {
   move: {
     label: "Move",
     icon: "Move",
-    // A copy: its body is all it made, and its faces keep the names of the body it copies.
+    // A copy: its body is all it made.
     hover: "difference",
     params: {
       body: { kind: "body", label: "Body" },

@@ -3,7 +3,7 @@
  * hovers and collaborators' highlights on a copy stay on the copy and don't reach the original.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cadView, createModel, docPathWith, editorView, entities, hideSidebars, modelSource, pickNear, setModelSource, timelineEntry, toolbarButton, type Entity } from "../cad.ts";
+import { CAD_MODULES, cadView, createModel, dialog, docPathWith, editorView, entities, hideSidebars, isVisible, modelSource, pickNear, setModelSource, timelineEntry, toolbarButton, type Entity } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -107,4 +107,51 @@ test("renaming the copied feature to a property of bodies reaches it through of(
   await rename("end", "plate");
   await expect.poll(() => modelSource(page)).toContain("edges: [edge(move1.plate.end, move1.plate.side.right)]");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
+});
+
+test("the edges decide a chamfer's body, one per feature, until they are removed; a sketch's face decides its body", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await open(page);
+  const on = () => dialog(page).locator(".cad-editor__on code");
+  const faded = () => viewer(page).getAttribute("data-faded");
+
+  await toolbarButton(page, "Chamfer").click();
+  // No body field: the dialog says which body, and the picks decide it.
+  await expect(dialog(page).locator('.cad-editor__field[data-param="body"]')).toHaveCount(0);
+  await expect(on()).toHaveText("move1");
+  expect(await faded()).toBe("");
+  await pickNear(page, "edge", [60, 20, 8], "extrude1");
+  await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: extrude1, edges: \[edge\(extrude1\.\S+, extrude1\.\S+\)\]/);
+  await expect(on()).toHaveText("extrude1");
+  // As if it had been inserted on extrude1: move1, which it was inserted on, is back in the result, and extrude1 isn't, beside it.
+  expect(await returned(page)).toBe("[chamfer1, move1]");
+  // Now only extrude1's edges can be picked: the copy fades and takes no clicks.
+  await expect.poll(faded).toBe("move1");
+  const copyEdges = (await entities(page, "edge")).filter((e) => e.body === "move1");
+  expect(copyEdges.length).toBeGreaterThan(0);
+  for (const e of copyEdges) expect(await isVisible(page, e)).toBe(false);
+  if (shots) await page.screenshot({ path: `${shots}/copies-bound.png` });
+  // Without edges, it is free again.
+  await pickNear(page, "edge", [60, 20, 8], "extrude1");
+  await expect.poll(faded).toBe("");
+  await pickNear(page, "edge", [60, 20, 38], "move1");
+  await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: move1, edges: \[edge\(move1\.extrude1\.\S+, move1\.extrude1\.\S+\)\]/);
+  await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
+  expect(await returned(page)).toBe("[extrude1, chamfer1]");
+  await dialog(page).getByRole("button", { name: "Done selecting" }).click();
+
+  // A sketch on a face works on that face's body; picking another face moves it there.
+  await toolbarButton(page, "Sketch").click();
+  await expect(dialog(page).locator('.cad-editor__field[data-param="body"]')).toHaveCount(0);
+  await expect(on()).toHaveCount(0);
+  await dialog(page).locator('.cad-editor__field[data-param="plane"]').getByRole("button", { name: "Select faces" }).click();
+  await pickNear(page, "face", [30, 20, 8], "extrude1");
+  await expect.poll(() => modelSource(page)).toMatch(/sketch\(\{ plane: extrude1\.end, .*body: extrude1 \}\)/);
+  await expect(on()).toHaveText("extrude1");
+  await dialog(page).locator('.cad-editor__field[data-param="plane"]').getByRole("button", { name: "Select faces" }).click();
+  await pickNear(page, "face", [30, 20, 38], "chamfer1");
+  await expect.poll(() => modelSource(page)).toMatch(/sketch\(\{ plane: move1\.extrude1\.end, .*body: chamfer1 \}\)/);
+  await expect(on()).toHaveText("chamfer1");
 });

@@ -393,9 +393,34 @@ function Field(props: FieldProps): JSX.Element {
 
 /**
  * Each type's parameters as one stable array: `For` keys its items by reference, and new arrays on
- * every build or remote edit would recreate the inputs, throwing away what the user is typing.
+ * every build or remote edit would recreate the inputs, throwing away what the user is typing. A
+ * body that its faces or edges decide (`from`) isn't a field: picking them picks it.
  */
-const PARAMS = Object.fromEntries(Object.entries(schemas).map(([type, schema]) => [type, Object.entries(schema.params) as [string, ParamSpec][]]));
+const PARAMS = Object.fromEntries(Object.entries(schemas).map(([type, schema]) => [type, (Object.entries(schema.params) as [string, ParamSpec][]).filter(([, spec]) => spec.kind !== "body" || !spec.from)]));
+
+/**
+ * The body the open feature works on, where its faces or edges decide it (research/15,
+ * "Availability"): shown, not edited. Hovering it hovers its lineage, as its row in the browser does.
+ */
+function OnBody(props: { editor: Editor; entry: FeatureEntry }) {
+  const param = () => Object.entries(schemaOf(props.entry.type).params as Record<string, ParamSpec>).find(([, spec]) => spec.kind === "body" && spec.from)?.[0];
+  const value = () => {
+    const key = param();
+    return key ? textOf(props.editor.source(), propNode(props.entry.call, key)) : "";
+  };
+  const lane = () => props.editor.lanes()?.laneOf.get(value());
+  const hover = (on: boolean) => {
+    const l = lane();
+    props.editor.setHoveredLane(on && l !== undefined ? { lane: l, version: value() } : undefined);
+  };
+  return (
+    <Show when={value()}>
+      <span class="cad-editor__on" data-param={param()} title={`Works on ${value()}`} onPointerEnter={() => hover(true)} onPointerLeave={() => hover(false)}>
+        on <code>{value()}</code>
+      </span>
+    </Show>
+  );
+}
 
 /** The form of the open feature, generated from its schema (research/02, "Feature types"). */
 export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEditCode: () => void }) {
@@ -416,7 +441,7 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
   return (
     <section class="cad-editor__dialog" aria-label={`${schema().label} ${props.entry.name}`} data-feature={props.entry.name}>
       <header class="cad-editor__dialog-header">
-        <strong>{schema().label}</strong> <code>{props.entry.name}</code>
+        <strong>{schema().label}</strong> <code>{props.entry.name}</code> <OnBody editor={props.editor} entry={props.entry} />
         <button class="cad-editor__link" aria-label="close" onClick={() => props.editor.openFeature(undefined)}>
           ×
         </button>

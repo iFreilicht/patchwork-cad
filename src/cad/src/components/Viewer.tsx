@@ -73,6 +73,8 @@ export interface ViewerProps {
   onPick?: (entity: Entity) => void;
   /** Whether the hovered face or edge is highlighted; not while whole bodies are picked, which the caller highlights. */
   hoverHighlight?: boolean;
+  /** While picking, the bodies whose entities can be picked; the others fade, and neither hover nor take clicks. All, if not given. */
+  pickable?: ((body: string) => boolean) | undefined;
   /** The hovered face or edge of a feature-library body, if any. */
   onHover?: (entity: Entity | undefined) => void;
   /**
@@ -160,6 +162,8 @@ interface Rendered {
   id: string;
   mesh: THREE.Mesh;
   lines: THREE.LineSegments | undefined;
+  /** The drawn edges, of which `lines` is the invisible pick target. */
+  wide: LineSegments2 | undefined;
 }
 
 /** The entity of each mesh group: the body's index of it, or the group's own index for shapes that aren't bodies. */
@@ -288,6 +292,9 @@ export function Viewer(props: ViewerProps) {
     const wideLine = (color: THREE.Color, width: number, overlay: boolean) =>
       new LineMaterial({ color: color.getHex(), linewidth: width * contrast, ...(overlay ? { transparent: true, depthTest: false, depthWrite: false } : {}) });
     const edgeMaterial = wideLine(themeColor(container, "--cad-model-edge"), 1.5, false);
+    // Bodies that can't be picked: see-through, so that they don't hide the ones that can.
+    const fadedFaceMaterial = new THREE.MeshStandardMaterial({ color: themeColor(container, "--cad-model-shape"), roughness: 0.45, metalness: 0.15, side: THREE.DoubleSide, transparent: true, opacity: 0.25, depthWrite: false });
+    const fadedEdgeMaterial = new LineMaterial({ color: themeColor(container, "--cad-model-edge").getHex(), linewidth: 1.5 * contrast, transparent: true, opacity: 0.3, depthWrite: false });
     // Picking raycasts 1 px lines, which aren't drawn.
     const lineMaterial = new THREE.LineBasicMaterial({ visible: false });
     const accent = themeColor(container, "--cad-model-accent");
@@ -570,14 +577,16 @@ export function Viewer(props: ViewerProps) {
         group.add(mesh);
         vertices += shape.faces.vertices.length / 3;
         let lines: THREE.LineSegments | undefined;
+        let wide: LineSegments2 | undefined;
         if (shape.edges) {
           const geometry = new THREE.BufferGeometry();
           syncLines(geometry, shape.edges);
           lines = new THREE.LineSegments(geometry, lineMaterial);
           group.add(lines);
-          group.add(wideSegments(geometry, edgeMaterial));
+          wide = wideSegments(geometry, edgeMaterial);
+          group.add(wide);
         }
-        return { shape, id: shape.body ?? `#${i}`, mesh, lines };
+        return { shape, id: shape.body ?? `#${i}`, mesh, lines, wide };
       });
       container.dataset["vertices"] = String(vertices);
       // Indices may name other entities in the new shapes.
@@ -585,6 +594,18 @@ export function Viewer(props: ViewerProps) {
       setSelected(undefined);
       frame();
       setRenders((n) => n + 1);
+    });
+
+    /** Whether a rendered shape can be picked now. */
+    const pickableShape = (r: Rendered) => !props.pick || !props.pickable || props.pickable(r.id);
+    createEffect(() => {
+      renders();
+      for (const r of rendered) {
+        const faded = !pickableShape(r);
+        r.mesh.material = faded ? fadedFaceMaterial : faceMaterial;
+        if (r.wide) r.wide.material = faded ? fadedEdgeMaterial : edgeMaterial;
+      }
+      container.dataset["faded"] = rendered.filter((r) => !pickableShape(r)).map((r) => r.id).join(" ");
     });
 
     /** The highlighted entities by style, for tests. */
@@ -782,14 +803,16 @@ export function Viewer(props: ViewerProps) {
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
       raycaster.setFromCamera(pointer, camera);
       raycaster.params.Line = { threshold: radius * 0.015 };
-      const faceHit = raycaster.intersectObjects(rendered.map((r) => r.mesh), false)[0];
+      // While picking, bodies that can't be picked are see-through: they neither hover nor hide others.
+      const candidates = rendered.filter(pickableShape);
+      const faceHit = raycaster.intersectObjects(candidates.map((r) => r.mesh), false)[0];
       if (kind === "face") {
         const r = faceHit && rendered.find((x) => x.mesh === faceHit.object);
         if (!r || faceHit?.faceIndex == null) return undefined;
         const index = groupEntity(r.shape.faceIndex, getFaceIndex(faceHit.faceIndex, r.mesh.geometry));
         return index < 0 ? undefined : { body: r.id, kind, index };
       }
-      const lineHit = raycaster.intersectObjects(rendered.flatMap((r) => (r.lines ? [r.lines] : [])), false)[0];
+      const lineHit = raycaster.intersectObjects(candidates.flatMap((r) => (r.lines ? [r.lines] : [])), false)[0];
       if (!lineHit || lineHit.index == null) return undefined;
       // An edge behind a face is hidden; the threshold lets edges on the face's border through.
       if (faceHit && faceHit.distance < lineHit.distance - radius * 0.01) return undefined;

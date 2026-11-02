@@ -151,6 +151,7 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | fea
     message: t.message,
     refs: t.refs,
     before: t.before.map((b) => b.name),
+    inputs: t.inputs.map((b) => b.name),
     result: t.result?.name,
     results: t.results.map((b) => b.name),
     names: t.names,

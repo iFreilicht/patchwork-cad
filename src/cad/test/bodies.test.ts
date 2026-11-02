@@ -7,7 +7,7 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import { expect, test } from "vitest";
 import { analyze } from "../src/model/analyze.ts";
 import { allowedRange, graph } from "../src/model/deps.ts";
-import { addToReturn, apply, chainMode, deleteFeature, insertFeatureAt, moveEntry, removeFromReturn, returnEditable, setChainMode, type Edit } from "../src/model/splice.ts";
+import { addToReturn, apply, chainMode, deleteFeature, insertFeatureAt, moveEntry, rebody, removeFromReturn, returnEditable, setChainMode, type Edit } from "../src/model/splice.ts";
 import { timeline, type FeatureEntry } from "../src/model/timeline.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
@@ -117,4 +117,34 @@ test("the return is edited by name, and only while it is a list of names", () =>
   expect(returnEditable(analyze(source))).toBe(true);
   expect(returnEditable(analyze(model(`${base}\nreturn [...[chamfer1]];`)))).toBe(false);
   expect(returnEditable(analyze(model(base)))).toBe(true);
+});
+
+/** Two bodies, plate and bar, and a chamfer on one of them, with features after it. */
+const twoBodies = (chamfer: string, rest: string, ret: string) =>
+  model(`
+    const sketch1 = ${SKETCH};
+    const plate = extrude({ sketch: sketch1, distance: 5 });
+    const sketch2 = ${SKETCH};
+    const bar = extrude({ sketch: sketch2, distance: 9 });
+    const chamfer1 = chamfer({ body: ${chamfer}, edges: [], distance: 1 });
+    ${rest}
+    return ${ret};`);
+const moved = (source: string, to: string) => edit(source, (a) => rebody(a, tlOf(source), indexOf(source, "chamfer1"), to));
+
+test("a feature moved to another body leaves its old one as it was before it, and joins the new one's chain", () => {
+  // At the end: the chamfer stood in the return for bar, and stands for plate now.
+  const last = moved(twoBodies("bar", "", "[plate, chamfer1]"), "plate");
+  expect(statement(last, "chamfer1")).toBe("const chamfer1 = chamfer({ body: plate, edges: [], distance: 1 });");
+  expect(returned(last)).toBe("[chamfer1, bar]");
+  // In the middle of chains: plate's fillet works on plate again, bar's on the chamfer.
+  const middle = moved(twoBodies("plate", "const fillet1 = fillet({ body: chamfer1, edges: [], radius: 1 });\nconst fillet2 = fillet({ body: bar, edges: [], radius: 1 });", "[fillet1, fillet2]"), "bar");
+  expect(statement(middle, "chamfer1")).toBe("const chamfer1 = chamfer({ body: bar, edges: [], distance: 1 });");
+  expect(statement(middle, "fillet1")).toBe("const fillet1 = fillet({ body: plate, edges: [], radius: 1 });");
+  expect(statement(middle, "fillet2")).toBe("const fillet2 = fillet({ body: chamfer1, edges: [], radius: 1 });");
+  expect(returned(middle)).toBe("[fillet1, fillet2]");
+  // A branch off plate leaves plate's chain alone, and joins bar's.
+  const branch = moved(twoBodies("plate", "const fillet1 = fillet({ body: plate, edges: [], radius: 1 });", "[fillet1, chamfer1, bar]"), "bar");
+  expect(statement(branch, "chamfer1")).toBe("const chamfer1 = chamfer({ body: bar, edges: [], distance: 1 });");
+  expect(statement(branch, "fillet1")).toBe("const fillet1 = fillet({ body: plate, edges: [], radius: 1 });");
+  expect(returned(branch)).toBe("[fillet1, chamfer1]");
 });

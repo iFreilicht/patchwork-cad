@@ -45,6 +45,8 @@ export interface FeatureTrace {
   refs: RefDiagnostic[];
   /** Names of the bodies visible before the feature ran. */
   before: string[];
+  /** Names of the bodies it worked on, its body or target first, e.g. to tell which body a pick is on. */
+  inputs: string[];
   result: string | undefined;
   /** All bodies it made: several for a destructured `body()` (research/11). */
   results: string[];

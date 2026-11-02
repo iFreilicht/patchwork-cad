@@ -422,6 +422,15 @@
   margin-left: auto;
 }
 
+/* The body a fillet, chamfer or sketch works on, which its picks decide. */
+.cad-editor__on {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__on code {
+  color: var(--cad-model-fg);
+}
+
 .cad-editor__field {
   display: grid;
   grid-template-columns: 6rem minmax(0, 1fr);
