@@ -3,6 +3,7 @@ import { firefoxLaunchOptions } from "./firefox.ts";
 
 export default defineConfig({
   testDir: "./tests",
+  globalSetup: "./host-load.ts",
   outputDir: "../test-results",
   timeout: 120_000,
   expect: { timeout: 15_000 },

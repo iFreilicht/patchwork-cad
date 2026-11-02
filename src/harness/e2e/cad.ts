@@ -66,6 +66,8 @@ export async function openWithTool(page: Page, toolId: string): Promise<void> {
 /** Opens the code pane of the editor (the default tool), unless it is open. */
 export async function openCode(page: Page): Promise<void> {
   const toggle = page.locator(".cad-editor__toolbar").getByRole("button", { name: "Code" });
+  // Right after createModel, the editor's module may still be loading.
+  await toggle.waitFor({ timeout: 60_000 });
   if ((await toggle.getAttribute("aria-pressed")) !== "true") await toggle.click();
   await page.locator(".cad-model__code .cm-content").waitFor();
 }
