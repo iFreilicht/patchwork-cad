@@ -1,6 +1,6 @@
 # Bodies
 
-The editor answers three questions with one mechanism, `main`'s return ([07](07-poc-modelling-ui.md#the-editor)), although they have different owners:
+Three questions about a model's results have different owners, and the editor answers each in its own place:
 
 | | Question | Owner | Stored in |
 |---|---|---|---|
@@ -8,7 +8,7 @@ The editor answers three questions with one mechanism, `main`'s return ([07](07-
 | [Output](#output) | What does the model give its callers? | The model's author | The code: `return` |
 | [Availability](#availability) | What can the next feature work on? | Nobody | Nowhere: derived from the code |
 
-All three are about [bodies](#bodies-and-lineages), which the code doesn't name: it only has versions. The UI for them is a [timeline with lanes](#the-timeline-with-lanes) and a [browser](#the-browser).
+All three are about [bodies](#bodies-and-lineages), which the code doesn't name: it only has versions. The UI for them is a [timeline with lanes](#the-timeline-with-lanes) and a [browser](#the-browser). Implementation: [`lanes.ts`](../src/cad/src/model/lanes.ts), `chainMode`, `setChainMode`, `retool` and `removeFromReturn` in [`splice.ts`](../src/cad/src/model/splice.ts), [`bodies.ts`](../src/cad/src/components/editor/bodies.ts), [`Browser.tsx`](../src/cad/src/components/editor/Browser.tsx), [`TimelineLanes.tsx`](../src/cad/src/components/editor/TimelineLanes.tsx), `combine` in [`features.ts`](../src/features/src/features.ts); tests: [`lanes.test.ts`](../src/cad/test/lanes.test.ts), [`bodies.test.ts`](../src/cad/test/bodies.test.ts), [`combine.test.ts`](../src/features/test/combine.test.ts), [`cad-bodies.spec.ts`](../src/harness/e2e/tests/cad-bodies.spec.ts), on [M4](../src/features/examples/m4.js): a boss joined onto a plate, a corner cut out by a copy of the plate, a private fork and a lid.
 
 ## Prior art
 
@@ -24,53 +24,47 @@ All three are about [bodies](#bodies-and-lineages), which the code doesn't name:
 
 ## Bodies and lineages
 
-A feature's result is a version of a body: in `plate → bore → fillet1` the three are versions of one body. A body is therefore a lineage of versions, derived from the version uses (`body:`, `target:`) in the deps graph ([07](07-poc-modelling-ui.md#reordering)):
+A feature's result is a version of a body: in `plate → bore → fillet1` the three are versions of one body. A body is therefore a lineage of versions, derived from the dependency graph ([07](07-poc-modelling-ui.md#reordering)), whose version uses are `body:` and `target:` (consume), a move's or a sketch's `body:` (read) and a combine's `tools:` (tool):
 
-- **A version that one later version uses continues its lineage.** The last version of a lineage is its head.
-- **A version that several later versions use forks:** each further use starts a lineage of its own.
-- **A boolean merges lineages:** its target's lineage continues, its tools' lineages end there, as Fusion's Combine consumes tool bodies. There is no "Keep Tools": nothing is ever destroyed, so a later feature can use a tool's version again, which forks it.
-- **A sketch is a lineage of one version.** A feature that uses it consumes it, as a tool; a second use forks it.
-- **A lineage is named by its first feature** (`plate`), so its name stays when features are added. Renaming a body renames that variable.
+- **A version that one later feature continues** (`body:` of a fillet, `target:` of a join, a combine or a cut) is followed by that feature's result in its lineage. The last version of a lineage is its head.
+- **A sketch becomes the body a new extrusion makes:** sketch and extrusion are one lane. An extrusion with a target merges its sketch into the target's lineage instead.
+- **A version that several features continue forks:** the continuation with the longest chain after it keeps the lineage, the earlier one on a tie; each other one starts a lineage of its own.
+- **A move copies:** its result starts a lineage of its own, and the copied version goes on.
+- **A combine merges lineages:** its target's lineage continues, its tools' lineages end there, as Fusion's Combine consumes tool bodies. There is no "Keep Tools": nothing is ever destroyed, so a later feature can use a tool's version again, which forks it.
+- **Custom Script code that uses a version** carries it on into the first version the code declares, as M3's `let body = upright` does, or else ends its lineage. A feature's continuation wins over one in code, which may only refer to the version.
+- **A lineage is named by its first body version** (`plate`, not `sketch1`), so its name stays when features are added; a lineage without one, a sketch's, by the sketch. Renaming a body renames that variable.
 
 ## Visibility
 
 What a user sees is view state, like the timeline marker ([07](07-poc-modelling-ui.md#the-timeline-marker)): hiding a body to look inside the model changes neither the model nor what a collaborator sees, unlike Onshape's shared hiding.
 
-- **The outputs show by default.** Each user hides outputs or shows private bodies and versions on top of that, with the eyes in the [browser](#the-browser).
-- **Presence wins over hiding:** a body that a collaborator hovers or selects ([13](13-collaboration.md#presence-1)) shows as a ghost, even where this user hid it.
-- **Peeking already works:** hovering an entry whose result isn't shown draws that result ([12](12-hover-highlighting.md#design)), as Onshape outlines a hovered hidden part.
+- **The view shows what exists at the marker,** as rollback always did: before the return, every body and sketch that no feature has used (the workshop's view); past it, at the end, what main returns (a caller's view, and the viewer tool's). So a private leaf, one that nothing uses or returns, shows as soon as the marker is before the return, and no other default is needed.
+- **Each user hides bodies** with the eyes in the [browser](#the-browser). Hidden bodies are stored with the marker in the account's tool storage ([10](10-view-state.md#storage)) as `visibility: { "body:plate": false, "version:joined": false }`: a body by its name, a returned version inside a body by its own. Renaming a variable in the timeline moves its keys.
+- **Presence wins over hiding:** what a collaborator hovers or selects in a body this user hid shows as a ghost (`createPeerHighlights` resolves it against the hidden bodies, too).
+- **Peeking already works:** hovering an entry whose result isn't shown draws that result ([12](12-hover-highlighting.md#design)), and hovering a hidden body in the browser draws it as a ghost, meshed by the worker on demand (`result`), once per build.
 - **Isolate**, per user, comes later.
 
 ## Output
 
 A model is a function, and `return` is its public interface: a caller (`body(() => model.default(…))`, [11](11-adopting-shapes.md#body)) gets what it lists. Every other version is private.
 
-- **Heads are returned by default.** A new feature's result takes its input's place in the return ([07](07-poc-modelling-ui.md#the-editor)). A head that nothing uses or returns is useless to a caller, so the timeline greys it out; a user may still keep it around and show it locally.
+- **Heads are returned by default.** A new feature's result takes its input's place in the return ([07](07-poc-modelling-ui.md#the-editor)), a combine's tools leave it, and deleting a combine brings its tools back. A head that nothing uses or returns is useless to a caller, so the timeline greys it out; it still shows before the return.
 - **Any version can be returned,** also a consumed one, e.g. a tool body before the cut.
-- **Toggled in the browser and the context menus** of timeline entries and bodies in the 3D view, and in the dialog of the [return entry](#the-timeline-with-lanes).
-- **The output toggle is not an eye,** since it changes the model for every caller, and not an arrow, which reads as a modelling command (extrude, revolve). Ideas to compare in a prototype: a port at the end of a lane, filled when returned and hollow when private, the same glyph in the timeline and the browser; a code-like `⟩`; a text badge "out".
+- **The [return entry](#the-timeline-with-lanes)'s dialog edits it,** and nothing else does: visibility is the browser's, output the return's. It has a chip per returned name, in the return's order, removed with ×, and a "Select" button that picks any body or sketch, in the view, the browser or the timeline, also consumed versions; picking a returned one takes it out. It edits the return only while that is a name or a list of names (`returnEditable`); otherwise the dialog shows the return's code as its only chip, and "Select" is disabled.
+- **Which versions are returned shows in the lanes:** a lane that goes to the return ends in a port, a half disc on its flat side, filled when returned, hollow for a private leaf. It is neither an eye nor an arrow, which reads as a modelling command (extrude, revolve). The browser doesn't repeat it.
 
 ## Availability
 
-Code can use any earlier variable, so the UI ranks versions instead of restricting them. The heads at the marker are available and listed; consumed versions are history, reachable in two ways:
+Code can use any earlier variable, so the UI ranks versions instead of restricting them. The leaves at the marker are listed in the browser; consumed versions are history, reachable in two ways:
 
 - by rolling the marker back to where the version is a head, and
-- by picking its timeline entry while a body, target, tool or sketch field is active.
+- by picking its timeline entry while a body, target, tools or sketch field is active.
 
-The field's dropdown of variables goes away: a field is filled by picking, in the 3D view, the browser or the timeline.
+Body and sketch fields have no dropdown. A field shows its value as a chip and a "Select body" button; while it is active, the view rolls back to before the open feature, as for picking faces, and so does the browser. A click on a body in the view, on a row in the browser or on a timeline entry before the open feature fills it; entries that can't fill it fade, private ones that can don't, and only what the field holds has the accent border. Hovering any of them shows only what a click would pick: the whole body, as a ghost where it doesn't show, and its lane; not the face or edge under the pointer, nor what the hovered feature changed, nor dependencies, nor anything collaborators would see. A tools field toggles bodies; a body can't be a combine's target and tool at once. A new combine targets the body a fillet would, and starts picking its tools. An extrusion that starts to join or cut targets the body its sketch lies on, as in Fusion, or else starts picking the target.
 
 ### Inserting into a chain or branching
 
-A new feature goes in at the marker. When the version it works on is used by a feature after the marker, the feature can either join the chain or branch off it. With the marker between `bore` and `fillet1`:
-
-```js
-const plate = extrude({ … });
-const bore = extrude({ operation: "cut", target: plate, … });
-const fillet1 = fillet({ body: bore, … });
-return [fillet1];
-```
-
-A chamfer on `bore` that joins the chain makes one body, chamfered and filleted; `fillet1` is rewired to it (`insertFeatureAt`, as Fusion does). That is the default, for a step that was forgotten or belongs earlier:
+A new feature goes in at the marker and joins the chain it works on: with the marker between `bore` and `fillet1`, a chamfer on `bore` makes one body, chamfered and filleted, because `fillet1` is rewired to it (`insertFeatureAt`, as Fusion does). That is the default, for a step that was forgotten or belongs earlier:
 
 ```js
 const chamfer1 = chamfer({ body: bore, … });
@@ -86,37 +80,30 @@ const fillet1 = fillet({ body: bore, … });
 return [fillet1, chamfer1];
 ```
 
-Where the version's continuation is decides which of these the dialog offers:
-
-| Picked version | Result |
-|---|---|
-| A head | It continues; nothing to choose |
-| Continued after the marker | Join (default) or branch, a toggle in the dialog |
-| Continued before the marker | Branch: joining would put the feature before its continuation, not at the marker |
-
-Picking a consumed timeline entry is therefore always a branch. Sketches never ask, as no feature continues a sketch.
+The dialog of a feature with an input body has a "Chain" control, Join or Branch, whenever a feature after it continues its input or its result (`chainMode`). Branching rewires the later features that work on its result to its input, and returns its result; joining does the opposite (`setChainMode`). A move's copy and a sketch have no chain to join. Picking a consumed version as a field's value is always a branch.
 
 ## The timeline with lanes
 
-The timeline stays a view of the code: its x-axis is the order of statements, one entry per position, as now. Beneath the entries, each lineage is a lane, as in `git log --graph`; forks split lanes, merges join them.
+The timeline stays a view of the code: its x-axis is the order of statements, one entry per position. Beneath the entries, each lineage is a lane, as in `git log --graph`: a dot per version (hollow for a sketch), links where lanes fork (solid), copy (dashed), merge and go to the return (dotted).
 
-- **Lanes are thin.** Each position has one entry only, so lanes needn't be as tall as an entry, and a lane's row is reused once its lineage ends. The height is that of the most lineages alive at once.
+- **Lanes are thin:** 7 px apart. Each position has one entry only, so lanes needn't be as tall as an entry, and a lane's row is reused once its lineage has ended, also in the next column: a lane ends in a merge's bend or a port, so the next one in its row doesn't read as its continuation. The height is that of the most lineages alive at once.
 - **The layout shows the code's order:** whether it groups the features of a body or interleaves unrelated ones.
-- **One marker spans all lanes.** It is still a position in the code, so rolling back and inserting stay as they are; moved before a merge, the merged lanes come apart. Markers per lineage would roll back something other than a prefix of the code, which is looking at old versions (peeking does that), and would leave no single place for a new feature.
-- **The return is the last entry,** where lanes end. A lane that reaches it is an output; one that ends at a merge was consumed; one that ends elsewhere is private. A returned version inside a lane has a thin line to it. Its dialog lists the outputs with their toggles. The marker can't pass it.
+- **One marker spans all lanes,** whose line continues through them. It is still a position in the code, so rolling back and inserting stay as they are; moved before a merge, the merged lanes come apart. It can also stand on either side of the return: before it, the view shows every leaf; past it, at the end, where new models, ⏭ and End put it, what main returns. New features go before the return from both. Past it, lanes fade and dash as the entries do, and a fork, copy or output that starts a lane past it fades as a whole, since it doesn't exist yet. Markers per lineage would roll back something other than a prefix of the code, which is looking at old versions (peeking does that), and would leave no single place for a new feature.
+- **The return is the last entry.** A lane that reaches it ends in a filled port beneath it; one that ends at a merge was consumed; an open head that main doesn't return ends in a hollow port. A returned version inside a lineage goes to the return on a lane of its own. With the marker before the return, the return entry, its ports and the links to it fade, and the code pane greys the return statement. Hovering it highlights what main returns, bodies and sketches; its dialog edits that ([Output](#output)).
+- **Hovering** an entry or a browser row highlights its lanes, drawn over the others.
 - **Node positions aren't stored.** A Grasshopper-like graph needs them: in the model they aren't portable ([02](02-model-storage.md#design-goal-portable-models)), in view state each user's layout differs. It also has no order for the marker, and large graphs tangle. A free graph could be a separate tool on the same model later.
 
 ## The browser
 
-A pane next to the timeline, listing what exists at the marker: the bodies (heads), unused sketches and later construction geometry, in folders. Each row has the body's name, an eye and the output toggle; returned versions inside a body are listed under it. Hovering a row highlights the body in the 3D view and its lane in the timeline; clicking selects it, or picks it while a field is active. Keeping the toggles in the browser keeps the timeline compact.
+A pane left of the 3D view, toggled in the toolbar (open by default, per user), listing what exists at the marker, or before the open feature while a field is picked: the bodies with their version there (`plate notched`) and the sketches that no feature used yet; past the return, the returned versions, in the return's order. A label at its top says which ("Returned", "Before the return", "At the timeline marker", "Before joined"). Each row has an eye and the name, nothing else. Hovering a row highlights the body, as a ghost if it doesn't show, and its lane; clicking it opens its version's dialog, or picks it. Construction geometry would go into folders of its own.
 
-## Prerequisites
+## Combine
 
-A boolean feature, `combine({ target, tools: […], operation: "join" | "cut" | "intersect" })`, which consumes its tools. The test model needs a merge (a boss modelled separately and joined), a cut whose tool forks from its target (`a → b`, `c = shell(a)`, `combine({ target: b, tools: [c], operation: "cut" })`) and a private fork.
+`combine({ target, tools: […], operation: "join" | "cut" | "intersect" })` applies one boolean per tool, in order, with OCCT's `BRepAlgoAPI_Fuse`, `_Cut` or `_Common`, and names faces from both inputs' histories, so references into the result name a tool's faces, too. It fails alone without tools, with its target among its tools, or when the result is empty, e.g. an intersection of bodies that don't touch; it then passes its target through. Hovering it shows what changed in its target: `changedVolume` compares a result with a feature's first input only.
 
 ## Open
 
-- Which use of a forked version continues its lineage and keeps its name. Code order fails: a branch inserted at a rolled-back marker comes before the chain's own continuation.
+- Which use of a forked version continues its lineage and keeps its name. The longest chain fails right after inserting a branch at a rolled-back marker: the branch and the chain's continuation both have one version, and the branch, earlier in the code, takes the lineage and its name.
 - Named outputs (`return { bracket, mountingPlate }`), together with `body()`'s arrays ([11](11-adopting-shapes.md#body)), and names of bodies independent of features.
-- Drawing lanes in all cases: forks that merge again, merges of several tools.
-- The output glyph.
+- The lanes of large models: many crossing links, and lanes too thin to hover or click.
+- A sketch can't be picked in the 3D view, only in the browser and the timeline.

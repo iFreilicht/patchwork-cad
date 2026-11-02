@@ -79,7 +79,8 @@ export function timeline(source: string, analysis: Analysis, trace: readonly Fea
  * the marker and moves to the next surviving character when that text is deleted, so the marker
  * stays between the entries around it when others delete entries on both sides. A cursor that is
  * lost (`offset` undefined, e.g. after the whole text was replaced) falls back to the entry named
- * `next`. `entries.length` is the end.
+ * `next`. `entries.length` is before the return, past the last entry; the editor keeps a marker
+ * past the return, at the end, as no cursor at all.
  */
 export function markerPosition(tl: Timeline, offset: number | undefined, next: string | undefined): number {
   const n = tl.entries.length;

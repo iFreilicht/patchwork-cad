@@ -15,13 +15,12 @@
 | [12-hover-highlighting.md](12-hover-highlighting.md) | Hovering and selecting faces, edges and features; see-through highlights, also past the marker; cross-hover between view, timeline and code | Done. Open: faces a feature only modifies, highlights in large models |
 | [13-collaboration.md](13-collaboration.md) | Presence (cursors, selections, markers in each collaborator's colour) and comments on code, faces, edges and features; deleted targets | Presence and comments done (editor and viewer). Open: presence provider upstream, follow mode, presence in the tiling frame, comments outside Patchwork |
 | [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights; hover a thin line, selection a thick one, both together on a hovered selection). Open: the grey per mode |
-| [15-bodies.md](15-bodies.md) | Bodies as lineages of versions; visibility per user, output as the return, availability derived; a timeline with lanes, a browser, a return entry | Design done; to implement. Open: which fork keeps a lineage's name, named outputs, drawing lanes, the output glyph |
+| [15-bodies.md](15-bodies.md) | Bodies as lineages of versions; visibility per user, output as the return, availability derived; a timeline with lanes, a browser, a return entry; combine | Done (`combine`, lanes, browser with eyes and ports, return entry, picking bodies, join or branch; M4). Open: which fork keeps a lineage's name, named outputs, lanes of large models, picking sketches in the view |
 | [16-undo-redo.md](16-undo-redo.md) | Undo as the document's history, per tab, for every tool; undo runs as steps; inverting Automerge changes | Prototype done ([src/undo](../src/undo/), used by the CAD editor; CodeMirror and tldraw compared); proposed for Patchwork in [patchwork-system#469](https://github.com/inkandswitch/patchwork-system/pull/469). Open: restoring selections, showing undos that don't change the geometry, steps across documents, conflict policy, upstreaming |
 
 ## Not started
 
 - Allow disabling tangent selection of edges when creating fillet or chamfer
-- Bodies ([15](15-bodies.md)): a `combine` feature and its test model, lineages, lanes in the timeline, the browser, the return entry, picking instead of body dropdowns
 - Named outputs: `return { bracket, mountingPlate }` instead of arrays, and with it `body()`'s arrays ([11](11-adopting-shapes.md#body)) and names of bodies independent of features ([15](15-bodies.md#open))
 - A build timer and an abort button in the status bar, in place of the fixed 10 s kernel timeout ([08](08-module-evaluation.md#conclusions)), for very complex models
 - Per-feature caching ([review, risk 4](01-basic-idea-and-literature.md#problems-and-risks)); not needed for PoC 2's parts ([07](07-poc-modelling-ui.md#rebuild-performance))

@@ -106,7 +106,8 @@ test("the marker rolls replicad shapes back once they are bodies", async ({ user
   const at = async (position: number) => {
     await page.getByRole("slider", { name: "Timeline marker" }).focus();
     await page.keyboard.press("End");
-    for (let i = position; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    // End is past the return, after the four entries.
+    for (let i = position; i < 5; i++) await page.keyboard.press("ArrowLeft");
     await expect(editorView(page)).toHaveAttribute("data-marker", String(position));
     await expect(editorView(page)).toHaveAttribute("data-rolled-back", "true");
     await expect.poll(() => vertices(page)).not.toBe(all);

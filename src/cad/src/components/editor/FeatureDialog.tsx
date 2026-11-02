@@ -4,7 +4,7 @@ import { parseExpressionAt, type Expression } from "acorn";
 import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
-import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, setProp, usedFunctions } from "../../model/splice.ts";
+import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setProp, usedFunctions } from "../../model/splice.ts";
 import type { FeatureEntry } from "../../model/timeline.ts";
 import { schemaOf, type Editor } from "./state.ts";
 
@@ -110,11 +110,33 @@ function ScalarField(props: FieldProps) {
   return <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />;
 }
 
+/**
+ * An extrusion that starts to join or cut needs a target: the body its sketch lies on, as in Fusion,
+ * or else the one the user picks next.
+ */
+function targetForOperation(editor: Editor, entry: FeatureEntry, operation: string): boolean {
+  let pickNext = false;
+  const done = editor.editOpen((call, analysis) => {
+    const edits = setProp(call, "operation", JSON.stringify(operation));
+    if (entry.type !== "extrude" || operation === "new" || call.props?.some((p) => p.key === "target")) return edits;
+    const sketch = call.props?.find((p) => p.key === "sketch")?.node;
+    const onFace = sketch?.type === "Identifier" ? analysis.calls.find((c) => c.variable === sketch.name)?.props?.find((p) => p.key === "body")?.node : undefined;
+    if (onFace?.type !== "Identifier") {
+      pickNext = true;
+      return edits;
+    }
+    return [...edits, ...setProp(call, "target", onFace.name), ...retarget(analysis, call, entry.name, undefined, onFace.name)];
+  });
+  if (pickNext) editor.setPickTarget({ param: "target", kind: "body", multi: false });
+  return done;
+}
+
 function ChoiceField(props: FieldProps & { spec: Extract<ParamSpec, { kind: "choice" }> }) {
   const node = () => propNode(props.entry.call, props.name);
   const value = () => stringValue(node()) ?? (node() ? "" : (props.spec.default ?? ""));
+  const choose = (option: string) => (props.name === "operation" && props.entry.type === "extrude" ? targetForOperation(props.editor, props.entry, option) : setParam(props.editor, props.name, JSON.stringify(option), false));
   return (
-    <select class="cad-editor__input" aria-label={props.spec.label} disabled={props.disabled} value={value()} onChange={(e) => setParam(props.editor, props.name, JSON.stringify(e.currentTarget.value), false)}>
+    <select class="cad-editor__input" aria-label={props.spec.label} disabled={props.disabled} value={value()} onChange={(e) => choose(e.currentTarget.value)}>
       <For each={props.spec.options}>{(o) => <option value={o}>{o}</option>}</For>
       <Show when={!props.spec.options.includes(value())}>
         <option value="">{textOf(props.source, node()) || "—"}</option>
@@ -123,37 +145,53 @@ function ChoiceField(props: FieldProps & { spec: Extract<ParamSpec, { kind: "cho
   );
 }
 
-function VariableField(props: FieldProps & { of: "body" | "sketch" }) {
+/**
+ * A body or sketch parameter, filled by picking (research/15, "Availability"): in the 3D view, the
+ * browser or the timeline. An optional one can be cleared.
+ */
+function VersionField(props: FieldProps & { of: "body" | "sketch" }) {
   const value = () => textOf(props.source, propNode(props.entry.call, props.name));
-  const options = () => props.editor.variablesBefore(props.of);
+  const clear = () =>
+    props.editor.editOpen((call, analysis) => [...removeProp(call, props.name), ...(props.of === "sketch" ? resketch(analysis, call, value() || undefined, undefined) : [])]);
   return (
-    <select
-      class="cad-editor__input"
-      aria-label={props.spec.label}
-      disabled={props.disabled}
-      value={value()}
-      onChange={(e) => {
-        const chosen = e.currentTarget.value;
-        props.editor.editOpen((call, analysis, source) => {
-          const current = call.props?.find((p) => p.key === props.name);
-          const previous = current?.node.type === "Identifier" ? source.slice(current.value.start, current.value.end) : undefined;
-          return [
-            ...(chosen === "" && props.spec.optional ? removeProp(call, props.name) : setProp(call, props.name, chosen)),
-            // The result shows the feature instead of the body it now works on, and the body it no
-            // longer works on, if nothing else uses it, instead of dropping it; likewise for sketches.
-            ...(props.of === "body" ? retarget(analysis, call, props.entry.name, previous, chosen || undefined) : resketch(analysis, call, previous, chosen || undefined)),
-          ];
-        });
-      }}
-    >
-      <Show when={props.spec.optional}>
-        <option value="">—</option>
+    <div class="cad-editor__refs">
+      <Show when={value()} fallback={<span class="cad-editor__muted">none</span>}>
+        <span class="cad-editor__version" data-kind={props.of} title={value()}>
+          <code>{value()}</code>
+          <Show when={props.spec.optional}>
+            <button class="cad-editor__link" aria-label={`clear ${props.spec.label}`} disabled={props.disabled} onClick={clear}>
+              ×
+            </button>
+          </Show>
+        </span>
       </Show>
-      <For each={options()}>{(o) => <option value={o}>{o}</option>}</For>
-      <Show when={value() && !options().includes(value())}>
-        <option value={value()}>{value()}</option>
-      </Show>
-    </select>
+      <PickButton editor={props.editor} param={props.name} kind={props.of} multi={false} disabled={props.disabled} label={`Select ${props.of}`} />
+    </div>
+  );
+}
+
+/** A list of bodies, e.g. a combine's tools: a chip each, added and removed by picking. */
+function VersionListField(props: FieldProps) {
+  const items = () => elements(props.entry.call, props.name).map((s) => props.source.slice(s.start, s.end));
+  return (
+    <div class="cad-editor__refs">
+      <For each={items()} fallback={<span class="cad-editor__muted">nothing selected</span>}>
+        {(code, i) => (
+          <span class="cad-editor__version" data-kind="body" title={code}>
+            <code>{code}</code>
+            <button
+              class="cad-editor__link"
+              aria-label={`remove ${code}`}
+              disabled={props.disabled}
+              onClick={() => props.editor.editOpen((call, analysis) => [...removeElement(call, props.name, i()), ...retool(analysis, call, undefined, code)])}
+            >
+              ×
+            </button>
+          </span>
+        )}
+      </For>
+      <PickButton editor={props.editor} param={props.name} kind="body" multi disabled={props.disabled} label="Select bodies" />
+    </div>
   );
 }
 
@@ -181,7 +219,7 @@ function ReferenceChip(props: { code: string; diagnostic: RefDiagnostic | undefi
   );
 }
 
-function PickButton(props: { editor: Editor; param: string; kind: "face" | "edge"; multi: boolean; disabled: boolean }) {
+export function PickButton(props: { editor: Editor; param: string; kind: "face" | "edge" | "body" | "sketch" | "version"; multi: boolean; disabled: boolean; label?: string }) {
   const active = () => props.editor.pickTarget()?.param === props.param;
   return (
     <button
@@ -190,7 +228,7 @@ function PickButton(props: { editor: Editor; param: string; kind: "face" | "edge
       disabled={props.disabled}
       onClick={() => props.editor.setPickTarget(active() ? undefined : { param: props.param, kind: props.kind, multi: props.multi })}
     >
-      {active() ? "Done selecting" : `Select ${props.kind}s`}
+      {active() ? "Done selecting" : (props.label ?? `Select ${props.kind}s`)}
     </button>
   );
 }
@@ -335,9 +373,11 @@ function Field(props: FieldProps): JSX.Element {
     case "choice":
       return <ChoiceField {...props} spec={spec} />;
     case "body":
-      return <VariableField {...props} of="body" />;
+      return <VersionField {...props} of="body" />;
     case "sketch":
-      return <VariableField {...props} of="sketch" />;
+      return <VersionField {...props} of="sketch" />;
+    case "bodies":
+      return <VersionListField {...props} />;
     case "edges":
     case "faces":
       return <ReferenceListField {...props} spec={spec} />;
@@ -407,6 +447,35 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
       </Show>
       <Show when={disabled()}>
         <p class="cad-editor__muted">The code doesn't parse; fix it to edit here.</p>
+      </Show>
+      <Show when={props.editor.chainMode()}>
+        {(mode) => (
+          <div class="cad-editor__field" data-param="chain">
+            <span>Chain</span>
+            <div class="cad-editor__segmented" role="radiogroup" aria-label="Chain">
+              <button
+                role="radio"
+                class="cad-editor__segment"
+                aria-checked={mode() === "join"}
+                disabled={disabled()}
+                title="Join: the features after it that worked on its input work on its result"
+                onClick={() => props.editor.setChainMode("join")}
+              >
+                Join
+              </button>
+              <button
+                role="radio"
+                class="cad-editor__segment"
+                aria-checked={mode() === "branch"}
+                disabled={disabled()}
+                title="Branch: the features after it work on its input; its result is a body of its own"
+                onClick={() => props.editor.setChainMode("branch")}
+              >
+                Branch
+              </button>
+            </div>
+          </div>
+        )}
       </Show>
       <For each={PARAMS[props.entry.type]}>
         {([name, spec]) => (

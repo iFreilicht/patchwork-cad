@@ -176,6 +176,15 @@ export async function setField(page: Page, label: string, value: string): Promis
   await input.press("Enter");
 }
 
+/** Fills a body or sketch field of the open dialog by picking a timeline entry, as a user may (research/15, "Availability"). */
+export async function pickVersion(page: Page, param: string, name: string): Promise<void> {
+  await dialog(page).locator(`.cad-editor__field[data-param="${param}"]`).getByRole("button", { name: /^Select / }).click();
+  await timelineEntry(page, name).click();
+}
+
+/** The values of a body or sketch field of the open dialog, as its chips show them. */
+export const versionChips = (page: Page, param: string) => dialog(page).locator(`.cad-editor__field[data-param="${param}"] .cad-editor__version code`);
+
 export async function chooseField(page: Page, label: string, value: string): Promise<void> {
   await dialog(page).getByLabel(label, { exact: true }).selectOption(value);
 }
@@ -183,7 +192,7 @@ export async function chooseField(page: Page, label: string, value: string): Pro
 export const toolbarButton = (page: Page, label: string) => page.locator(".cad-editor__toolbar").getByRole("button", { name: label, exact: true });
 
 /** An example model of the feature library (src/features/examples), with `replace` applied to it. */
-export function exampleSource(name: "m1" | "m3", replace: [string, string][] = []): string {
+export function exampleSource(name: "m1" | "m3" | "m4", replace: [string, string][] = []): string {
   let source = readFileSync(join(CAD_DIR, "..", "features", "examples", `${name}.js`), "utf8");
   for (const [from, to] of replace) {
     if (!source.includes(from)) throw new Error(`${name}.js has no ${from}`);

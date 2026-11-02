@@ -102,7 +102,7 @@ export function ensureImports(analysis: Analysis, names: readonly string[]): Edi
 
 /** Library functions a piece of generated code calls, so that they can be imported. */
 export const usedFunctions = (code: string): string[] =>
-  ["sketch", "extrude", "fillet", "chamfer", "move", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
+  ["sketch", "extrude", "fillet", "chamfer", "combine", "move", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
 
 export function indentOf(source: string, offset: number): string {
   const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
@@ -188,10 +188,10 @@ export function lines(source: string, span: Span): Span {
 export const replaceIdentifier = (span: Span, text: string, shorthand: string | undefined): Edit => ({ start: span.start, end: span.end, text: shorthand ? `${shorthand}: ${text}` : text });
 
 /**
- * Deletes a feature statement. Features that used its body (`body:`, `target:`) and the return use
- * its input instead; references that named it (`notch.side.c`, `.piece(notch, 1)`) name it through
- * `ref.notch`, so that they report themselves as broken instead of throwing a ReferenceError. Its
- * sketch, if nothing else uses it, shows again.
+ * Deletes a feature statement. Features that used its body (`body:`, `target:`, `tools:`) and the
+ * return use its input instead; references that named it (`notch.side.c`, `.piece(notch, 1)`) name
+ * it through `ref.notch`, so that they report themselves as broken instead of throwing a
+ * ReferenceError. Its sketch, and a combine's tools, show again if nothing else uses them.
  */
 export function deleteFeature(source: string, analysis: Analysis, entry: FeatureEntry): Edit[] {
   const edits: Edit[] = [{ ...lines(source, entry.span), text: "" }];
@@ -203,7 +203,8 @@ export function deleteFeature(source: string, analysis: Analysis, entry: Feature
     const names = returned.names.flatMap((n) => (!entry.names.includes(n) ? [n] : input ? [input] : []));
     const sketch = prop(entry.call, "sketch")?.node;
     const freed = sketch?.type === "Identifier" && !names.includes(sketch.name) && !usesSketch(analysis, sketch.name, entry.call) ? [sketch.name] : [];
-    edits.push(...setReturned(returned, [...names, ...freed]));
+    const tools = (arrayOf(entry.call, "tools")?.elements ?? []).flatMap((e) => (e?.type === "Identifier" && !names.includes(e.name) && !consumedBy(analysis, e.name, entry.call) ? [e.name] : []));
+    edits.push(...setReturned(returned, [...new Set([...names, ...freed, ...tools])]));
   }
   walk(analysis.program as Program, (node, ancestors) => {
     if (node.type !== "Identifier" || !entry.names.includes(node.name) || node.start < entry.span.end) return;
@@ -212,7 +213,9 @@ export function deleteFeature(source: string, analysis: Analysis, entry: Feature
     if (parent?.type === "Property" && parent.key === node && !parent.computed) return;
     const key = parent?.type === "Property" && parent.value === node && parent.key.type === "Identifier" ? parent.key.name : undefined;
     const shorthand = parent?.type === "Property" && parent.shorthand ? key : undefined;
-    const asValue = key === "body" || key === "target";
+    const property = ancestors[ancestors.length - 2];
+    const asTool = parent?.type === "ArrayExpression" && property?.type === "Property" && property.value === parent && property.key.type === "Identifier" && property.key.name === "tools";
+    const asValue = key === "body" || key === "target" || asTool;
     const inReturn = ancestors.some((a) => a.type === "ReturnStatement");
     if (inReturn && returned) return;
     // Users get its input; without one, `ref.<name>`, which fails the user alone instead of throwing a ReferenceError.
@@ -233,11 +236,10 @@ export function lastOf(tl: Timeline, kind: "sketch" | "body"): string | undefine
   return tl.entries.filter((e): e is FeatureEntry => e.kind === "feature" && (kind === "sketch" ? e.type === "sketch" : e.type !== "sketch")).at(-1)?.name;
 }
 
-/** Whether a feature call other than `except` uses the body `name` as its `body` or `target`. */
+/** Whether a feature call other than `except` uses the body `name` as its `body` or `target`, or as one of its `tools`. */
 function consumedBy(analysis: Analysis, name: string, except: FeatureCall): boolean {
-  return analysis.calls.some(
-    (c) => c.span.start !== except.span.start && (c.props ?? []).some((p) => (p.key === "body" || p.key === "target") && p.node.type === "Identifier" && p.node.name === name),
-  );
+  const names = (p: Prop) => (p.key === "body" || p.key === "target" ? [p.node] : p.key === "tools" && p.node.type === "ArrayExpression" ? p.node.elements : []);
+  return analysis.calls.some((c) => c.span.start !== except.span.start && (c.props ?? []).some((p) => names(p).some((n) => n?.type === "Identifier" && n.name === name)));
 }
 
 /** Whether a feature call other than `except` uses the sketch `name`. */
@@ -272,6 +274,18 @@ export function retarget(analysis: Analysis, call: FeatureCall, name: string, pr
   return [{ start: returned.node.start, end: returned.node.end, text: printReturn(names) }];
 }
 
+/**
+ * Keeps the return in step when a combine (`call`) gets tool `added` or loses tool `removed`: a
+ * tool no longer shows on its own, and a removed one, if nothing else uses it, shows again.
+ */
+export function retool(analysis: Analysis, call: FeatureCall, added: string | undefined, removed: string | undefined): Edit[] {
+  const returned = returnedNames(analysis);
+  if (!returned) return [];
+  const names = returned.names.filter((n) => n !== added);
+  if (removed && !names.includes(removed) && !consumedBy(analysis, removed, call)) names.push(removed);
+  return setReturned(returned, names);
+}
+
 /** Adds a feature's result to what `main` returns. */
 export function addToReturn(source: string, analysis: Analysis, name: string): Edit[] {
   const returned = returnedNames(analysis);
@@ -281,6 +295,18 @@ export function addToReturn(source: string, analysis: Analysis, name: string): E
   const indent = statement ? indentOf(source, statement.start) : "  ";
   const close = analysis.main.body.end - 1;
   return [{ start: close, end: close, text: `${indent}return ${name};\n` }];
+}
+
+/** Removes a name from what `main` returns. */
+export function removeFromReturn(analysis: Analysis, name: string): Edit[] {
+  const returned = returnedNames(analysis);
+  return returned ? setReturned(returned, returned.names.filter((n) => n !== name)) : [];
+}
+
+/** Whether the editor can add to and remove from what `main` returns: it returns names, one or a list of them, or nothing yet. */
+export function returnEditable(analysis: Analysis): boolean {
+  const last = analysis.main?.statements.at(-1);
+  return returnedNames(analysis) !== undefined || last?.type !== "ReturnStatement";
 }
 
 /** Where code goes that is inserted before entry `position`: the start of its line, or of the return's line at the end. */
@@ -317,6 +343,39 @@ export function insertFeatureAt(source: string, analysis: Analysis, tl: Timeline
     edits.push(...renames(g, names, undefined));
   } else if (returned) edits.push(...setReturned(returned, showing(returned.names, name, effect)));
   else if (effect.shows) edits.push(...addToReturn(source, analysis, name));
+  return edits;
+}
+
+/**
+ * Whether feature `index`, which works on an input body, carries that body's chain on (`join`: a
+ * later feature works on its result) or branches off it (`branch`: a later feature works on its
+ * input instead), research/15 "Inserting into a chain or branching". Undefined if it has no input, or
+ * nothing after it continues either.
+ */
+export function chainMode(g: Graph, index: number): "join" | "branch" | undefined {
+  const input = consumedInput(g, index);
+  const own = g.declares[index]?.[0];
+  if (!input || !own) return undefined;
+  const continues = (name: string) => g.uses.some((u) => u.name === name && u.owner > index && u.owner < g.declares.length && (u.role === "consume" || u.role === "tool"));
+  return continues(own) ? "join" : continues(input.name) ? "branch" : undefined;
+}
+
+/**
+ * Makes feature `index` join its input's chain or branch off it. Joining, the later features that
+ * worked on its input work on its result, which leaves the result; branching, they work on its
+ * input again, and its result, a head now, comes into the result.
+ */
+export function setChainMode(source: string, analysis: Analysis, tl: Timeline, index: number, mode: "join" | "branch"): Edit[] {
+  const g = graph(analysis, tl);
+  const input = consumedInput(g, index);
+  const own = g.declares[index]?.[0];
+  if (!input || !own || chainMode(g, index) === mode || chainMode(g, index) === undefined) return [];
+  const [from, to] = mode === "join" ? [input.name, own] : [own, input.name];
+  const names = g.uses.map((u) => (u.name === from && u.owner > index && u.owner < g.declares.length && (u.role === "consume" || u.role === "tool") ? to : u.name));
+  const edits = renames(g, names, undefined);
+  const returned = returnedNames(analysis);
+  if (returned) edits.push(...setReturned(returned, mode === "join" ? returned.names.filter((n) => n !== own) : returned.names.includes(own) ? returned.names : [...returned.names, own]));
+  else if (mode === "branch") edits.push(...addToReturn(source, analysis, own));
   return edits;
 }
 
@@ -363,7 +422,8 @@ export function moveEntry(source: string, analysis: Analysis, tl: Timeline, inde
   if (entry.kind === "feature") {
     const own = g.declares[index]![0]!;
     const inputUse = g.uses.findIndex((u) => u.owner === index && u.role === "consume");
-    const readUse = g.uses.findIndex((u) => u.owner === index && u.role === "read");
+    // The bodies it reads or uses as tools: each becomes the version at the new place.
+    const readUses = g.uses.flatMap((u, k) => (u.owner === index && (u.role === "read" || u.role === "tool") ? [k] : []));
     if (inputUse >= 0) {
       const input = names[inputUse]!;
       names.forEach((name, k) => {
@@ -377,10 +437,10 @@ export function moveEntry(source: string, analysis: Analysis, tl: Timeline, inde
         if (k !== inputUse && name === version && u.role !== "hard" && u.owner !== index && pos(u.owner) > here) names[k] = own;
       });
     }
-    if (readUse >= 0) {
-      const version = versionHere(names[readUse]!);
+    for (const k of readUses) {
+      const version = versionHere(names[k]!);
       if (version === undefined) return [];
-      names[readUse] = version;
+      names[k] = version;
     }
   }
 

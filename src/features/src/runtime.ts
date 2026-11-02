@@ -5,7 +5,7 @@ export { resolve, capture } from "./refs.ts";
 export type { Resolution } from "./refs.ts";
 export type { Topo } from "./topo.ts";
 export { describe } from "./geom.ts";
-import { body, chamfer, extrude, fillet, move, sketch } from "./features.ts";
+import { body, chamfer, combine, extrude, fillet, move, sketch } from "./features.ts";
 import { pick as pickRef, type Body, type TraceEntry } from "./feature.ts";
 import { owningFeatures, refForm, setFeaturePrinter, type Name, type Vec } from "./names.ts";
 import { Ref, resolve } from "./refs.ts";
@@ -14,7 +14,7 @@ import { oc, progress, subShapes, type Kind } from "./oc.ts";
 import { entities } from "./topo.ts";
 
 /** The built-in features by function name, for recognizing calls and rendering their forms. */
-export const builtins = { sketch, extrude, fillet, chamfer, move, body } as const;
+export const builtins = { sketch, extrude, fillet, chamfer, combine, move, body } as const;
 
 /** replicad's id of each face or edge of a body, as in its meshes' `faceGroups`/`edgeGroups` (`ReplicadShapeHasher.HashCode`). */
 export function meshIds(b: Body, kind: Kind): number[] {
@@ -60,25 +60,26 @@ export function pickData(b: Body, kind: Kind, index: number): RefData {
 }
 
 /**
- * The volume a feature added to or removed from the bodies it consumed: what its results have and
- * its inputs don't, and the other way round, i.e. a join's added and a cut's removed material. A
- * feature without inputs made all of its results. For features whose schema says `hover: "difference"`.
+ * The volume a feature added to or removed from the body it works on, its first input: what its
+ * results have and that body doesn't, and the other way round, i.e. a join's added and a cut's
+ * removed material; a combine's tools are not what it works on. A feature without inputs made all
+ * of its results. For features whose schema says `hover: "difference"`.
  */
 export function changedVolume(entry: TraceEntry): AnyShape[] {
   if (!entry.inputs.length) return entry.results.map((b) => b.shape);
   const o = oc();
   const parts: AnyShape[] = [];
+  const input = entry.inputs[0]!;
   for (const result of entry.results)
-    for (const input of entry.inputs)
-      for (const [from, minus] of [
-        [result, input],
-        [input, result],
-      ] as const) {
-        const cut = new o.BRepAlgoAPI_Cut(from.topo.shape, minus.topo.shape, progress());
-        if (!cut.IsDone()) continue;
-        const shape = cut.Shape();
-        if (subShapes(shape, "face").length) parts.push(cast(shape));
-      }
+    for (const [from, minus] of [
+      [result, input],
+      [input, result],
+    ] as const) {
+      const cut = new o.BRepAlgoAPI_Cut(from.topo.shape, minus.topo.shape, progress());
+      if (!cut.IsDone()) continue;
+      const shape = cut.Shape();
+      if (subShapes(shape, "face").length) parts.push(cast(shape));
+    }
   return parts;
 }
 

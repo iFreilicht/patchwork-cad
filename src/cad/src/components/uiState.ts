@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, type Accessor } from "solid-js";
+import { createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
 import type { CameraState, DocUiState, TimelineMarker, UiStorageDoc } from "../types.ts";
@@ -18,6 +18,13 @@ export interface UiState {
   /** The editor's timeline marker; undefined is at the end. */
   marker: Accessor<TimelineMarker | undefined>;
   setMarker(marker: TimelineMarker | undefined): void;
+  browserOpen: Accessor<boolean>;
+  setBrowserOpen(open: boolean): void;
+  /** What this user shows or hides against the default, by key (`DocUiState.visibility`). */
+  visibility: Accessor<Record<string, boolean>>;
+  /** Sets or, with `undefined`, clears the override of one key; `rename` moves keys to new names. */
+  setVisibility(key: string, visible: boolean | undefined): void;
+  renameVisibility(renames: Record<string, string>): void;
 }
 
 /**
@@ -72,6 +79,9 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
     handle?.off("change", read);
   });
 
+  // A write of any other state, e.g. the camera after an orbit, mustn't look like a change of visibility.
+  const visibility = createMemo(() => state().visibility ?? {}, {}, { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
+
   return {
     codeOpen: () => state().codeOpen ?? false,
     setCodeOpen(open) {
@@ -87,6 +97,36 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
       write((entry) => {
         if (marker) entry.marker = { ...marker };
         else delete entry.marker;
+      });
+    },
+    browserOpen: () => state().browserOpen ?? true,
+    setBrowserOpen(open) {
+      setState((s) => ({ ...s, browserOpen: open }));
+      write((entry) => (entry.browserOpen = open));
+    },
+    visibility,
+    setVisibility(key, visible) {
+      setState((s) => {
+        const { [key]: _, ...rest } = s.visibility ?? {};
+        return { ...s, visibility: visible === undefined ? rest : { ...rest, [key]: visible } };
+      });
+      write((entry) => {
+        entry.visibility ??= {};
+        if (visible === undefined) delete entry.visibility[key];
+        else entry.visibility[key] = visible;
+      });
+    },
+    renameVisibility(renames) {
+      const moved = (v: Record<string, boolean>) => Object.fromEntries(Object.entries(v).map(([k, value]) => [renames[k] ?? k, value]));
+      setState((s) => ({ ...s, visibility: moved(s.visibility ?? {}) }));
+      write((entry) => {
+        if (!entry.visibility) return;
+        for (const [from, to] of Object.entries(renames)) {
+          const value = entry.visibility[from];
+          if (value === undefined) continue;
+          delete entry.visibility[from];
+          entry.visibility[to] = value;
+        }
       });
     },
     view: (toolId) => loadedViews()?.[toolId],

@@ -93,12 +93,18 @@ export function ContactToken(props: { contactUrl: string }) {
  * the worker resolves against those shapes, so they show also when the collaborator's model is at
  * another build or rolled back to another feature; features are names.
  */
-export function createPeerHighlights(model: Model, shown: Accessor<MeshedShape[]>, peers: Accessor<PeerView[]>): Accessor<Highlight[]> {
-  const found = createLocated(model, shown, () => peers().flatMap((p) => [p.state.hover, p.state.selected].flatMap((ref) => (ref ? [{ ref, color: p.color }] : []))));
+export function createPeerHighlights(model: Model, shown: Accessor<MeshedShape[]>, peers: Accessor<PeerView[]>, hidden: Accessor<MeshedShape[]> = () => []): Accessor<Highlight[]> {
+  // Bodies this user hid still show what collaborators point at, as ghosts (research/15, "Visibility").
+  const all = createMemo(() => [...shown(), ...hidden()]);
+  const ghost = (h: Highlight): Highlight => {
+    const shape = !h.shape && hidden().find((s) => s.body === h.body);
+    return shape ? { ...h, shape, ghost: true } : h;
+  };
+  const found = createLocated(model, all, () => peers().flatMap((p) => [p.state.hover, p.state.selected].flatMap((ref) => (ref ? [{ ref, color: p.color }] : []))));
   const located = () => found().flatMap(({ item, found }) => found.map(({ body, indices }) => ({ body, kind: item.ref.kind, indices, style: "peer" as const, color: item.color })));
-  const featureHighlights = createFeatureHighlights(model, shown);
+  const featureHighlights = createFeatureHighlights(model, all);
   const features = () => peers().flatMap(({ state, color }) => featureHighlights(state.features ?? [], "peer", color));
-  return () => [...located(), ...features()];
+  return () => [...located(), ...features()].map(ghost);
 }
 
 /** Collaborators' pointers on the model. */

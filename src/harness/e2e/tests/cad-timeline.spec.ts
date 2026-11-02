@@ -76,7 +76,8 @@ test("the marker rolls the view back, new features go there, and it survives del
   await openM1(page);
   await openCode(page);
   const all = await vertices(page);
-  await expect(marker(page)).toHaveAttribute("aria-valuenow", "8");
+  // At the end, past the return.
+  await expect(marker(page)).toHaveAttribute("aria-valuenow", "9");
 
   // Roll back to before fillet1.
   await dragTo(page, marker(page), 4);
@@ -84,7 +85,8 @@ test("the marker rolls the view back, new features go there, and it survives del
   await expect(editorView(page)).toHaveAttribute("data-rolled-back", "true");
   await expect.poll(() => vertices(page)).toBeLessThan(all);
   await expect(page.locator('.cad-editor__entry[data-past-marker="true"]')).toHaveCount(4);
-  await expect(page.locator(".cad-model__code .cad-model__past-marker")).toHaveCount(4);
+  // Four statements and the return.
+  await expect(page.locator(".cad-model__code .cad-model__past-marker")).toHaveCount(5);
   await expect(page.locator(".cad-model__code .cad-model__past-marker").first()).toContainText("const fillet1");
 
   // The keyboard moves it too.
@@ -103,8 +105,8 @@ test("the marker rolls the view back, new features go there, and it survives del
   // B deletes fillet2 before A's marker and fillet1 after it at once, rewiring the chamfer by hand.
   await bootToFrame(b.page, docPathWith(page));
   await expect(timelineEntry(b.page, "fillet2")).toBeVisible({ timeout: 120_000 });
-  // The marker is A's own: B's is at the end.
-  await expect(editorView(b.page)).toHaveAttribute("data-marker", "9");
+  // The marker is A's own: B's is at the end, past the return.
+  await expect(editorView(b.page)).toHaveAttribute("data-marker", "10");
   const source = await modelSource(b.page);
   const without = source
     .split("\n")
@@ -119,7 +121,7 @@ test("the marker rolls the view back, new features go there, and it survives del
 
   // Back to the end: the whole model shows again.
   await page.getByRole("button", { name: "Move the timeline marker to the end" }).click();
-  await expect(editorView(page)).toHaveAttribute("data-marker", "7");
+  await expect(editorView(page)).toHaveAttribute("data-marker", "8");
   await expect(editorView(page)).toHaveAttribute("data-rolled-back", "false");
 });
 
@@ -371,7 +373,7 @@ test("when another user moves the entry after the marker, the marker stays betwe
   await expect.poll(() => names(a.page)).toEqual(["sketch1", "extrude1", "sketch2", "notch", "chamfer1", "fillet1", "sketch3", "extrude2"]);
   await expect(editorView(a.page)).toHaveAttribute("data-marker", "4");
   expect(await pastMarker(a.page)).toEqual(["chamfer1", "fillet1", "sketch3", "extrude2"]);
-  await expect(editorView(b.page)).toHaveAttribute("data-marker", "8");
+  await expect(editorView(b.page)).toHaveAttribute("data-marker", "9");
 });
 
 /** The marker's drawing is centred on its slot. */
@@ -416,7 +418,7 @@ export default function main({ width, depth, height, hole }) {
   await expect.poll(() => modelSource(page)).toContain("extrude(height);\n  const cut_plate = plate.cut(bore)");
   await expect(page.locator(".cad-model__notice")).toHaveCount(0);
   await expect.poll(() => names(page)).toEqual(["script", "sketch1", "extrude1"]);
-  await expect(editorView(page)).toHaveAttribute("data-marker", "3");
+  await expect(editorView(page)).toHaveAttribute("data-marker", "4");
   await expectDrawingOnSlot(page);
 });
 
@@ -431,7 +433,8 @@ test("typing in the code pane keeps the timeline, the marker and the highlights 
   await openCode(page);
   await setMarker(page, 5);
   const past = page.locator(".cad-model__code .cad-model__past-marker");
-  await expect(past).toHaveCount(3);
+  // Three statements and the return.
+  await expect(past).toHaveCount(4);
   // Highlights are showing while the user types: a decoration dispatched during CodeMirror's own update would throw.
   await timelineEntry(page, "notch").hover();
   await expect(page.locator(".cad-model__code .cad-model__related--self")).toHaveCount(1);
@@ -445,7 +448,7 @@ test("typing in the code pane keeps the timeline, the marker and the highlights 
   await page.keyboard.press("Alt+ArrowUp");
   await expect.poll(() => names(page)).toEqual(["sketch1", "sketch2", "extrude1", "notch", "fillet1", "chamfer1", "sketch3", "extrude2"]);
   await expect(editorView(page)).toHaveAttribute("data-marker", "5");
-  await expect(past).toHaveCount(3);
+  await expect(past).toHaveCount(4);
   await expectDrawingOnSlot(page);
   // Delete sketch1's line (now line 8): one entry less before the marker.
   await line(8);
@@ -453,7 +456,7 @@ test("typing in the code pane keeps the timeline, the marker and the highlights 
   await page.keyboard.press("Backspace");
   await expect.poll(() => names(page)).toEqual(["sketch2", "extrude1", "notch", "fillet1", "chamfer1", "sketch3", "extrude2"]);
   await expect(editorView(page)).toHaveAttribute("data-marker", "4");
-  await expect(past).toHaveCount(3);
+  await expect(past).toHaveCount(4);
   await expect(past.first()).toContainText("const chamfer1");
   await expectDrawingOnSlot(page);
   // The highlights still follow the pointer.
@@ -530,7 +533,8 @@ for (const colorScheme of ["light", "dark"] as const) {
       await openM1(page);
       await openCode(page);
       await dragTo(page, marker(page), 1);
-      await expect(page.locator(".cad-model__code .cad-model__past-marker")).toHaveCount(7);
+      // Seven statements and the return.
+      await expect(page.locator(".cad-model__code .cad-model__past-marker")).toHaveCount(8);
       // The theme extension loads asynchronously; wait until the editor has its colors.
       await expect.poll(() => page.locator(".cad-model__code .cm-editor").evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
       const colors = await page.locator(".cad-model__code").evaluate((code) => {

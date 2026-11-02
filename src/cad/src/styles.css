@@ -328,6 +328,16 @@
   grid-template-areas: "toolbar code" "stage code" "timeline timeline" "status status";
 }
 
+.cad-model--editor.cad-model--with-browser {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "toolbar toolbar" "browser stage" "timeline timeline" "status status";
+}
+
+.cad-model--editor.cad-model--with-browser.cad-model--with-code {
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 0.8fr);
+  grid-template-areas: "toolbar toolbar code" "browser stage code" "timeline timeline timeline" "status status status";
+}
+
 .cad-model--editor .cad-model__status {
   grid-area: status;
 }
@@ -467,7 +477,8 @@
   color: var(--cad-model-muted);
 }
 
-.cad-editor__chip {
+.cad-editor__chip,
+.cad-editor__version {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -477,7 +488,8 @@
   border-radius: 3px;
 }
 
-.cad-editor__chip code {
+.cad-editor__chip code,
+.cad-editor__version code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -536,6 +548,274 @@
   text-decoration: underline;
 }
 
+/* ---------- Bodies (research/15) ---------- */
+
+/* The browser: what exists at the timeline marker, an eye and a port per row. */
+.cad-editor__browser {
+  grid-area: browser;
+  box-sizing: border-box;
+  width: 11rem;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--studio-space-2xs, 4px) 0;
+  border-right: 1px solid var(--cad-model-border);
+  font-size: 12px;
+}
+
+.cad-editor__browser-heading {
+  margin: var(--studio-space-2xs, 4px) var(--studio-space-sm, 0.5rem) 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__browser-note {
+  margin: 0 var(--studio-space-sm, 0.5rem);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.cad-editor__browser-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cad-editor__browser-empty {
+  padding: 2px var(--studio-space-sm, 0.5rem);
+}
+
+.cad-editor__browser-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--studio-space-2xs, 4px);
+}
+
+.cad-editor__browser-row[data-nested="true"] {
+  padding-left: 1.25rem;
+}
+
+.cad-editor__browser-row[data-hovered="true"] {
+  background: var(--cad-model-cross-hover);
+}
+
+/* A body this user hid, or a private one they don't show: its name fades, its controls stay. */
+.cad-editor__browser-row[data-visible="false"] .cad-editor__browser-name {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__browser-name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  align-items: baseline;
+  padding: 2px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-family: var(--cad-model-family-code);
+  color: var(--cad-model-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cad-editor__browser-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cad-editor__browser-name:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* While a body or sketch field is picked, what it can take stands out. */
+.cad-editor__browser-row[data-pickable="true"] .cad-editor__browser-name {
+  cursor: crosshair;
+  text-decoration: underline dotted;
+}
+
+.cad-editor__browser-row[data-picked="true"] .cad-editor__browser-name {
+  color: var(--cad-model-accent-text);
+}
+
+.cad-editor__icon-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  color: var(--cad-model-fg);
+  cursor: pointer;
+}
+
+.cad-editor__icon-button[aria-pressed="false"] {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__icon-button:hover:not(:disabled),
+.cad-editor__icon-button:focus-visible {
+  background: var(--cad-model-panel);
+}
+
+.cad-editor__icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Join or branch: two buttons that read as one control. */
+.cad-editor__segmented {
+  display: inline-flex;
+}
+
+.cad-editor__segment {
+  padding: 2px 8px;
+  font: inherit;
+  border: 1px solid var(--cad-model-border);
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  cursor: pointer;
+}
+
+.cad-editor__segment:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.cad-editor__segment:last-child {
+  border-left: none;
+  border-radius: 0 3px 3px 0;
+}
+
+.cad-editor__segment[aria-checked="true"] {
+  background: var(--cad-model-panel);
+  border-color: var(--cad-model-accent-text);
+  color: var(--cad-model-accent-text);
+}
+
+.cad-editor__segment[aria-checked="true"] + .cad-editor__segment {
+  border-left: 1px solid var(--cad-model-accent-text);
+}
+
+.cad-editor__segment[aria-checked="false"]:has(+ .cad-editor__segment[aria-checked="true"]) {
+  border-right: none;
+}
+
+.cad-editor__segment:last-child[aria-checked="true"] {
+  border-left: 1px solid var(--cad-model-accent-text);
+}
+
+/* The lanes beneath the timeline's entries: one per body, links where they fork, copy, merge and return. */
+.cad-editor__lanes {
+  position: absolute;
+  left: 0;
+  bottom: var(--studio-space-2xs, 4px);
+  overflow: visible;
+  pointer-events: none;
+}
+
+.cad-editor__lane {
+  fill: none;
+  stroke: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 45%);
+  stroke-width: 1.5;
+}
+
+.cad-editor__lane[data-kind="sketch"] {
+  stroke: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 65%);
+}
+
+/* A copy is a new body, not a version of the one it copies. */
+.cad-editor__lane[data-link="copy"] {
+  stroke-dasharray: 2 2;
+}
+
+.cad-editor__lane[data-link="output"] {
+  stroke-dasharray: 1 2;
+}
+
+.cad-editor__lane-dot {
+  fill: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 30%);
+}
+
+.cad-editor__lane-dot[data-kind="sketch"] {
+  fill: var(--cad-model-bg);
+  stroke: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 45%);
+  stroke-width: 1;
+}
+
+.cad-editor__lane-port {
+  fill: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 30%);
+  stroke: color-mix(in oklch, var(--cad-model-fg), var(--cad-model-bg) 30%);
+  stroke-width: 1;
+}
+
+.cad-editor__lane-port[data-returned="false"] {
+  fill: var(--cad-model-bg);
+}
+
+.cad-editor__lane[data-hovered="true"] {
+  stroke: var(--cad-model-accent);
+  stroke-width: 2.5;
+}
+
+.cad-editor__lane-dot[data-hovered="true"],
+.cad-editor__lane-port[data-hovered="true"] {
+  stroke: var(--cad-model-accent);
+}
+
+.cad-editor__lane-dot[data-hovered="true"]:not([data-kind="sketch"]),
+.cad-editor__lane-port[data-hovered="true"][data-returned="true"] {
+  fill: var(--cad-model-accent);
+}
+
+/* Past the marker, as the entries there: faded and dashed. */
+.cad-editor__lanes-past {
+  opacity: 0.4;
+}
+
+.cad-editor__lanes-past .cad-editor__lane {
+  stroke-dasharray: 3 2;
+}
+
+.cad-editor__lanes-marker {
+  stroke: var(--cad-model-accent);
+  stroke-width: 3;
+}
+
+/* The return entry: where the lanes of what main returns end. Not one of the code's entries: it can't be dragged. */
+.cad-editor__return {
+  background: var(--cad-model-bg);
+}
+
+.cad-editor__return[aria-pressed="true"] {
+  outline: 3px solid var(--cad-model-fg);
+  outline-offset: 1px;
+}
+
+/*
+ * While a body or sketch field is picked, entries that can fill it invite a click, also private
+ * ones, which otherwise fade; others fade. What the field holds has the accent border.
+ */
+.cad-editor__entry[data-pickable="true"][data-status] {
+  cursor: crosshair;
+  opacity: 1;
+}
+
+.cad-editor__entry[data-picked="true"][data-index] {
+  border-color: var(--cad-model-accent-text);
+}
+
+.cad-editor__entry[data-pickable="false"] {
+  opacity: 0.45;
+}
+
 /* Holds the timeline and the marker's floating triangle, which the scrolling timeline would clip. */
 .cad-editor__timeline-wrap {
   grid-area: timeline;
@@ -545,6 +825,7 @@
 }
 
 .cad-editor__timeline {
+  position: relative;
   display: flex;
   align-items: stretch;
   gap: var(--studio-space-2xs, 4px);
@@ -554,7 +835,8 @@
   background: var(--cad-model-bg);
 }
 
-.cad-editor__entry {
+.cad-editor__entry,
+.cad-editor__return {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -615,7 +897,8 @@
 }
 
 /* Entries past the timeline marker: rolled back, as in Fusion. */
-.cad-editor__entry[data-past-marker="true"] {
+.cad-editor__entry[data-past-marker="true"],
+.cad-editor__return[data-past-marker="true"] {
   border-style: dashed;
   background: var(--cad-model-bg);
   font-style: italic;

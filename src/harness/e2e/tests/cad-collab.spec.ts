@@ -6,6 +6,7 @@
 import {
   CAD_MODULES,
   chooseField,
+  versionChips,
   dialog,
   editorView,
   modelSource,
@@ -132,7 +133,8 @@ test("M1: forms and picks in the editor, code in its code pane, references survi
   await expect(dialog(a)).toHaveAttribute("data-feature", "extrude2");
   await setField(a, "Distance", "4");
   await chooseField(a, "Operation", "join");
-  await chooseField(a, "Target body", "chamfer1");
+  // The sketch lies on chamfer1, which the join or cut therefore targets.
+  await expect(versionChips(a, "target")).toHaveText(["chamfer1"]);
   await allOk(a, ["sketch1", "extrude1", "sketch2", "notch", "fillet1", "chamfer1", "sketch3", "extrude2"]);
   await expect.poll(() => modelSource(b)).toContain("return extrude2;");
   await expect(cadView(b)).toHaveAttribute("data-state", "ready");
@@ -192,7 +194,8 @@ test("M3: ribs in a loop are a Custom Script; picks into it survive moving and a
   await toolbarButton(a, "Extrude").click();
   await setField(a, "Distance", "5");
   await chooseField(a, "Operation", "cut");
-  await chooseField(a, "Target body", "chamfer1");
+  // The sketch lies on chamfer1, which the join or cut therefore targets.
+  await expect(versionChips(a, "target")).toHaveText(["chamfer1"]);
   const features = ["sketch1", "base", "sketch2", "upright", "fillet1", "chamfer1", "sketch3", "extrude1"];
   await allOk(a, features);
   if (shots) await a.screenshot({ path: `${shots}/collab-m3-a.png` });

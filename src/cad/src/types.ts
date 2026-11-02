@@ -18,6 +18,13 @@ export interface DocUiState {
   views?: Record<string, CameraState>;
   /** The timeline marker, if it isn't at the end (research/07, "The timeline marker"). */
   marker?: TimelineMarker;
+  /** Whether the browser pane is open; it is by default. */
+  browserOpen?: boolean;
+  /**
+   * What this user shows or hides, against the default (research/15, "Visibility"): `body:<name>`
+   * for a body by its name, `version:<name>` for a returned version that isn't a body's head.
+   */
+  visibility?: Record<string, boolean>;
 }
 
 /** A timeline marker: before the entry whose first character `cursor` (an automerge cursor into `source`) is on. */

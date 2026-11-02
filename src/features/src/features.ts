@@ -1,6 +1,6 @@
 /**
  * The built-in feature subset of PoC 2 (research/07): sketch, extrude (new, join, cut), fillet,
- * chamfer and move. The modelling operations are ported from research/03's prototype (model.ts), because
+ * chamfer, combine (research/15) and move. The modelling operations are ported from research/03's prototype (model.ts), because
  * replicad doesn't expose OCCT's history. And `body`, which adopts shapes made with replicad (research/11).
  */
 import { Shape as ReplicadShape, type AnyShape } from "replicad";
@@ -220,6 +220,35 @@ export const chamfer = defineFeature<{ body: Body; edges: Ref[]; distance: numbe
   ...schemas.chamfer,
   inputs: ({ body }) => [body],
   build: ({ body, edges, distance }, ctx) => blend("chamfer", body, edges, distance, ctx),
+});
+
+/**
+ * Joins its tool bodies to its target, cuts them from it or intersects them with it, one after
+ * another. It consumes the tools as well as the target, as Fusion's Combine does without "Keep
+ * Tools" (research/15): a later feature can still use a tool, which forks it.
+ */
+export const combine = defineFeature<{ target: Body; tools: Body[]; operation?: "join" | "cut" | "intersect" }, Body>({
+  type: "combine",
+  ...schemas.combine,
+  inputs: ({ target, tools }) => [target, ...(Array.isArray(tools) ? tools : [])],
+  build({ target, tools, operation = "join" }, ctx) {
+    expectBody(target, "target");
+    if (!Array.isArray(tools) || tools.length === 0) throw new FeatureError("tools: select at least one body");
+    tools.forEach((tool, i) => expectBody(tool, `tools[${i}]`));
+    if (tools.includes(target)) throw new FeatureError(`tools: ${target.name} is the target`);
+    if (!["join", "cut", "intersect"].includes(operation)) throw new FeatureError(`operation: expected join, cut or intersect, got ${String(operation)}`);
+    const o = oc();
+    let topo = target.topo;
+    for (const tool of tools) {
+      const Op = operation === "join" ? o.BRepAlgoAPI_Fuse : operation === "cut" ? o.BRepAlgoAPI_Cut : o.BRepAlgoAPI_Common;
+      const bop = new Op(topo.shape, tool.topo.shape, progress());
+      if (!bop.IsDone()) throw new FeatureError(`the ${operation} with ${tool.name} failed`);
+      bop.SimplifyResult(true, true, 1e-3);
+      topo = propagate(bop as unknown as History, [topo, tool.topo], [], bop.Shape(), ctx.name);
+    }
+    if (topo.faces.length === 0) throw new FeatureError(`the ${operation} leaves nothing`);
+    return new Body(ctx.name, topo);
+  },
 });
 
 /**

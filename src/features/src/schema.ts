@@ -7,6 +7,8 @@ export type ParamSpec =
   | { kind: "length" | "number"; label: string; optional?: boolean; default?: number }
   | { kind: "choice"; options: readonly string[]; label: string; optional?: boolean; default?: string }
   | { kind: "sketch" | "body" | "profile"; label: string; optional?: boolean }
+  /** An array of bodies, e.g. a combine's tools. */
+  | { kind: "bodies"; label: string; optional?: boolean }
   /** Face or edge references; `multi`: an array of references. */
   | { kind: "faces" | "edges"; multi: boolean; label: string; optional?: boolean }
   /** An origin plane (`plane("XY")`) or a planar face reference. */
@@ -71,6 +73,17 @@ export const schemas = {
       body: { kind: "body", label: "Body" },
       edges: { kind: "edges", label: "Edges", multi: true },
       distance: { kind: "length", label: "Distance" },
+    },
+  },
+  combine: {
+    label: "Combine",
+    icon: "Combine",
+    // As a join or cut extrusion: the volume shows what it did to its target.
+    hover: "difference",
+    params: {
+      target: { kind: "body", label: "Target body" },
+      tools: { kind: "bodies", label: "Tool bodies" },
+      operation: { kind: "choice", label: "Operation", options: ["join", "cut", "intersect"], optional: true, default: "join" },
     },
   },
   move: {

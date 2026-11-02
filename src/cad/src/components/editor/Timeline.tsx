@@ -9,9 +9,17 @@ import type { CommentStore } from "../comments.ts";
 import { CommentsPopover } from "../CommentsPopover.tsx";
 import { entryOf } from "../../model/comments.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
+import { lanesHeight, ReturnGlyph, TimelineLanes, type Columns } from "./TimelineLanes.tsx";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
-const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
+const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", combine: "⊕\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
+
+
+/** Picks entry `index`'s version for the open feature; says why not, if not. */
+const pickEntry = (editor: Editor, index: number) => {
+  const version = editor.versionAt(index);
+  editor.setNotice(version ? editor.pickVersion(version) : "That entry isn't one body or sketch.");
+};
 
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);
@@ -39,6 +47,7 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
       aria-pressed={props.editor.open()?.name === props.entry.name}
       title={`${label()} ${names()}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
       onClick={() => {
+        if (props.editor.pickingVersion()) return pickEntry(props.editor, Number(props.item["data-index"]));
         if (props.entry.type === "body") return props.onOpenCode(props.entry.span);
         props.editor.openFeature(props.editor.open()?.name === props.entry.name ? undefined : props.entry);
       }}
@@ -53,7 +62,7 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
  * Code the timeline doesn't recognize as features (research/02, "Custom Script"). It lists the
  * feature calls the last build ran inside it, which is how references into it can be followed.
  */
-function ScriptItem(props: { entry: ScriptEntry; onOpen: (span: Span) => void; item: ItemProps }) {
+function ScriptItem(props: { editor: Editor; entry: ScriptEntry; onOpen: (span: Span) => void; item: ItemProps }) {
   const broken = () => props.entry.features.find((f) => status(f) !== "ok");
   return (
     <button
@@ -63,7 +72,7 @@ function ScriptItem(props: { entry: ScriptEntry; onOpen: (span: Span) => void; i
       data-lines={props.entry.lines.join("-")}
       data-status={broken() ? status(broken()) : "ok"}
       title={`Custom Script, lines ${props.entry.lines.join("–")}`}
-      onClick={() => props.onOpen(props.entry.span)}
+      onClick={() => (props.editor.pickingVersion() ? pickEntry(props.editor, Number(props.item["data-index"])) : props.onOpen(props.entry.span))}
     >
       <span class="cad-editor__glyph">{"{ }"}</span>
       <span>
@@ -90,6 +99,7 @@ const MARKER_SIZE = { width: 8 * MARKER_SCALE, height: 23.333 * MARKER_SCALE };
 /**
  * CSS order of the timeline's children: entry i at 10i + 5; in the gap before entry p, a drop
  * indicator before the marker at 10p + 1, the marker at 10p + 2, a drop indicator after it at 10p + 3.
+ * With n entries, the return entry is at 10n + 4, so that the gap n + 1, the end, is past it.
  */
 const ORDER = { entry: (i: number) => 10 * i + 5, marker: (p: number) => 10 * p + 2, drop: (p: number, afterMarker: boolean) => 10 * p + (afterMarker ? 3 : 1) };
 
@@ -115,7 +125,16 @@ interface Drop {
  * them within the range their dependencies allow ("Reordering"); hovering, dragging or opening one
  * marks what it depends on and what depends on it.
  */
-export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined }) {
+/** The return entry: what main returns, the end the lanes of the returned versions go to (research/15). */
+export interface ResultEntry {
+  open: boolean;
+  onOpen(): void;
+  onHover(hovered: boolean): void;
+  /** How many values main returns, if it returns names. */
+  count: number | undefined;
+}
+
+export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined; result?: ResultEntry }) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -126,6 +145,17 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   /** Where the marker is being dragged to. */
   const [markerDrag, setMarkerDrag] = createSignal<number>();
   const markerAt = () => markerDrag() ?? editor.marker();
+
+  /** The lanes to highlight: the one hovered in the browser, or those of the hovered entry's versions. */
+  const hoveredLanes = createMemo(() => {
+    const l = editor.lanes();
+    const out = new Set<number>();
+    const lane = editor.hoveredLane();
+    if (lane !== undefined) out.add(lane);
+    const index = editor.hovered();
+    if (l && index !== undefined) for (const v of l.versions.values()) if (v.entry === index) out.add(l.laneOf.get(v.name)!);
+    return out;
+  });
 
   /** The open context menu: whose, and where it was asked for. */
   const [menu, setMenu] = createSignal<{ index: number; x: number; y: number }>();
@@ -244,7 +274,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     return r.left + r.width / 2;
   };
   /** The gap nearest to `x`: before the first entry whose middle is right of it. */
-  const gapAt = (x: number) => entryElements().filter((el) => middle(el) < x).length;
+  const gapAt = (x: number) => [...entryElements(), ...(returnEl ? [returnEl] : [])].filter((el) => middle(el) < x).length;
 
   /**
    * The layout when a drag starts. Drops are found in it, not in the current layout, which the drop
@@ -312,6 +342,15 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     get "data-comment-focused"() {
       return commentFocused(index) ? "true" : undefined;
     },
+    get "data-picked"() {
+      const version = editor.versionAt(index);
+      return version && editor.pickedVersions().includes(version) ? "true" : undefined;
+    },
+    get "data-pickable"() {
+      if (!editor.pickingVersion()) return undefined;
+      const version = editor.versionAt(index);
+      return version && editor.pickable(version) ? "true" : "false";
+    },
     onPointerEnter: () => editor.setHovered(index),
     onPointerLeave: () => editor.setHovered(undefined),
     onFocus: (event) => {
@@ -370,9 +409,9 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
 
   const markerKeys: Record<string, (at: number) => number> = {
     ArrowLeft: (at) => Math.max(0, at - 1),
-    ArrowRight: (at) => Math.min(count(), at + 1),
+    ArrowRight: (at) => Math.min(count() + 1, at + 1),
     Home: () => 0,
-    End: () => count(),
+    End: () => count() + 1,
   };
 
   const markerDragHandlers = {
@@ -397,8 +436,17 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   const [moreAt, setMoreAt] = createSignal<{ right: number; top: number }>();
   /** Where collaborators' markers are, for their names above the timeline, by key. */
   const [peerAt, setPeerAt] = createSignal<Record<string, { x: number; top: number }>>({});
+  /** Where the entries are in the scrolling timeline, for the lanes beneath them. */
+  const [columns, setColumns] = createSignal<Columns>();
+  let returnEl: HTMLButtonElement | undefined;
+  const centre = (el: HTMLElement | null | undefined) => (el ? el.offsetLeft + el.offsetWidth / 2 : 0);
   const place = () => {
     if (!markerEl || !nav || !wrap) return;
+    const xs = editor.timeline().entries.map((_, i) => centre(entryElement(i)));
+    const markerX = centre(markerEl);
+    const next = { xs, returnX: returnEl ? centre(returnEl) : markerX, markerX, pastX: markerAt() <= count() ? markerX : nav.scrollWidth, width: nav.scrollWidth };
+    const prev = columns();
+    if (!prev || JSON.stringify(prev) !== JSON.stringify(next)) setColumns(next);
     const slot = markerEl.getBoundingClientRect();
     const box = wrap.getBoundingClientRect();
     const scroller = nav.getBoundingClientRect();
@@ -421,6 +469,8 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     active();
     renaming();
     editor.timeline();
+    editor.lanes();
+    props.result?.count;
     props.peers?.map((p) => p.marker);
     requestAnimationFrame(place);
   });
@@ -458,6 +508,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       <nav
         class="cad-editor__timeline"
         aria-label="Timeline"
+        style={{ "padding-bottom": `calc(var(--studio-space-2xs, 4px) + ${lanesHeight(editor.lanes()?.rows ?? 0)}px)` }}
         ref={(el) => {
           nav = el;
           el.addEventListener("click", swallowClick, true);
@@ -469,7 +520,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
             <Switch>
               <Match when={renaming()?.index === index && renaming()}>{(r) => <RenameField editor={editor} index={index} from={r().from} onDone={() => endRename(index)} />}</Match>
               <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onOpenCode={props.onOpenCode} />}</Match>
-              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} onOpen={props.onOpenCode} item={item(index)} />}</Match>
+              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem editor={editor} entry={e()} onOpen={props.onOpenCode} item={item(index)} />}</Match>
             </Switch>
           )}
         </Index>
@@ -481,7 +532,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
           role="slider"
           aria-label="Timeline marker"
           aria-valuemin={0}
-          aria-valuemax={count()}
+          aria-valuemax={count() + 1}
           aria-valuenow={markerAt()}
           title="Timeline marker: drag it back to roll the model back; new features go here"
           style={{ order: ORDER.marker(markerAt()), width: `${2 * MARKER_SCALE}px` }}
@@ -511,8 +562,32 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
             />
           )}
         </Show>
-        <Show when={editor.marker() < count()}>
-          <button class="cad-editor__to-end" style={{ order: ORDER.entry(count()) + 1 }} aria-label="Move the timeline marker to the end" title="Move the timeline marker to the end" onClick={() => editor.setMarker(count())}>
+        <Show when={props.result}>
+          {(result) => (
+            <button
+              ref={returnEl}
+              class="cad-editor__return"
+              data-kind="return"
+              aria-pressed={result().open}
+              data-past-marker={markerAt() <= count() ? "true" : undefined}
+              style={{ order: ORDER.entry(count()) - 1 }}
+              title={`What the model returns${result().count === undefined ? "" : `: ${result().count} value${result().count === 1 ? "" : "s"}`}`}
+              onClick={() => result().onOpen()}
+              onPointerEnter={() => result().onHover(true)}
+              onPointerLeave={() => result().onHover(false)}
+              onFocus={() => result().onHover(true)}
+              onBlur={() => result().onHover(false)}
+            >
+              <ReturnGlyph />
+              <span>return</span>
+            </button>
+          )}
+        </Show>
+        <Show when={editor.lanes() && columns()}>
+          <TimelineLanes lanes={editor.lanes()!} columns={columns()!} hovered={hoveredLanes()} marker={markerAt()} />
+        </Show>
+        <Show when={editor.marker() <= count()}>
+          <button class="cad-editor__to-end" style={{ order: ORDER.marker(count() + 1) + 1 }} aria-label="Move the timeline marker to the end" title="Move the timeline marker to the end" onClick={() => editor.setMarker(count() + 1)}>
             ⏭{"\uFE0E"}
           </button>
         </Show>

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, clickEntity, dialog, editorView, entities, isVisible, modelSource, setField, setModelSource, timelineEntry, toolbarButton } from "../cad.ts";
+import { CAD_MODULES, clickEntity, dialog, editorView, entities, isVisible, modelSource, pickVersion, setField, setModelSource, timelineEntry, toolbarButton } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu } from "../ui.ts";
 
@@ -149,11 +149,10 @@ test("a result that nothing uses is marked, and retargeting keeps bodies in the 
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
 
   await timelineEntry(page, "extrude1").click();
-  const target = dialog(page).getByLabel("Target body", { exact: true });
-  await target.selectOption("chamfer1");
+  await pickVersion(page, "target", "chamfer1");
   await expect.poll(() => modelSource(page)).toContain("return extrude1;");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
-  await target.selectOption("fillet2");
+  await pickVersion(page, "target", "fillet2");
   await expect.poll(() => modelSource(page)).toContain("return [extrude1, chamfer1];");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
 });
@@ -186,9 +185,10 @@ test("sketches that no feature uses show in the view", async ({ users }) => {
   await toolbarButton(page, "Extrude").click();
   await expect.poll(() => modelSource(page)).toContain("return [fillet1, extrude1];");
   await expect.poll(() => shownSketches(page)).toBe("");
-  // Rolled back before the extrusion, the sketch is unused again.
+  // Rolled back before the extrusion (past the return, then before it), the sketch is unused again.
   const marker = page.getByRole("slider", { name: "Timeline marker" });
   await marker.focus();
+  await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowLeft");
   await expect.poll(() => shownSketches(page)).toBe("sketch3");
   await page.keyboard.press("End");

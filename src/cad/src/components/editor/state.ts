@@ -9,8 +9,33 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
-import { allowedRange, canMove, graph, inputOf, relations, type Graph, type Relation } from "../../model/deps.ts";
-import { apply, applyToText, appendElement, deleteFeature, elements, ensureImports, freshName, insertFeatureAt, lastOf, moveEntry, removeElement, returnedVariables, setProp, usedFunctions, type Edit } from "../../model/splice.ts";
+import { allowedRange, canMove, graph, inputOf, paramRole, relations, type Graph, type Relation } from "../../model/deps.ts";
+import {
+  addToReturn,
+  apply,
+  applyToText,
+  appendElement,
+  chainMode,
+  deleteFeature,
+  elements,
+  ensureImports,
+  freshName,
+  insertFeatureAt,
+  lastOf,
+  moveEntry,
+  removeElement,
+  removeFromReturn,
+  resketch,
+  retarget,
+  retool,
+  returnEditable,
+  returnedVariables,
+  setChainMode,
+  setProp,
+  usedFunctions,
+  type Edit,
+} from "../../model/splice.ts";
+import { lanes as lanesOf, type Lanes } from "../../model/lanes.ts";
 import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, ownerNames, ownersOf, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { CadModelDoc, TimelineMarker } from "../../types.ts";
@@ -21,8 +46,12 @@ import type { Entity, EntityKind } from "../Viewer.tsx";
 export interface PickTarget {
   /** The parameter that a picked entity fills. */
   param: string;
-  kind: EntityKind;
-  /** Whether picks are added to a list (edges) or replace the value (a sketch plane). */
+  /**
+   * A face or edge of a body, or a body or sketch as a whole, which is picked as its variable
+   * (research/15, "Availability"); `version` is either, e.g. for the return (`param: "return"`).
+   */
+  kind: EntityKind | "body" | "sketch" | "version";
+  /** Whether picks are added to a list (edges, tools) or replace the value (a sketch plane, a target). */
   multi: boolean;
 }
 
@@ -45,13 +74,39 @@ export interface Editor {
   /** Adds a feature with default parameters and opens it. */
   insert(type: InsertableType): void;
   deleteOpen(): void;
-  /** Fills the pick target with the picked entity's reference. */
+  /** Fills the pick target with the picked entity's reference, or with its body's variable. */
   pick(entity: Entity): Promise<void>;
-  /** Variables of features before the open one that produce a body or a sketch. */
-  variablesBefore(kind: "body" | "sketch"): string[];
+  /** Fills a body or sketch pick target with a version, by its variable; a list gains or loses it. Resolves to why not. */
+  pickVersion(name: string): string | undefined;
+  /** Whether a version can fill the current body or sketch pick target: one of the right kind before the open feature. */
+  pickable(name: string): boolean;
+  /** While a body or sketch field or the return is picked, the versions it holds. */
+  pickedVersions: Accessor<string[]>;
+  /** Whether a body or sketch field is picked. */
+  pickingVersion: Accessor<boolean>;
+  /** The version of entry `index`, if it has exactly one, e.g. to pick it. */
+  versionAt(index: number): string | undefined;
+  /** While a face, edge, body or sketch is picked, the open feature's entry, before which the view is rolled back. */
+  pickingAt: Accessor<number | undefined>;
+  /** The lineages of bodies and their lanes (research/15). */
+  lanes: Accessor<Lanes | undefined>;
+  /** The lane hovered in the browser, by index. */
+  hoveredLane: Accessor<number | undefined>;
+  setHoveredLane(lane: number | undefined): void;
+  /** Whether the editor can edit what main returns. */
+  returnEditable: Accessor<boolean>;
+  /** Returns a version or makes it private. */
+  setOutput(name: string, returned: boolean): void;
+  /** Whether the open feature joins its input's chain or branches off it, if it has the choice. */
+  chainMode: Accessor<"join" | "branch" | undefined>;
+  setChainMode(mode: "join" | "branch"): void;
   /** The dependencies between the timeline's entries. */
   graph: Accessor<Graph | undefined>;
-  /** The timeline marker: entries from this index on are rolled back; `entries.length` is the end. */
+  /**
+   * The timeline marker: entries from this index on are rolled back. `entries.length` is before the
+   * return, where the view shows what exists after the last feature; `entries.length + 1`, the end,
+   * is past it, where the view shows what main returns (research/15, "The timeline with lanes").
+   */
   marker: Accessor<number>;
   setMarker(position: number): void;
   /** Where another marker, e.g. a collaborator's, is in the timeline. */
@@ -108,6 +163,7 @@ function tryAnalyze(source: string): { analysis?: Analysis; error?: string } {
 export type InsertableType = Exclude<FeatureType, "body">;
 
 const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => string> = {
+  combine: ({ body }) => `combine({ target: ${body}, tools: [] })`,
   sketch: () => `sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) })`,
   extrude: ({ sketch }) => `extrude({ sketch: ${sketch}, distance: 10 })`,
   fillet: ({ body }) => `fillet({ body: ${body}, edges: [], radius: 1 })`,
@@ -115,12 +171,15 @@ const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => 
   move: ({ body }) => `move({ body: ${body}, x: 20 })`,
 };
 
+/** A marker's `next` when it is before the return, for when its cursor is lost. */
+const RETURN = "return";
+
 const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /** A label of an entry for messages. */
 const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.names.join(", ") : `the Custom Script at lines ${entry.lines.join("–")}`);
 
-export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: Pick<UiState, "marker" | "setMarker">): Editor {
+export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: Pick<UiState, "marker" | "setMarker" | "renameVisibility">): Editor {
   const [source, setSource] = createSignal(handle.doc()?.source ?? "");
   const onChange = () => setSource(handle.doc()?.source ?? "");
   handle.on("change", onChange);
@@ -206,7 +265,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const before: Timeline = { ...tl, entries: tl.entries.slice(0, position) };
     // At the end, a new fillet or chamfer works on the visible result, which may come from a Custom
     // Script; before the end, on the body that the next feature after the marker works on, e.g. what a loop made.
-    const returned = position === tl.entries.length ? returnedVariables(a) : [];
+    const returned = position >= tl.entries.length ? returnedVariables(a) : [];
     const deps = graph(a, tl);
     const declaredBefore = (name: string) => (deps.declaredBy.get(name) ?? Infinity) < position;
     const nextInput = tl.entries
@@ -216,7 +275,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const body = (returned.length === 1 ? returned[0] : undefined) ?? nextInput ?? lastOf(before, "body") ?? "undefined";
     const sketch = lastOf(before, "sketch");
     const code = DEFAULTS[type]({ sketch: sketch ?? "undefined", body });
-    const consumes = type === "fillet" || type === "chamfer" ? body : undefined;
+    const consumes = type === "fillet" || type === "chamfer" || type === "combine" ? body : undefined;
     const hides = type === "extrude" ? sketch : undefined;
     apply(handle, insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) }));
     const after = tryAnalyze(doc().source).analysis;
@@ -224,7 +283,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (!call) return;
     setCursor(getCursor(doc(), ["source"], call.span.start));
     setOpenName(name);
-    setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : undefined);
+    setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : type === "combine" ? { param: "tools", kind: "body", multi: true } : undefined);
   };
 
   const deleteOpen = () => {
@@ -241,6 +300,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const pick = async (entity: Entity) => {
     const target = pickTarget();
     if (!target) return;
+    if (target.kind === "body" || target.kind === "sketch" || target.kind === "version") {
+      const why = pickVersion(entity.body);
+      if (why) throw new Error(why);
+      return;
+    }
     const { code } = await model.engine.pick(entity.body, entity.kind, entity.index);
     const bodyIsVariable = model.trace().some((t) => t.variable && t.result === entity.body);
     editOpen((call, a, text) => {
@@ -258,23 +322,93 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (!target.multi) setPickTarget(undefined);
   };
 
-  const variablesBefore = (kind: "body" | "sketch") => {
-    const entries = tl().entries;
-    const index = entries.findIndex((e) => e === open());
-    return entries
-      .slice(0, index < 0 ? entries.length : index)
-      .filter((e): e is FeatureEntry => e.kind === "feature" && (kind === "sketch") === (e.type === "sketch"))
-      .map((e) => e.name);
-  };
-
   const g = createMemo(() => {
     const a = analysis();
     return a ? graph(a, tl()) : undefined;
   });
+  const lanes = createMemo(() => {
+    const graph = g();
+    return graph ? lanesOf(tl(), graph) : undefined;
+  });
+  const [hoveredLane, setHoveredLane] = createSignal<number>();
 
-  /** A marker's position in a timeline of the document's current source; undefined is at the end. */
+  const pickable = (name: string): boolean => {
+    const target = pickTarget();
+    const entry = open();
+    const version = lanes()?.versions.get(name);
+    // The return can take any version.
+    if (target?.param === RETURN) return !!version;
+    if (!target || !entry || !version || version.kind !== target.kind) return false;
+    const index = tl().entries.indexOf(entry);
+    return version.entry < index;
+  };
+
+  const pickVersion = (name: string): string | undefined => {
+    const target = pickTarget();
+    if (target?.param === RETURN) {
+      if (!pickable(name)) return `${name} isn't a body or sketch.`;
+      setOutput(name, !lanes()?.returned.has(name));
+      return undefined;
+    }
+    const entry = open();
+    if (!target || !entry || (target.kind !== "body" && target.kind !== "sketch")) return undefined;
+    if (!pickable(name)) return `${name} isn't a ${target.kind} before ${entry.name}.`;
+    let why: string | undefined;
+    const valueOf = (call: FeatureCall, text: string, key: string) => {
+      const p = call.props?.find((x) => x.key === key);
+      return p?.node.type === "Identifier" ? text.slice(p.value.start, p.value.end) : undefined;
+    };
+    editOpen((call, a, text) => {
+      if (target.multi) {
+        const items = elements(call, target.param).map((s) => text.slice(s.start, s.end));
+        const at = items.indexOf(name);
+        if (at >= 0) return [...removeElement(call, target.param, at), ...retool(a, call, undefined, name)];
+        if (valueOf(call, text, "target") === name) {
+          why = `${name} is the target of ${entry.name}.`;
+          return [];
+        }
+        return [...appendElement(call, target.param, name), ...retool(a, call, name, undefined)];
+      }
+      const previous = valueOf(call, text, target.param);
+      if (previous === name) return [];
+      if (target.param === "target" && elements(call, "tools").some((s) => text.slice(s.start, s.end) === name)) {
+        why = `${name} is a tool of ${entry.name}.`;
+        return [];
+      }
+      // A body it consumes takes its place in the result, and the previous one comes back; a body it reads, e.g. one it copies, stays.
+      const role = paramRole(call.type, target.param);
+      const result = target.kind === "sketch" ? resketch(a, call, previous, name) : role === "consume" ? retarget(a, call, entry.name, previous, name) : [];
+      return [...setProp(call, target.param, name), ...result];
+    });
+    if (!target.multi && !why) setPickTarget(undefined);
+    return why;
+  };
+
+  /** The current document, analyzed, with its timeline. */
+  const fresh = () => {
+    const text = doc().source;
+    const { analysis: a } = tryAnalyze(text);
+    return a ? { text, a, t: timeline(text, a, []) } : undefined;
+  };
+  const setOutput = (name: string, returned: boolean) => {
+    const f = fresh();
+    if (f) apply(handle, returned ? addToReturn(f.text, f.a, name) : removeFromReturn(f.a, name));
+  };
+  const openChainMode = createMemo(() => {
+    const graph = g();
+    const index = tl().entries.findIndex((e) => e === open());
+    return graph && index >= 0 && !syntaxError() ? chainMode(graph, index) : undefined;
+  });
+  const setOpenChainMode = (mode: "join" | "branch") => {
+    const f = fresh();
+    const name = open()?.name;
+    const index = f?.t.entries.findIndex((e) => e.kind === "feature" && e.name === name) ?? -1;
+    if (f && index >= 0) apply(handle, setChainMode(f.text, f.a, f.t, index, mode));
+  };
+
+  /** A marker's position in a timeline of the document's current source; undefined is at the end, past the return. */
   function markerIn(t: Timeline, m: TimelineMarker | undefined): number {
-    if (!m) return t.entries.length;
+    if (!m) return t.entries.length + 1;
     let offset: number | undefined;
     try {
       offset = getCursorPosition(doc(), ["source"], m.cursor);
@@ -288,19 +422,37 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     source();
     return syntaxError() && previous !== undefined ? previous : markerIn(tl(), ui.marker());
   });
-  /** Puts the marker before entry `position` of `t`, a timeline of the document's current source. */
-  const setMarkerIn = (t: Timeline, position: number) => {
+  /**
+   * Puts the marker before entry `position` of `t`, a timeline of `a`, the document's current source:
+   * before the return at `entries.length`, on the return or else on main's closing brace.
+   */
+  const setMarkerIn = (t: Timeline, a: Analysis, position: number) => {
     const entry = t.entries[position];
-    if (!entry) return ui.setMarker(undefined);
-    ui.setMarker({ cursor: getCursor(doc(), ["source"], entry.span.start, "after"), next: entry.kind === "feature" ? entry.name : "" });
+    const end = t.returned?.start ?? (a.main ? a.main.body.end - 1 : undefined);
+    if (entry) ui.setMarker({ cursor: getCursor(doc(), ["source"], entry.span.start, "after"), next: entry.kind === "feature" ? entry.name : "" });
+    else if (position === t.entries.length && end !== undefined) ui.setMarker({ cursor: getCursor(doc(), ["source"], end, "after"), next: RETURN });
+    else ui.setMarker(undefined);
   };
-  const setMarker = (position: number) => (syntaxError() ? undefined : setMarkerIn(tl(), position));
+  const setMarker = (position: number) => {
+    const a = analysis();
+    if (!syntaxError() && a) setMarkerIn(tl(), a, position);
+  };
 
   const [notice, setNotice] = createSignal<string>();
   const [hovered, setHovered] = createSignal<number>();
   const [dragging, setDragging] = createSignal<number>();
+  /** Whether a body or sketch field is picked: hovering then shows what would be picked, nothing else (research/15, "Availability"). */
+  const pickingVersion = () => {
+    const kind = pickTarget()?.kind;
+    return kind === "body" || kind === "sketch" || kind === "version";
+  };
+  /** The version of entry `index`, if it has exactly one. */
+  const versionAt = (index: number): string | undefined => {
+    const versions = [...(lanes()?.versions.values() ?? [])].filter((v) => v.entry === index);
+    return versions.length === 1 ? versions[0]!.name : undefined;
+  };
   const focused = () => {
-    const d = dragging() ?? hovered();
+    const d = dragging() ?? (pickingVersion() ? undefined : hovered());
     if (d !== undefined) return d;
     const index = tl().entries.findIndex((e) => e === open());
     return index < 0 ? undefined : index;
@@ -341,6 +493,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   );
   const hoveredFeatures = createMemo(
     () => {
+      if (pickingVersion()) return [];
       const index = dragging() ?? hovered();
       return index !== undefined ? ownersOf(tl().entries[index]) : codeFeatures();
     },
@@ -402,7 +555,12 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     return undefined;
   };
 
-  const renameEntry = (index: number, from: string, to: string) => refactorEntry(index, (_, a, fresh, i) => rename(a, fresh, i, from, to), `Renaming ${from} to ${to}`);
+  const renameEntry = async (index: number, from: string, to: string) => {
+    const why = await refactorEntry(index, (_, a, fresh, i) => rename(a, fresh, i, from, to), `Renaming ${from} to ${to}`);
+    // What this user shows or hides goes with the name.
+    if (!why) ui.renameVisibility({ [`body:${from}`]: `body:${to}`, [`version:${from}`]: `version:${to}` });
+    return why;
+  };
   const wrap = (index: number) => refactorEntry(index, wrapInBody, `Wrapping ${labelOf(tl().entries[index])} in body()`, true);
   const unwrap = (index: number) => refactorEntry(index, unwrapBody, `Unwrapping ${labelOf(tl().entries[index])}`);
   const remove = (index: number) => {
@@ -459,7 +617,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (!canMove(graph(a, fresh), from, to)) return blocked(index, position) ?? "The timeline changed meanwhile.";
     apply(handle, moveEntry(text, a, fresh, from, to));
     const after = tryAnalyze(doc().source).analysis;
-    if (after) setMarkerIn(timeline(doc().source, after, []), markerGap);
+    if (after) setMarkerIn(timeline(doc().source, after, []), after, markerGap);
     return undefined;
   };
 
@@ -476,10 +634,31 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     insert,
     deleteOpen,
     pick,
-    variablesBefore,
+    pickVersion,
+    pickable,
+    pickingVersion,
+    pickedVersions: () => {
+      const target = pickTarget();
+      if (!target || !pickingVersion()) return [];
+      if (target.param === RETURN) return [...(lanes()?.returned ?? [])];
+      const value = open()?.call.props?.find((p) => p.key === target.param)?.node;
+      return value?.type === "Identifier" ? [value.name] : value?.type === "ArrayExpression" ? value.elements.flatMap((e) => (e?.type === "Identifier" ? [e.name] : [])) : [];
+    },
+    versionAt,
+    pickingAt: () => {
+      const index = tl().entries.findIndex((e) => e === open());
+      return pickTarget() && index >= 0 ? index : undefined;
+    },
+    lanes,
+    hoveredLane,
+    setHoveredLane,
+    returnEditable: () => !syntaxError() && !!analysis() && returnEditable(analysis()!),
+    setOutput,
+    chainMode: openChainMode,
+    setChainMode: setOpenChainMode,
     graph: g,
     marker,
-    markerOf: (m: TimelineMarker | undefined) => (syntaxError() ? tl().entries.length : markerIn(tl(), m)),
+    markerOf: (m: TimelineMarker | undefined) => (syntaxError() ? tl().entries.length + 1 : markerIn(tl(), m)),
     setMarker,
     hovered: () => dragging() ?? hovered(),
     setHovered,

@@ -71,6 +71,8 @@ export interface ViewerProps {
   /** Which entities hover and click pick; nothing is pickable without it, and hover takes edges, else faces. */
   pick?: EntityKind | undefined;
   onPick?: (entity: Entity) => void;
+  /** Whether the hovered face or edge is highlighted; not while whole bodies are picked, which the caller highlights. */
+  hoverHighlight?: boolean;
   /** The hovered face or edge of a feature-library body, if any. */
   onHover?: (entity: Entity | undefined) => void;
   /**
@@ -592,7 +594,7 @@ export function Viewer(props: ViewerProps) {
       dispose([...highlightGroup.children]);
       highlightGroup.clear();
       const own = (entity: Entity | undefined, style: HighlightStyle): Highlight[] => (entity ? [{ body: entity.body, kind: entity.kind, indices: [entity.index], style }] : []);
-      const all = [...(props.highlight ?? []), ...own(selected(), "accent"), ...own(hovered(), "hover")];
+      const all = [...(props.highlight ?? []), ...own(selected(), "accent"), ...(props.hoverHighlight === false ? [] : own(hovered(), "hover"))];
       /** The selected edge is hovered: it gets the ring, and the hover no line of its own. */
       const ringed = selected()?.kind === "edge" && same(selected(), hovered());
       /** The selected face is hovered: it keeps the selection's fill, and gets the hover's outline. */

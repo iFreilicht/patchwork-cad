@@ -11,10 +11,10 @@ The account doc is the place for that, but tools don't get its handle anymore. P
 Both tools subscribe with the tool-storage id `patchwork-cad`, so they share one doc ([`UiStorageDoc`](../src/cad/src/types.ts)), keyed by model URL:
 
 ```ts
-{ docs: { [modelUrl]: { codeOpen?: boolean; views?: { [toolId]: CameraState }; marker?: { cursor: string; next: string } } } }
+{ docs: { [modelUrl]: { codeOpen?: boolean; views?: { [toolId]: CameraState }; marker?: { cursor: string; next: string }; browserOpen?: boolean; visibility?: { [key]: boolean } } } }
 ```
 
-The editor remembers whether the code pane was open and where its timeline marker is ([07](07-poc-modelling-ui.md#the-timeline-marker)). Without a provider, e.g. outside Patchwork, the state is kept in memory only.
+The editor remembers whether the code pane and the browser were open, where its timeline marker is ([07](07-poc-modelling-ui.md#the-timeline-marker)) and which bodies the user hides ([15](15-bodies.md#visibility)). Without a provider, e.g. outside Patchwork, the state is kept in memory only.
 
 ## Camera
 

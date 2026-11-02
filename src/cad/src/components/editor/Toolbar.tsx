@@ -3,7 +3,7 @@ import { schemas, type FeatureType } from "@patchwork-cad/features/schema";
 import type { Editor, InsertableType } from "./state.ts";
 
 /** Adds features at the timeline marker; body() adopts code, so it is written, not added (research/11). */
-export function Toolbar(props: { editor: Editor; codeOpen: boolean; onToggleCode: () => void }) {
+export function Toolbar(props: { editor: Editor; codeOpen: boolean; onToggleCode: () => void; browserOpen: boolean; onToggleBrowser: () => void }) {
   const types = (Object.keys(schemas) as FeatureType[]).filter((t): t is InsertableType => t !== "body");
   return (
     <div class="cad-editor__toolbar" role="toolbar">
@@ -15,6 +15,9 @@ export function Toolbar(props: { editor: Editor; codeOpen: boolean; onToggleCode
         )}
       </For>
       <span class="cad-editor__spacer" />
+      <button class="cad-editor__button" aria-pressed={props.browserOpen} onClick={() => props.onToggleBrowser()}>
+        Browser
+      </button>
       <button class="cad-editor__button" aria-pressed={props.codeOpen} onClick={() => props.onToggleCode()}>
         Code
       </button>

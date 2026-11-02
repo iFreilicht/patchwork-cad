@@ -71,7 +71,8 @@ test("a comment on code shows for the other user, who opens its thread from the 
   // B sees the commented code and opens the thread by clicking it.
   const marked = b.locator(".cad-model__code .cad-model__comment");
   await expect(marked).toHaveText(/const extrude1/, { timeout: 15_000 });
-  await marked.click();
+  // At its start: in a narrow code pane, the middle of the long line is scrolled under the gutter.
+  await marked.click({ position: { x: 4, y: 4 } });
   await expect(b.locator(".cad-model__comment-popover .comment-content")).toHaveText("Too thin?");
 });
 

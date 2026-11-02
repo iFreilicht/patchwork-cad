@@ -158,7 +158,7 @@ test("hovering a feature in the timeline or code highlights what it made, also p
 
   // Rolled back before the notch, its ghost is the same: the volume doesn't depend on what the view shows.
   await marker(page).focus();
-  for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowLeft");
+  for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowLeft");
   await expect(editorView(page)).toHaveAttribute("data-marker", "3");
   await expect(editorView(page)).toHaveAttribute("data-rolled-back", "true");
   await timelineEntry(page, "notch").hover();
@@ -209,7 +209,8 @@ test("a body() entry highlights all its bodies, and opening code highlights at i
   await timelineEntry(page, "left").hover();
   await expect.poll(bodies).toEqual(expected);
   await page.keyboard.press("End");
-  await expect(editorView(page)).toHaveAttribute("data-marker", "3");
+  // Past the return, after the three entries.
+  await expect(editorView(page)).toHaveAttribute("data-marker", "4");
 
   // Selecting a body() entry opens its code with the cursor at its start: once the pointer leaves
   // the timeline, the cursor highlights it, and moving the cursor moves the highlight.

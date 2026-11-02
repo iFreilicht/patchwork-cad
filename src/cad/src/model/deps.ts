@@ -11,10 +11,11 @@ import type { Timeline } from "./timeline.ts";
  * How an entry uses a name:
  * - `consume`: the body a fillet, chamfer or joining/cutting extrude works on (`body:`, `target:`)
  * - `read`: the body a sketch's plane lies on (`body:` of a sketch), or that a move copies
+ * - `tool`: a body a combine consumes besides its target (an element of `tools:`), which ends its chain there
  * - `return`: an identifier `main` returns
  * - `hard`: anything else, e.g. `sketch: sketch1`, `notch.side.c` or Custom Script code
  */
-export type Role = "consume" | "read" | "return" | "hard";
+export type Role = "consume" | "read" | "tool" | "return" | "hard";
 
 export interface Use {
   name: string;
@@ -24,6 +25,8 @@ export interface Use {
   owner: number;
   /** The property key, if the use is a shorthand property (`{ body }`). */
   shorthand: string | undefined;
+  /** The parameter it is the value of, or an element of (`tools: [a, b]`), in its feature's call. */
+  key?: string;
 }
 
 export interface Graph {
@@ -34,14 +37,21 @@ export interface Graph {
   declaredBy: Map<string, number>;
 }
 
-/** Feature parameters that name the body a feature consumes or reads. */
-const VERSION_PARAMS: Record<string, Record<string, "consume" | "read">> = {
+/** Feature parameters that name the body a feature consumes or reads; `tool` parameters are arrays of bodies. */
+const VERSION_PARAMS: Record<string, Record<string, "consume" | "read" | "tool">> = {
   fillet: { body: "consume" },
   chamfer: { body: "consume" },
   extrude: { target: "consume" },
+  combine: { target: "consume", tools: "tool" },
   sketch: { body: "read" },
   move: { body: "read" },
 };
+
+/** How a feature uses the body or bodies in parameter `key`, if it is a version parameter. */
+export const paramRole = (type: string, key: string): "consume" | "read" | "tool" | undefined => VERSION_PARAMS[type]?.[key];
+
+/** Whether a use is one of a version of a body, which moves and inserts rewire: anything but a hard use. */
+export const isVersionUse = (u: Use) => u.role !== "hard";
 
 function children(node: AnyNode): AnyNode[] {
   const out: AnyNode[] = [];
@@ -145,15 +155,19 @@ export function graph(analysis: Analysis, tl: Timeline): Graph {
       usesIn(statement, names, (id, ancestors) => {
         if (declaredBy.get(id.name) === owner) return;
         let role: Role = "hard";
-        const parent = ancestors[ancestors.length - 1];
-        const object = ancestors[ancestors.length - 2];
-        const call = ancestors[ancestors.length - 3];
+        // An element of an array parameter (`tools: [a, b]`) is one level deeper than a parameter's value.
+        const inArray = ancestors[ancestors.length - 1]?.type === "ArrayExpression";
+        const value = inArray ? ancestors[ancestors.length - 1]! : id;
+        const [parent, object, call] = ancestors.slice(inArray ? -4 : -3, inArray ? -1 : undefined).reverse();
         let shorthand: string | undefined;
-        if (entry.kind === "feature" && parent?.type === "Property" && parent.value === id && !parent.computed && parent.key.type === "Identifier" && object?.type === "ObjectExpression" && call?.type === "CallExpression" && call.start === entry.call.span.start && call.arguments[0] === object) {
-          role = VERSION_PARAMS[entry.type]?.[parent.key.name] ?? "hard";
-          if (parent.shorthand) shorthand = parent.key.name;
+        let key: string | undefined;
+        if (entry.kind === "feature" && parent?.type === "Property" && parent.value === value && !parent.computed && parent.key.type === "Identifier" && object?.type === "ObjectExpression" && call?.type === "CallExpression" && call.start === entry.call.span.start && call.arguments[0] === object) {
+          key = parent.key.name;
+          const declared = VERSION_PARAMS[entry.type]?.[key];
+          role = declared && (declared === "tool") === inArray ? declared : "hard";
+          if (parent.shorthand) shorthand = key;
         }
-        uses.push({ name: id.name, span: { start: id.start, end: id.end }, role, owner, shorthand });
+        uses.push({ name: id.name, span: { start: id.start, end: id.end }, role, owner, shorthand, ...(key ? { key } : {}) });
       });
   });
 
@@ -245,7 +259,7 @@ export function allowedRange(g: Graph, index: number): Range {
   };
   for (const u of g.uses) {
     if (u.owner !== index) continue;
-    after(u.role === "consume" || u.role === "read" ? chainRoot(g, u.name) : g.declaredBy.get(u.name));
+    after(u.role === "consume" || u.role === "read" || u.role === "tool" ? chainRoot(g, u.name) : g.declaredBy.get(u.name));
   }
   for (const r of relations(g, index)) if (r.relation === "dependent" && r.link === "hard" && r.index > index && r.index < max) [max, maxBy] = [r.index, r.index];
   return { min, max, minBy, maxBy };

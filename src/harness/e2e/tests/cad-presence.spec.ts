@@ -92,7 +92,8 @@ test("two editors show each other's selections, pointers, timeline and code", as
   await expect(b.locator(".cad-editor__peer-marker")).toHaveAttribute("data-position", "0");
   if (shots) await b.screenshot({ path: `${shots}/presence-3-marker.png` });
   await a.keyboard.press("End");
-  const end = await timelineEntryCount(b);
+  // Past the return, after the entries.
+  const end = (await timelineEntryCount(b)) + 1;
   await expect(b.locator(".cad-editor__peer-marker")).toHaveAttribute("data-position", String(end));
   // A collaborator's marker at the end stays there while one's own moves.
   await b.getByRole("slider", { name: "Timeline marker" }).focus();
