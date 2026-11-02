@@ -112,9 +112,15 @@ test("several tools, one of them also returned, and one used twice", () => {
   expect(l.links).toContainEqual({ kind: "merge", from: { lane: 2, entry: 3 }, to: { lane: 0, entry: 5 } });
 });
 
-test("a returned version that a later feature continues goes to the return on a lane of its own", () => {
+test("a returned version that a later feature continues is a body of its own, on a lane of its own to the return", () => {
   const l = lanesOf(`${plate}\nreturn [plate, fillet1];`);
-  expect(summary(l)).toEqual(["plate: sketch1 plate bore fillet1 [0-5] row 0 returned", "sketch2: sketch2 [2-3] row 2 merged@3", "output plate: [1-5] row 1 output from plate@1 returned"]);
+  // The lineage it is in is named by its first body version that isn't one: bore.
+  expect(summary(l)).toEqual(["bore: sketch1 plate bore fillet1 [0-5] row 0 returned", "sketch2: sketch2 [2-3] row 2 merged@3", "output plate: [1-5] row 1 output from bore@1 returned"]);
+  // It exists from where it is made, also after bore consumed it.
+  const at = (m: number) => lanesAt(l, m).map(({ lane, head }) => `${l.lanes[lane]!.name}:${head.name}`);
+  expect(at(1)).toEqual(["bore:sketch1"]);
+  expect(at(2)).toEqual(["bore:plate", "plate:plate"]);
+  expect(at(5)).toEqual(["bore:fillet1", "plate:plate"]);
 });
 
 test("open heads that main doesn't return end at their entry; an unused sketch is a lane of its own", () => {

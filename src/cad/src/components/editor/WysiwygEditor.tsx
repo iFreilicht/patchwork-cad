@@ -99,8 +99,18 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     );
   });
   const rolledBack = () => rolledBackTo()?.shapes;
-  /** What the view would show: what main returns, or what exists where it is rolled back to. */
-  const built = () => rolledBack() ?? model.shapes() ?? [];
+  /**
+   * What the view would show: what main returns, or what exists where it is rolled back to, which
+   * is what the browser lists there (research/15, "Visibility"). The build drops a body once a
+   * feature consumes it; one that exists there all the same, a returned version a later feature
+   * continues or what the open feature branches from, comes from the last build, meshed on demand.
+   */
+  const built = () => {
+    const shapes = rolledBack();
+    if (!shapes) return model.shapes() ?? [];
+    const consumed = consumedHere().flatMap((name) => meshes().get(name) ?? []);
+    return consumed.length ? [...shapes, ...consumed] : shapes;
+  };
 
   // Bodies that don't show, e.g. hidden or consumed ones, as the browser or a pick hovers them,
   // meshed by the worker once per build (research/15, "Visibility").
@@ -111,11 +121,20 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** While a body or sketch is picked, the version a click on the hovered timeline entry or node would pick. */
   const hoveredVersion = () => (editor.pickingVersion() ? editor.hoveredVersion() : undefined);
   const kindOf = (version: string | undefined) => (version ? editor.lanes()?.versions.get(version)?.kind : undefined);
-  const wantedMeshes = createMemo(() => [lineageVersion(), hoveredVersion()].filter((n): n is string => !!n && kindOf(n) === "body"));
+  /** While rolled back, the bodies that exist there but that the build had consumed by then. */
+  const consumedHere = createMemo(
+    () => {
+      const shapes = rolledBack();
+      return shapes ? bodies.rows().flatMap((r) => (r.kind === "body" && !shapes.some((s) => s.body === r.version) ? [r.version] : [])) : [];
+    },
+    [],
+    { equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]) },
+  );
+  const wantedMeshes = createMemo(() => [...consumedHere(), ...[lineageVersion(), hoveredVersion()].filter((n): n is string => !!n && kindOf(n) === "body")]);
   createEffect(() => {
     const cache = meshes();
     for (const name of wantedMeshes()) {
-      if (cache.has(name) || built().some((s) => s.body === name)) continue;
+      if (cache.has(name) || rolledBack()?.some((s) => s.body === name) || (!rolledBack() && model.shapes()?.some((s) => s.body === name))) continue;
       cache.set(name, null);
       model.engine.result(name).then(
         (shape) => meshes() === cache && setMeshes(new Map(cache).set(name, shape ?? null)),

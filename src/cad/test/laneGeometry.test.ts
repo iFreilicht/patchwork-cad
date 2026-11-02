@@ -20,7 +20,7 @@ export default function main() {
 `;
 const a = analyze(source);
 const tl = timeline(source, a, []);
-// plate: sketch1 plate bore fillet1, row 0, returned; output plate, row 1; sketch2, row 2, merged into bore.
+// bore (sketch1 plate bore fillet1), row 0, returned; plate, a body of its own, on lane 2 in row 1; sketch2, row 2, merged into bore.
 const l = lanes(tl, graph(a, tl));
 const c: Columns = { xs: [0, 100, 200, 300, 400], returnX: 500, markerX: 510, pastX: 1000, width: 1000 };
 
@@ -35,13 +35,13 @@ test("on a lane, its lineage by the version its segment stands for", () => {
   expect(laneTargetAt(l, c, 150, y(0))).toEqual({ kind: "lane", lane: 0, version: "plate" });
   expect(laneTargetAt(l, c, 450, y(0))).toEqual({ kind: "lane", lane: 0, version: "fillet1" });
   expect(laneTargetAt(l, c, 250, y(2))).toEqual({ kind: "lane", lane: 1, version: "sketch2" });
-  // A returned version's own lane stands for its lineage.
-  expect(laneTargetAt(l, c, 250, y(1))).toEqual({ kind: "lane", lane: 0, version: "plate" });
+  // A returned version's own lane stands for it, a body of its own.
+  expect(laneTargetAt(l, c, 250, y(1))).toEqual({ kind: "lane", lane: 2, version: "plate" });
 });
 
 test("the nearest row wins, and nothing is where no lane is", () => {
   expect(laneTargetAt(l, c, 450, y(0) + 3)).toEqual({ kind: "lane", lane: 0, version: "fillet1" });
-  expect(laneTargetAt(l, c, 450, y(0) + 4)).toEqual({ kind: "lane", lane: 0, version: "plate" });
+  expect(laneTargetAt(l, c, 450, y(0) + 4)).toEqual({ kind: "lane", lane: 2, version: "plate" });
   expect(laneTargetAt(l, c, 50, y(2))).toBeUndefined();
   expect(laneTargetAt(l, c, 600, y(0))).toBeUndefined();
 });

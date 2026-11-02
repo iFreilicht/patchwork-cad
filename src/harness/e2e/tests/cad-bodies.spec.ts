@@ -159,6 +159,57 @@ test("hovering is one thing wherever it starts: an entry, its node or code, a li
   await expect.poll(() => lineage(page)).toEqual([]);
 });
 
+const JOINED = `import { sketch, plane, rect, extrude, chamfer, edge } from "@patchwork-cad/features";
+
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [60, 40] }) });
+  const plate = extrude({ sketch: sketch1, distance: 8 });
+  const sketch2 = sketch({ plane: plane("XY", 8), profile: rect({ from: [10, 10], to: [30, 30] }) });
+  const extrude1 = extrude({ sketch: sketch2, distance: 10, operation: "join", target: plate });
+  const chamfer1 = chamfer({ body: extrude1, edges: [], distance: 1 });
+  return [plate, chamfer1];
+}
+`;
+
+test("a returned version that a later feature continues is a body of its own: named, hovered, shown and picked as one", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await hideSidebars(page);
+  await setModelSource(page, JOINED);
+  // Without edges yet, it fails alone.
+  await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "failed", { timeout: 120_000 });
+  // plate, and the lineage that joined onto it, named by its first version that isn't returned by itself.
+  await expect.poll(() => rows(page)).toEqual(["plate:plate shown", "extrude1:chamfer1 shown"]);
+  await row(page, "plate").hover();
+  await expect(row(page, "extrude1")).not.toHaveAttribute("data-hovered", "true");
+  await expect(lanes(page).locator('path.cad-editor__lane[data-link="output"]').first()).toHaveAttribute("data-hovered", "true");
+  await page.mouse.move(0, 0);
+
+  // Before the chamfer, plate exists, too: the view shows it, though the join consumed it, and its edges can be picked.
+  await timelineEntry(page, "chamfer1").click();
+  await dialog(page).getByRole("button", { name: "Select edges" }).click();
+  await expect.poll(() => rows(page)).toEqual(["extrude1:extrude1 shown", "plate:plate shown"]);
+  await expect.poll(() => shownBodies(page)).toEqual(["extrude1", "plate"]);
+  // The join covers plate, which is inside it: hiding it lets plate's edges through.
+  await eye(page, "extrude1").click();
+  await expect.poll(() => shownBodies(page)).toEqual(["plate"]);
+  await pickNear(page, "edge", [60, 20, 8], "plate");
+  await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: plate, edges: \[edge\(plate\.\S+, plate\.\S+\)\]/);
+  await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
+  expect(await returned(page)).toBe("[chamfer1, extrude1]");
+  await dialog(page).getByRole("button", { name: "Done selecting" }).click();
+  // A branch from history, plate being consumed by the join, too: picking shows what it works on.
+  await dialog(page).getByRole("button", { name: "Select edges" }).click();
+  await expect.poll(() => shownBodies(page)).toEqual(["extrude1", "plate"]);
+  await expect(page.locator(".cad-model__viewer").first()).toHaveAttribute("data-faded", "extrude1");
+  if (shots) await page.screenshot({ path: `${shots}/bodies-branch-from-history.png` });
+});
+
 test("hiding and showing are this user's; the return entry picks what main returns", async ({ users }) => {
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
@@ -201,7 +252,7 @@ test("hiding and showing are this user's; the return entry picks what main retur
   await timelineEntry(page, "joined").click();
   await expect.poll(() => returned(page)).toBe("[notched, rounded, joined]");
   await expect(lanes(page).locator('path.cad-editor__lane[data-link="output"]').first()).toBeAttached();
-  await expect.poll(() => rows(page)).toEqual(["plate:notched shown", "rounded:rounded shown", "plate:joined shown"]);
+  await expect.poll(() => rows(page)).toEqual(["plate:notched shown", "rounded:rounded shown", "joined:joined shown"]);
   if (shots) await page.screenshot({ path: `${shots}/bodies-result.png` });
   // Picking a returned one takes it out.
   await timelineEntry(page, "joined").click();

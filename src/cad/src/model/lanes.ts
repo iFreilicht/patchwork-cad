@@ -175,6 +175,11 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
     out.push({ name: v.name, kind: v.kind, versions: [], from: link, merged: undefined, returned: true, row: 0, start: v.entry, stop: n, output: true });
   }
 
+  // A returned version that goes to the return on a lane of its own is a body of its own, with its
+  // own name: the lineage it is in takes the name of its first body version that isn't one.
+  const separate = new Set(out.filter((lane) => lane.output).map((lane) => lane.name));
+  for (const lane of out) if (!lane.output) lane.name = lane.versions.find((v) => v.kind === "body" && !separate.has(v.name))?.name ?? lane.name;
+
   // Rows: each lane, in the order lanes start, gets the first row whose last lane ended before it
   // starts. A lane ends in a merge's bend or a port, so the next one in its row doesn't read as its continuation.
   const ends: number[] = [];
@@ -186,10 +191,18 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
   return { lanes: out, links, laneOf, versions, returned, rows: ends.length };
 }
 
-/** The lanes that exist at timeline marker `marker`, with their head there: started before it and not merged before it. */
+/**
+ * The lanes that exist at timeline marker `marker`, with their head there: started before it and not
+ * merged before it. A returned version on a lane of its own exists from where it is made, as a body
+ * of its own, also after a later feature consumed it.
+ */
 export function lanesAt(l: Lanes, marker: number): { lane: number; head: Version }[] {
   return l.lanes.flatMap((lane, index) => {
-    if (lane.output || (lane.merged !== undefined && lane.merged < marker)) return [];
+    if (lane.output) {
+      const version = l.versions.get(lane.name);
+      return version && version.entry < marker ? [{ lane: index, head: version }] : [];
+    }
+    if (lane.merged !== undefined && lane.merged < marker) return [];
     const head = lane.versions.filter((v) => v.entry < marker).at(-1);
     return head ? [{ lane: index, head }] : [];
   });

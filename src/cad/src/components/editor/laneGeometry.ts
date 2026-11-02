@@ -55,7 +55,7 @@ export const privateHead = (lane: Lane) => !lane.output && !lane.returned && lan
 /**
  * What is at `x`, `y` in the lanes: within `LANES.hit` of a node or a port, that; else the lane in
  * the nearest row, as rows are too close to aim at, by the version its segment there stands for.
- * The lane of a returned version that isn't a head stands for its lineage.
+ * The lane of a returned version that isn't a head stands for that version, a body of its own.
  */
 export function laneTargetAt(l: Lanes, c: Columns, x: number, y: number): LaneTarget | undefined {
   if (!l.rows) return undefined;
@@ -74,7 +74,7 @@ export function laneTargetAt(l: Lanes, c: Columns, x: number, y: number): LaneTa
   const column = (entry: number) => (entry >= c.xs.length ? c.returnX : c.xs[entry]!);
   const on = inRow.find(({ lane }) => column(lane.start) <= x && x <= column(lane.stop) + (privateHead(lane) ? LANES.dot + 2 + LANES.port : 0));
   if (!on) return undefined;
-  if (on.lane.output) return { kind: "lane", lane: on.lane.from!.from.lane, version: on.lane.name };
+  if (on.lane.output) return { kind: "lane", lane: on.i, version: on.lane.name };
   const version = on.lane.versions.filter((v) => c.xs[v.entry]! <= x).at(-1) ?? on.lane.versions[0]!;
   return { kind: "lane", lane: on.i, version: version.name };
 }

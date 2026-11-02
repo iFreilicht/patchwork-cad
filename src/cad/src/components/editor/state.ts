@@ -62,9 +62,6 @@ export interface LaneHover {
   version: string;
 }
 
-/** A lane and the lanes of its returned versions that aren't its head, which go to the return on lanes of their own. */
-export const lineageLanes = (l: Lanes, lane: number): number[] => [lane, ...l.links.flatMap((link) => (link.kind === "output" && link.from.lane === lane ? [link.to.lane] : []))];
-
 export interface Editor {
   source: Accessor<string>;
   /** The last source that parsed, with its timeline; forms are read-only while the code doesn't parse. */
@@ -575,7 +572,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       const out = new Set<number>();
       if (!l) return out;
       const lane = hoveredLane();
-      if (lane) return new Set(lineageLanes(l, lane.lane));
+      if (lane) return new Set([lane.lane]);
       const index = dragging() ?? hovered();
       const node = hoveredNode();
       if (node !== undefined && l.laneOf.has(node)) return new Set([l.laneOf.get(node)!]);
@@ -599,11 +596,10 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const primary = l.versions.get(hover.version)?.entry;
     const entries = new Set<number>();
     // While a version is picked, only what a click would pick.
-    if (!pickingVersion())
-      for (const i of lineageLanes(l, hover.lane)) {
-        for (const v of l.lanes[i]!.versions) entries.add(v.entry);
-        for (const link of l.links) if (link.kind === "merge" && link.from.lane === i) entries.add(link.to.entry);
-      }
+    if (!pickingVersion()) {
+      for (const v of l.lanes[hover.lane]?.versions ?? []) entries.add(v.entry);
+      for (const link of l.links) if (link.kind === "merge" && link.from.lane === hover.lane) entries.add(link.to.entry);
+    }
     return { primary, entries };
   });
 

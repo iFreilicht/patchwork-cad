@@ -33,13 +33,14 @@ A feature's result is a version of a body: in `plate → bore → fillet1` the t
 - **A combine merges lineages:** its target's lineage continues, its tools' lineages end there, as Fusion's Combine consumes tool bodies. There is no "Keep Tools": nothing is ever destroyed, so a later feature can use a tool's version again, which forks it.
 - **Custom Script code that uses a version** carries it on into the first version the code declares, as M3's `let body = upright` does, or else ends its lineage. A feature's continuation wins over one in code, which may only refer to the version.
 - **A lineage is named by its first body version** (`plate`, not `sketch1`), so its name stays when features are added; a lineage without one, a sketch's, by the sketch. Renaming a body renames that variable.
+- **A returned version that a later feature continues is a body of its own:** `return [plate, chamfer1]` with `chamfer1` continuing `plate` returns two bodies, as the code keeps `plate` as it was. It goes to the return on a lane of its own, is named, hovered and hidden by itself, and the lineage it leaves takes the name of its first body version that isn't returned by itself (`extrude1`).
 
 ## Visibility
 
 What a user sees is view state, like the timeline marker ([07](07-poc-modelling-ui.md#the-timeline-marker)): hiding a body to look inside the model changes neither the model nor what a collaborator sees, unlike Onshape's shared hiding.
 
-- **The view shows what exists at the marker,** as rollback always did: before the return, every body and sketch that no feature has used (the workshop's view); past it, at the end, what main returns (a caller's view, and the viewer tool's). So a private leaf, one that nothing uses or returns, shows as soon as the marker is before the return, and no other default is needed.
-- **Each user hides bodies** with the eyes in the [browser](#the-browser). Hidden bodies are stored with the marker in the account's tool storage ([10](10-view-state.md#storage)) as `visibility: { "body:plate": false, "version:joined": false }`: a body by its name, a returned version inside a body by its own. Renaming a variable in the timeline moves its keys.
+- **The view shows what exists at the marker,** which is what the browser lists: before the return, every body and sketch that no feature has used, and every returned version from where it is made (the workshop's view); past it, at the end, what main returns (a caller's view, and the viewer tool's). While a field is picked, what the open feature works on exists, too, also a version that an earlier feature consumed, which it branches from. The build drops a body from what it shows once a feature consumes it, though its variable keeps it as it was; such a body comes from the last build, meshed on demand. So a private leaf, one that nothing uses or returns, shows as soon as the marker is before the return, and no other default is needed.
+- **Each user hides bodies** with the eyes in the [browser](#the-browser). Hidden bodies are stored with the marker in the account's tool storage ([10](10-view-state.md#storage)) as `visibility: { "body:plate": false, "version:joined": false }`: a lineage by its name, a version that is a body of its own by the version's. A lineage's name follows the code's structure, so a change that renames it, e.g. returning its first version by itself, shows it again. Renaming a variable in the timeline moves its keys.
 - **Presence wins over hiding:** what a collaborator hovers or selects in a body this user hid shows as a ghost (`createPeerHighlights` resolves it against the hidden bodies, too).
 - **Peeking already works:** hovering an entry whose result isn't shown draws that result ([12](12-hover-highlighting.md#design)), and hovering a hidden body in the browser draws it as a ghost, meshed by the worker on demand (`result`), once per build.
 - **Isolate**, per user, comes later.
@@ -113,7 +114,7 @@ A pane left of the 3D view, toggled in the toolbar (open by default, per user), 
 
 ## Open
 
-- Which use of a forked version continues its lineage and keeps its name. The longest chain fails right after inserting a branch at a rolled-back marker: the branch and the chain's continuation both have one version, and the branch, earlier in the code, takes the lineage and its name.
+- Which use of a forked version continues its lineage and keeps its name. The longest chain fails right after inserting a branch at a rolled-back marker: the branch and the chain's continuation both have one version, and the branch, earlier in the code, takes the lineage and its name. And while a feature that branches from history is picked, the browser lists the version it branches from next to the lineage that continued it, both with its name (`plate` and `plate extrude1`).
 - Named outputs (`return { bracket, mountingPlate }`), together with `body()`'s arrays ([11](11-adopting-shapes.md#body)), and names of bodies independent of features.
 - The lanes of large models: many crossing links, and lanes too thin to hover or click.
 - A sketch can't be picked in the 3D view, only in the browser and the timeline.
