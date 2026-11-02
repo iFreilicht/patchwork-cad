@@ -5,7 +5,7 @@ export { resolve, capture } from "./refs.ts";
 export type { Resolution } from "./refs.ts";
 export type { Topo } from "./topo.ts";
 export { describe } from "./geom.ts";
-import { body, chamfer, extrude, fillet, sketch } from "./features.ts";
+import { body, chamfer, extrude, fillet, move, sketch } from "./features.ts";
 import { pick as pickRef, type Body, type TraceEntry } from "./feature.ts";
 import { owningFeatures, refForm, setFeaturePrinter, type Name, type Vec } from "./names.ts";
 import { Ref, resolve } from "./refs.ts";
@@ -14,7 +14,7 @@ import { oc, progress, subShapes, type Kind } from "./oc.ts";
 import { entities } from "./topo.ts";
 
 /** The built-in features by function name, for recognizing calls and rendering their forms. */
-export const builtins = { sketch, extrude, fillet, chamfer, body } as const;
+export const builtins = { sketch, extrude, fillet, chamfer, move, body } as const;
 
 /** replicad's id of each face or edge of a body, as in its meshes' `faceGroups`/`edgeGroups` (`ReplicadShapeHasher.HashCode`). */
 export function meshIds(b: Body, kind: Kind): number[] {

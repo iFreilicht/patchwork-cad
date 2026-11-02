@@ -11,7 +11,7 @@ import { entryOf } from "../../model/comments.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
-const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", body: "◆\uFE0E" };
+const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
 
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);

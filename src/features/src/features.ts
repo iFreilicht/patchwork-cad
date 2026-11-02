@@ -1,6 +1,6 @@
 /**
- * The built-in feature subset of PoC 2 (research/07): sketch, extrude (new, join, cut), fillet and
- * chamfer. The modelling operations are ported from research/03's prototype (model.ts), because
+ * The built-in feature subset of PoC 2 (research/07): sketch, extrude (new, join, cut), fillet,
+ * chamfer and move. The modelling operations are ported from research/03's prototype (model.ts), because
  * replicad doesn't expose OCCT's history. And `body`, which adopts shapes made with replicad (research/11).
  */
 import { Shape as ReplicadShape, type AnyShape } from "replicad";
@@ -220,6 +220,27 @@ export const chamfer = defineFeature<{ body: Body; edges: Ref[]; distance: numbe
   ...schemas.chamfer,
   inputs: ({ body }) => [body],
   build: ({ body, edges, distance }, ctx) => blend("chamfer", body, edges, distance, ctx),
+});
+
+/**
+ * A copy of a body, translated by `x`, `y` and `z`. The input stays a body of its own, so it is not an
+ * input that the copy consumes. Faces and edges keep their names, so references into the copy name
+ * the same entities as in the original.
+ */
+export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: number }, Body>({
+  type: "move",
+  ...schemas.move,
+  fallback: (_, name) => emptyBody(name),
+  build({ body, x = 0, y = 0, z = 0 }, ctx) {
+    expectBody(body, "body");
+    for (const [axis, v] of [["x", x], ["y", y], ["z", z]] as const) if (!Number.isFinite(v)) throw new FeatureError(`${axis}: expected a finite length, got ${v}`);
+    const o = oc();
+    const t = new o.gp_Trsf();
+    t.SetTranslation(new o.gp_Vec(x, y, z));
+    const mk = new o.BRepBuilderAPI_Transform(body.topo.shape, t, true, false);
+    if (!mk.IsDone()) throw new FeatureError("the move failed");
+    return new Body(ctx.name, propagate(mk as unknown as History, [body.topo], [], mk.Shape(), ctx.name));
+  },
 });
 
 // ---------- adopting shapes ----------

@@ -28,5 +28,5 @@ test("a cut's volume is what it removed, a join's what it added, a new body all 
 });
 
 test("every feature chooses what hovering it shows", () => {
-  expect(Object.fromEntries(Object.entries(schemas).map(([type, s]) => [type, s.hover]))).toEqual({ sketch: "faces", extrude: "difference", fillet: "faces", chamfer: "faces", body: "faces" });
+  expect(Object.fromEntries(Object.entries(schemas).map(([type, s]) => [type, s.hover]))).toEqual({ sketch: "faces", extrude: "difference", fillet: "faces", chamfer: "faces", move: "difference", body: "faces" });
 });

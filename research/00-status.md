@@ -20,7 +20,6 @@
 
 ## Not started
 
-- Add a "Move" feature that creates a copy of a body at a different location. Translating by a set number of mm in X, Y or Z axis is enough for now.
 - Allow disabling tangent selection of edges when creating fillet or chamfer
 - Bodies ([15](15-bodies.md)): a `combine` feature and its test model, lineages, lanes in the timeline, the browser, the return entry, picking instead of body dropdowns
 - Named outputs: `return { bracket, mountingPlate }` instead of arrays, and with it `body()`'s arrays ([11](11-adopting-shapes.md#body)) and names of bodies independent of features ([15](15-bodies.md#open))

@@ -73,6 +73,18 @@ export const schemas = {
       distance: { kind: "length", label: "Distance" },
     },
   },
+  move: {
+    label: "Move",
+    icon: "Move",
+    // A copy: its body is all it made, and its faces keep the names of the body it copies.
+    hover: "difference",
+    params: {
+      body: { kind: "body", label: "Body" },
+      x: { kind: "length", label: "X", optional: true, default: 0 },
+      y: { kind: "length", label: "Y", optional: true, default: 0 },
+      z: { kind: "length", label: "Z", optional: true, default: 0 },
+    },
+  },
   body: {
     label: "Body",
     icon: "Box",

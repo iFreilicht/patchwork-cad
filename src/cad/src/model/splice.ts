@@ -102,7 +102,7 @@ export function ensureImports(analysis: Analysis, names: readonly string[]): Edi
 
 /** Library functions a piece of generated code calls, so that they can be imported. */
 export const usedFunctions = (code: string): string[] =>
-  ["sketch", "extrude", "fillet", "chamfer", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
+  ["sketch", "extrude", "fillet", "chamfer", "move", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
 
 export function indentOf(source: string, offset: number): string {
   const lineStart = source.lastIndexOf("\n", offset - 1) + 1;

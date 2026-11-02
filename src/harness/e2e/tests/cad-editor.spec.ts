@@ -209,3 +209,27 @@ test("sketches that no feature uses show in the view", async ({ users }) => {
   await expect.poll(() => shownSketches(page)).toBe("sketch3");
   await expect(timelineEntry(page, "sketch3")).toHaveAttribute("data-status", "ok");
 });
+
+// Move copies a body: the copy joins the result next to the original, and its offset is a form field.
+test("a move copies the result next to it", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createViaMenu(page, "CAD Model");
+  const view = editorView(page);
+  await expect(view).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+
+  await toolbarButton(page, "Move").click();
+  await expect.poll(() => modelSource(page)).toContain("const move1 = move({ body: fillet1, x: 20 });");
+  await expect.poll(() => modelSource(page)).toContain("return [fillet1, move1];");
+  await expect(timelineEntry(page, "move1")).toHaveAttribute("data-status", "ok");
+  await expect(view).toHaveAttribute("data-state", "ready");
+  await expect.poll(async () => new Set((await entities(page, "face")).map((e) => e.body))).toEqual(new Set(["fillet1", "move1"]));
+
+  await setField(page, "Y", "-50");
+  await expect.poll(() => modelSource(page)).toContain("move({ body: fillet1, x: 20, y: -50 })");
+  await expect(timelineEntry(page, "move1")).toHaveAttribute("data-status", "ok");
+  await page.mouse.move(0, 0);
+  if (shots) await page.screenshot({ path: `${shots}/editor-move.png` });
+});

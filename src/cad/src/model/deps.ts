@@ -10,7 +10,7 @@ import type { Timeline } from "./timeline.ts";
 /**
  * How an entry uses a name:
  * - `consume`: the body a fillet, chamfer or joining/cutting extrude works on (`body:`, `target:`)
- * - `read`: the body a sketch's plane lies on (`body:` of a sketch)
+ * - `read`: the body a sketch's plane lies on (`body:` of a sketch), or that a move copies
  * - `return`: an identifier `main` returns
  * - `hard`: anything else, e.g. `sketch: sketch1`, `notch.side.c` or Custom Script code
  */
@@ -40,6 +40,7 @@ const VERSION_PARAMS: Record<string, Record<string, "consume" | "read">> = {
   chamfer: { body: "consume" },
   extrude: { target: "consume" },
   sketch: { body: "read" },
+  move: { body: "read" },
 };
 
 function children(node: AnyNode): AnyNode[] {

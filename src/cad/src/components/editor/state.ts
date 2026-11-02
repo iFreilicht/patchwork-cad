@@ -112,6 +112,7 @@ const DEFAULTS: Record<InsertableType, (d: { sketch: string; body: string }) => 
   extrude: ({ sketch }) => `extrude({ sketch: ${sketch}, distance: 10 })`,
   fillet: ({ body }) => `fillet({ body: ${body}, edges: [], radius: 1 })`,
   chamfer: ({ body }) => `chamfer({ body: ${body}, edges: [], distance: 1 })`,
+  move: ({ body }) => `move({ body: ${body}, x: 20 })`,
 };
 
 const sameNames = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
