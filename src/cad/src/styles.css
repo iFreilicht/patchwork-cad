@@ -784,6 +784,78 @@
   stroke-dasharray: 3 2;
 }
 
+/*
+ * An entry's node mirrors its button: the outline of a hovered or open one as a ring, its border's
+ * colour as the node's, its background as the ring's fill, and its fading. The return's ports mirror
+ * the return entry.
+ */
+.cad-editor__node-ring {
+  fill: none;
+  stroke: none;
+}
+
+.cad-editor__node[data-cross-hover="true"] .cad-editor__node-ring {
+  fill: var(--cad-model-cross-hover);
+}
+
+.cad-editor__node[data-peer="true"] .cad-editor__node-ring {
+  stroke: var(--peer-color);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node[data-hovered="true"] .cad-editor__node-ring {
+  stroke: var(--cad-model-fg);
+  stroke-width: 1;
+}
+
+.cad-editor__node[data-open="true"] .cad-editor__node-ring {
+  stroke: var(--cad-model-fg);
+  stroke-width: 2;
+}
+
+.cad-editor__node[data-status="broken"] .cad-editor__lane-dot {
+  stroke: var(--cad-model-warning);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node[data-status="failed"] .cad-editor__lane-dot {
+  stroke: var(--cad-model-danger);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node[data-relation="dependency"] .cad-editor__lane-dot {
+  stroke: var(--cad-model-accent);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node[data-relation="dependent"] .cad-editor__lane-dot {
+  stroke: var(--cad-model-warning);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node[data-picked="true"] .cad-editor__lane-dot {
+  stroke: var(--cad-model-accent-text);
+  stroke-width: 1.5;
+}
+
+.cad-editor__node:is([data-status="not-run"], [data-status="unused"], [data-dragging="true"]) {
+  opacity: 0.5;
+}
+
+.cad-editor__node[data-pickable="false"] {
+  opacity: 0.45;
+}
+
+.cad-editor__node[data-pickable="true"] {
+  opacity: 1;
+}
+
+/* Where the pointer is on a node, a port or a lane: transparent, but it takes the pointer, which the drawing doesn't. */
+.cad-editor__lanes-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
 .cad-editor__lanes-marker {
   stroke: var(--cad-model-accent);
   stroke-width: 3;
@@ -792,11 +864,6 @@
 /* The return entry: where the lanes of what main returns end. Not one of the code's entries: it can't be dragged. */
 .cad-editor__return {
   background: var(--cad-model-bg);
-}
-
-.cad-editor__return[aria-pressed="true"] {
-  outline: 3px solid var(--cad-model-fg);
-  outline-offset: 1px;
 }
 
 /*
@@ -913,18 +980,26 @@
  * dragged one a thin one, and hovering the open one adds the thin line inside the thick one; outside,
  * the scrolling timeline would clip it. What the focused entry relates to gets a coloured border.
  */
-.cad-editor__entry[data-hovered="true"] {
+.cad-editor__entry[data-hovered="true"],
+.cad-editor__return[data-hovered="true"] {
   outline: 1px solid var(--cad-model-fg);
   outline-offset: 2px;
 }
 
-.cad-editor__entry[aria-pressed="true"] {
+.cad-editor__entry[aria-pressed="true"],
+.cad-editor__return[aria-pressed="true"] {
   outline: 3px solid var(--cad-model-fg);
   outline-offset: 1px;
 }
 
-.cad-editor__entry[aria-pressed="true"][data-hovered="true"] {
+.cad-editor__entry[aria-pressed="true"][data-hovered="true"],
+.cad-editor__return[aria-pressed="true"][data-hovered="true"] {
   box-shadow: inset 0 0 0 1px var(--cad-model-fg);
+}
+
+/* The other features of a hovered lineage, whose lane is highlighted beneath them: a tint of the lane's colour. */
+.cad-editor__entry[data-lineage="true"] {
+  background: color-mix(in oklch, var(--cad-model-accent), var(--cad-model-panel) 70%);
 }
 
 .cad-editor__entry[data-relation="dependency"] {
@@ -945,7 +1020,8 @@
 }
 
 /* Entries whose features made what the 3D view hovers, or the code hovered in the code pane. */
-.cad-editor__entry[data-cross-hover="true"] {
+.cad-editor__entry[data-cross-hover="true"],
+.cad-editor__return[data-cross-hover="true"] {
   background: var(--cad-model-cross-hover);
 }
 

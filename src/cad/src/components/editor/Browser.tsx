@@ -36,6 +36,7 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
     const entry = props.editor.timeline().entries.find((e) => e.kind === "feature" && e.names.includes(props.row.version));
     if (entry?.kind === "feature" && entry.type !== "body") props.editor.openFeature(entry);
   };
+  const hover = () => props.editor.setHoveredLane({ lane: props.row.lane, version: props.row.version });
   return (
     <li
       class="cad-editor__browser-row"
@@ -45,8 +46,8 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
       data-visible={props.row.visible ? "true" : "false"}
       data-pickable={props.editor.pickingVersion() ? (pickable() ? "true" : "false") : undefined}
       data-picked={props.editor.pickedVersions().includes(props.row.version) ? "true" : undefined}
-      data-hovered={props.editor.hoveredLane() === props.row.lane ? "true" : undefined}
-      onPointerEnter={() => props.editor.setHoveredLane(props.row.lane)}
+      data-hovered={props.editor.highlightedLanes().has(props.row.lane) ? "true" : undefined}
+      onPointerEnter={hover}
       onPointerLeave={() => props.editor.setHoveredLane(undefined)}
     >
       <button
@@ -58,7 +59,7 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
       >
         <EyeIcon open={props.row.visible} />
       </button>
-      <button class="cad-editor__browser-name" title={detail() ? `${label()}, as of ${detail()}` : label()} disabled={props.editor.pickingVersion() && !pickable()} onClick={select} onFocus={() => props.editor.setHoveredLane(props.row.lane)} onBlur={() => props.editor.setHoveredLane(undefined)}>
+      <button class="cad-editor__browser-name" title={detail() ? `${label()}, as of ${detail()}` : label()} disabled={props.editor.pickingVersion() && !pickable()} onClick={select} onFocus={hover} onBlur={() => props.editor.setHoveredLane(undefined)}>
         <span>{label()}</span>
         <Show when={detail()}>
           <span class="cad-editor__muted">{detail()}</span>
@@ -84,8 +85,8 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
 /**
  * The browser (research/15, "The browser"): what exists at the timeline marker, with an eye that
  * shows or hides it for this user only. Before the return, that is every body and sketch that no
- * feature used yet; past it, what main returns. Hovering a row highlights the body and its lane;
- * clicking it opens its last feature, or picks it.
+ * feature used yet; past it, what main returns. Hovering a row highlights the body, its lane and
+ * its features; clicking it opens its last feature, or picks it.
  */
 export function Browser(props: { editor: Editor; bodies: Bodies }) {
   const at = () => {

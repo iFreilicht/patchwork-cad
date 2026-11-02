@@ -1,64 +1,36 @@
-import { For, Show } from "solid-js";
-import type { Lane, Lanes, Link } from "../../model/lanes.ts";
+import { For, Show, type JSX } from "solid-js";
+import type { Lanes, Link } from "../../model/lanes.ts";
+import { LANES, lanePath, lanesHeight, laneTargetAt, linkPath, privateHead, y, type Columns, type LaneTarget } from "./laneGeometry.ts";
 
-/** Geometry of the lanes, in pixels: the first row's centre, the distance between rows, and the radius of a link's bend. */
-export const LANES = { top: 5, row: 7, bend: 5, dot: 2.5, port: 3.5 };
-
-/** The height the lanes take beneath the entries. */
-export const lanesHeight = (rows: number) => (rows ? LANES.top * 2 + (rows - 1) * LANES.row : 0);
-
-/** Where the timeline's columns are: the centres of its entries and of its return entry, the marker, all within the scrolling timeline. */
-export interface Columns {
-  xs: number[];
-  returnX: number;
-  markerX: number;
-  /** Where the faded part starts: at the marker, or nowhere when it is at the end, where the return isn't rolled back. */
-  pastX: number;
-  width: number;
-}
-
-const y = (row: number) => LANES.top + row * LANES.row;
-
-/** A link from one row to another: forks, copies and outputs bend at their start, merges at their end. */
-function linkPath(l: Lanes, link: Link, c: Columns): string {
-  const n = c.xs.length;
-  const x = (entry: number) => (entry >= n ? c.returnX : c.xs[entry]!);
-  const x1 = x(link.from.entry);
-  const x2 = x(link.to.entry);
-  const y1 = y(l.lanes[link.from.lane]!.row);
-  const y2 = y(l.lanes[link.to.lane]!.row);
-  const r = Math.max(0, Math.min(LANES.bend, (x2 - x1) / 2));
-  if (link.kind === "merge") return `M ${x1} ${y1} H ${x2 - 2 * r} C ${x2 - r} ${y1}, ${x2 - r} ${y2}, ${x2} ${y2}`;
-  return `M ${x1} ${y1} C ${x1 + r} ${y1}, ${x1 + r} ${y2}, ${x1 + 2 * r} ${y2} H ${x2}`;
-}
-
-/** A lane's own line: from its first version to its head, or on to the return. */
-function lanePath(lane: Lane, c: Columns): string | undefined {
-  const first = lane.versions[0];
-  const head = lane.versions.at(-1);
-  if (!first || !head) return undefined;
-  const end = lane.returned ? c.returnX : c.xs[head.entry]!;
-  return `M ${c.xs[first.entry]!} ${y(lane.row)} H ${end}`;
-}
+/** The data attributes of a node, mirrored from its entry's button, and its collaborator's colour. */
+export type NodeData = { [key: `data-${string}`]: string | undefined; style?: JSX.CSSProperties };
 
 /** A port: a half disc on its flat side at `x`, filled for an output, hollow for a private head. */
 const portPath = (x: number, cy: number) => `M ${x} ${cy - LANES.port} A ${LANES.port} ${LANES.port} 0 0 1 ${x} ${cy + LANES.port} Z`;
 
 /**
- * Everything in the lanes, drawn once before the marker and once, faded, past it. Links that arrive
- * past the marker, e.g. a copy made there of a body before it, don't exist yet: `links` picks those
- * (`future`) or the others.
+ * One layer of the lanes, the lines or the nodes and ports, of the highlighted lanes or the others;
+ * each is drawn once before the marker and once, faded, past it. Links that arrive past the marker,
+ * e.g. a copy made there of a body before it, don't exist yet: `links` picks those (`future`) or the
+ * others.
  */
-function Drawing(props: { lanes: Lanes; columns: Columns; hovered: Set<number>; links: "current" | "future"; marker: number }) {
+function Drawing(props: {
+  lanes: Lanes;
+  columns: Columns;
+  hovered: Set<number>;
+  links: "current" | "future";
+  marker: number;
+  node: (entry: number, version: string) => NodeData;
+  returnNode: NodeData;
+  layer: "lines" | "ends";
+  highlighted: boolean;
+}) {
   const l = () => props.lanes;
   const c = () => props.columns;
   const linkLane = (link: Link) => (link.kind === "merge" ? link.from.lane : link.to.lane);
   /** A fork, copy or output that starts a lane past the marker, which is rolled back. */
   const future = (link: Link) => link.kind !== "merge" && props.marker <= c().xs.length && link.to.entry >= props.marker;
-  /** Private heads: open, not merged and not returned; a port after them says they leave nothing. */
-  const privateHead = (lane: Lane) => !lane.output && !lane.returned && lane.merged === undefined;
   const isHovered = (lane: number) => props.hovered.has(lane);
-  // SVG paints in document order: the hovered lanes go last, so that they cross over the others.
   const lines = (hovered: boolean) => (
     <>
       <For each={l().links.filter((link) => future(link) === (props.links === "future") && isHovered(linkLane(link)) === hovered)}>
@@ -77,10 +49,18 @@ function Drawing(props: { lanes: Lanes; columns: Columns; hovered: Set<number>; 
         {(lane) => (
           <>
             <For each={lane.versions}>
-              {(v) => <circle class="cad-editor__lane-dot" data-kind={v.kind} data-version={v.name} data-hovered={hovered ? "true" : undefined} cx={c().xs[v.entry]} cy={y(lane.row)} r={LANES.dot} />}
+              {(v) => (
+                <g class="cad-editor__node" {...props.node(v.entry, v.name)}>
+                  <circle class="cad-editor__node-ring" cx={c().xs[v.entry]} cy={y(lane.row)} r={LANES.ring} />
+                  <circle class="cad-editor__lane-dot" data-kind={v.kind} data-version={v.name} data-hovered={hovered ? "true" : undefined} cx={c().xs[v.entry]} cy={y(lane.row)} r={LANES.dot} />
+                </g>
+              )}
             </For>
             <Show when={lane.returned}>
-              <path class="cad-editor__lane-port" data-returned="true" data-name={lane.name} data-hovered={hovered ? "true" : undefined} d={portPath(c().returnX - LANES.port / 2, y(lane.row))} />
+              <g class="cad-editor__node" {...props.returnNode}>
+                <circle class="cad-editor__node-ring" cx={c().returnX} cy={y(lane.row)} r={LANES.ring} />
+                <path class="cad-editor__lane-port" data-returned="true" data-name={lane.name} data-hovered={hovered ? "true" : undefined} d={portPath(c().returnX - LANES.port / 2, y(lane.row))} />
+              </g>
             </Show>
             <Show when={privateHead(lane) && lane.versions.at(-1)}>
               {(head) => <path class="cad-editor__lane-port" data-returned="false" data-name={lane.name} data-hovered={hovered ? "true" : undefined} d={portPath(c().xs[head().entry]! + LANES.dot + 2, y(lane.row))} />}
@@ -90,44 +70,94 @@ function Drawing(props: { lanes: Lanes; columns: Columns; hovered: Set<number>; 
       </For>
     </Show>
   );
-  return (
-    <>
-      {lines(false)}
-      {ends(false)}
-      {lines(true)}
-      {ends(true)}
-    </>
-  );
+  return <>{props.layer === "lines" ? lines(props.highlighted) : ends(props.highlighted)}</>;
 }
+
+const LAYERS = [
+  { layer: "lines", highlighted: false },
+  { layer: "lines", highlighted: true },
+  { layer: "ends", highlighted: false },
+  { layer: "ends", highlighted: true },
+] as const;
 
 /**
  * The lanes beneath the timeline's entries (research/15, "The timeline with lanes"): one per
  * lineage, in rows that are reused once a lane ends, with links where lanes fork, copy, merge and
- * go to the return. Past the marker, they fade as the entries do.
+ * go to the return. Past the marker, they fade as the entries do. An entry's nodes mirror its
+ * button, the return's ports the return entry; hovering or clicking one is hovering or clicking
+ * that, and a lane its lineage, as in the browser.
  */
-export function TimelineLanes(props: { lanes: Lanes; columns: Columns; hovered: Set<number>; marker: number }) {
+export function TimelineLanes(props: {
+  lanes: Lanes;
+  columns: Columns;
+  hovered: Set<number>;
+  marker: number;
+  node: (entry: number, version: string) => NodeData;
+  returnNode: NodeData;
+  /** What the pointer is on, and whether a click would pick it, for the cursor. */
+  target: LaneTarget | undefined;
+  picking: boolean;
+  pickable: (version: string) => boolean;
+  onHover: (target: LaneTarget | undefined) => void;
+  onClick: (target: LaneTarget) => void;
+}) {
   const height = () => lanesHeight(props.lanes.rows);
   const id = `cad-lanes-${Math.random().toString(36).slice(2)}`;
+  const at = (event: MouseEvent & { currentTarget: SVGRectElement }) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return laneTargetAt(props.lanes, props.columns, event.clientX - box.left, event.clientY - box.top);
+  };
+  const cursor = () => {
+    const t = props.target;
+    if (!t) return undefined;
+    if (!props.picking || t.kind === "return") return "pointer";
+    return props.pickable(t.version) ? "crosshair" : "not-allowed";
+  };
   return (
-    <svg class="cad-editor__lanes" width={props.columns.width} height={height()} aria-hidden="true" data-rows={props.lanes.rows}>
+    <svg class="cad-editor__lanes" width={props.columns.width} height={height()} data-rows={props.lanes.rows}>
+      {/* Only split at the marker: above and below, the rings around nodes may stick out. */}
       <defs>
         <clipPath id={`${id}-before`}>
-          <rect x="0" y="0" width={Math.max(0, props.columns.pastX)} height={height()} />
+          <rect x="0" y={-LANES.top} width={Math.max(0, props.columns.pastX)} height={height() + 2 * LANES.top} />
         </clipPath>
         <clipPath id={`${id}-past`}>
-          <rect x={props.columns.pastX} y="0" width={Math.max(0, props.columns.width - props.columns.pastX)} height={height()} />
+          <rect x={props.columns.pastX} y={-LANES.top} width={Math.max(0, props.columns.width - props.columns.pastX)} height={height() + 2 * LANES.top} />
         </clipPath>
       </defs>
-      <g clip-path={`url(#${id}-before)`}>
-        <Drawing lanes={props.lanes} columns={props.columns} hovered={props.hovered} links="current" marker={props.marker} />
-      </g>
-      <g class="cad-editor__lanes-past" clip-path={`url(#${id}-past)`}>
-        <Drawing lanes={props.lanes} columns={props.columns} hovered={props.hovered} links="current" marker={props.marker} />
-      </g>
-      <g class="cad-editor__lanes-past">
-        <Drawing lanes={props.lanes} columns={props.columns} hovered={props.hovered} links="future" marker={props.marker} />
-      </g>
+      {/* SVG paints in document order: the other lines, the highlighted ones over them, then the nodes and ports over all lines, the highlighted lanes' last. */}
+      <For each={LAYERS}>
+        {(layer) => (
+          <>
+            <g clip-path={`url(#${id}-before)`} aria-hidden="true">
+              <Drawing {...props} {...layer} links="current" />
+            </g>
+            <g class="cad-editor__lanes-past" clip-path={`url(#${id}-past)`} aria-hidden="true">
+              <Drawing {...props} {...layer} links="current" />
+            </g>
+            <Show when={layer.layer === "lines"}>
+              <g class="cad-editor__lanes-past" aria-hidden="true">
+                <Drawing {...props} {...layer} links="future" />
+              </g>
+            </Show>
+          </>
+        )}
+      </For>
       <line class="cad-editor__lanes-marker" x1={props.columns.markerX} x2={props.columns.markerX} y1="0" y2={height()} />
+      {/* Pointer only: the entries' buttons, the return entry and the browser's rows are the same targets for the keyboard. */}
+      <rect
+        class="cad-editor__lanes-hit"
+        x="0"
+        y="0"
+        width={props.columns.width}
+        height={height()}
+        style={{ cursor: cursor() }}
+        onPointerMove={(event) => props.onHover(at(event))}
+        onPointerLeave={() => props.onHover(undefined)}
+        onClick={(event) => {
+          const target = at(event);
+          if (target) props.onClick(target);
+        }}
+      />
     </svg>
   );
 }

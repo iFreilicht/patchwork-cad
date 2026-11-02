@@ -45,7 +45,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** Whether the return entry's dialog is open; it and a feature's dialog take turns. */
   const [resultOpen, setResultOpen] = createSignal(false);
   createEffect(() => editor.open() && setResultOpen(false));
-  const [resultHovered, setResultHovered] = createSignal(false);
+  const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
   // Comments and Patchwork's metadata (`@…`) aren't undone (research/16-undo-redo.md).
@@ -106,17 +106,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   // meshed by the worker once per build (research/15, "Visibility").
   const [meshes, setMeshes] = createSignal(new Map<string, MeshedShape | null>());
   createEffect(on(model.last, () => setMeshes(new Map())));
-  const hoveredRow = () => {
-    const lane = editor.hoveredLane();
-    return lane === undefined ? undefined : bodies.rows().find((r) => r.lane === lane);
-  };
-  /** While a body or sketch is picked, the version a click on the hovered timeline entry would pick. */
-  const hoveredVersion = () => {
-    const index = editor.hovered();
-    return editor.pickingVersion() && index !== undefined ? editor.versionAt(index) : undefined;
-  };
+  /** The version of the lineage hovered in the browser or the lanes, which a click there opens or picks. */
+  const lineageVersion = () => editor.hoveredLane()?.version;
+  /** While a body or sketch is picked, the version a click on the hovered timeline entry or node would pick. */
+  const hoveredVersion = () => (editor.pickingVersion() ? editor.hoveredVersion() : undefined);
   const kindOf = (version: string | undefined) => (version ? editor.lanes()?.versions.get(version)?.kind : undefined);
-  const wantedMeshes = createMemo(() => [hoveredRow()?.kind === "body" ? hoveredRow()!.version : undefined, kindOf(hoveredVersion()) === "body" ? hoveredVersion() : undefined].filter((n): n is string => !!n));
+  const wantedMeshes = createMemo(() => [lineageVersion(), hoveredVersion()].filter((n): n is string => !!n && kindOf(n) === "body"));
   createEffect(() => {
     const cache = meshes();
     for (const name of wantedMeshes()) {
@@ -157,10 +152,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     }
     return (entry.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches, style: "accent" }));
   };
-  /** The body hovered in the browser, what a pick would take, and what main returns while the return entry is hovered. */
+  /** The body hovered in the browser or the lanes, what a pick would take, and what main returns while the return entry is hovered. */
   const bodyHighlights = (): Highlight[] => {
-    const row = hoveredRow();
-    const fromBrowser = row?.kind === "body" ? wholeBody(row.version, "hover") : [];
+    const lineage = lineageVersion();
+    const fromBrowser = lineage && kindOf(lineage) === "body" ? wholeBody(lineage, "hover") : [];
     const pointed = bodyUnderPointer();
     const fromView = pointed && editor.pickingVersion() ? wholeBody(pointed, "hover") : [];
     const version = hoveredVersion();
@@ -168,10 +163,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const fromResult = resultHovered() ? [...(editor.lanes()?.returned ?? [])].flatMap((n) => wholeBody(n, "hover")) : [];
     return [...fromBrowser, ...fromView, ...fromTimeline, ...fromResult];
   };
-  /** The sketch hovered in the browser, or in the timeline while a version is picked, as an overlay. */
+  /** The sketch hovered in the browser or the lanes, or in the timeline while a version is picked, as an overlay. */
   const hoveredSketch = () => {
-    const row = hoveredRow();
-    const name = row?.kind === "sketch" ? row.version : kindOf(hoveredVersion()) === "sketch" ? hoveredVersion() : undefined;
+    const name = [lineageVersion(), hoveredVersion()].find((n) => kindOf(n) === "sketch");
     return name ? model.trace().find((t) => t.name === name)?.outline : undefined;
   };
 
@@ -219,12 +213,20 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     if (!first) return editor.marker() === entries.length ? editor.timeline().returned : undefined;
     return { start: first.span.start, end: editor.timeline().returned?.end ?? entries[entries.length - 1]!.span.end };
   };
-  /** The code of the entry whose dependencies are shown, and of its dependencies and dependents. */
+  /**
+   * The code of the entry whose dependencies are shown, and of its dependencies and dependents; and,
+   * as if hovered, but without them, the return's while it is hovered and that of the entry a click
+   * on the hovered lineage opens.
+   */
   const relatedCode = (): RelatedSpan[] => {
     const index = editor.focused();
     const entries = editor.timeline().entries;
-    if (index === undefined || editor.syntaxError() || !entries[index]) return [];
-    return [{ ...entries[index]!.span, relation: "self" as const, link: "hard" as const }, ...[...editor.related().values()].map((r) => ({ ...entries[r.index]!.span, relation: r.relation, link: r.link }))];
+    if (editor.syntaxError()) return [];
+    const self = (span: Span | undefined): RelatedSpan[] => (span ? [{ ...span, relation: "self", link: "hard" }] : []);
+    const primary = editor.lineage()?.primary;
+    const hovered = [...(primary !== undefined && primary !== index ? self(entries[primary]?.span) : []), ...(resultHovered() ? self(editor.timeline().returned) : [])];
+    if (index === undefined || !entries[index]) return hovered;
+    return [...self(entries[index]!.span), ...[...editor.related().values()].map((r) => ({ ...entries[r.index]!.span, relation: r.relation, link: r.link })), ...hovered];
   };
 
   /** The open sketch's profile, or the sketch of the open extrude, and the profiles of hovered sketches. */
@@ -376,7 +378,6 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             editor.openFeature(undefined);
             setResultOpen(open);
           },
-          onHover: setResultHovered,
         }}
       />
       <StatusBar model={model} notice={editor.notice()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />

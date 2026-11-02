@@ -9,20 +9,26 @@ import type { CommentStore } from "../comments.ts";
 import { CommentsPopover } from "../CommentsPopover.tsx";
 import { entryOf } from "../../model/comments.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
-import { lanesHeight, ReturnGlyph, TimelineLanes, type Columns } from "./TimelineLanes.tsx";
+import { lanesHeight, type Columns, type LaneTarget } from "./laneGeometry.ts";
+import { ReturnGlyph, TimelineLanes, type NodeData } from "./TimelineLanes.tsx";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
 const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", combine: "⊕\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
 
 
-/** Picks entry `index`'s version for the open feature; says why not, if not. */
-const pickEntry = (editor: Editor, index: number) => {
-  const version = editor.versionAt(index);
+/** Picks a version for the open feature, entry `index`'s only one if none is given; says why not, if not. */
+const pickEntry = (editor: Editor, index: number, version = editor.versionAt(index)) => {
   editor.setNotice(version ? editor.pickVersion(version) : "That entry isn't one body or sketch.");
 };
 
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);
+/** An entry's status: a feature's, or a Custom Script's first problem. */
+const entryStatus = (entry: Entry) => {
+  if (entry.kind === "feature") return status(entry.trace);
+  const broken = entry.features.find((f) => status(f) !== "ok");
+  return broken ? status(broken) : "ok";
+};
 
 const UNUSED = "\nUnused: no later feature uses its result, and the model doesn't return it.";
 
@@ -33,7 +39,7 @@ type ItemProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${st
  * A feature statement. Selecting it opens its dialog; a body() (research/11) has no form, so
  * selecting it opens its code.
  */
-function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemProps; onOpenCode: (span: Span) => void }) {
+function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemProps; onSelect: () => void }) {
   const label = () => schemas[props.entry.type].label;
   const names = () => props.entry.names.join(", ");
   return (
@@ -43,14 +49,10 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
       data-kind="feature"
       data-type={props.entry.type}
       data-name={props.entry.name}
-      data-status={status(props.entry.trace)}
+      data-status={entryStatus(props.entry)}
       aria-pressed={props.editor.open()?.name === props.entry.name}
       title={`${label()} ${names()}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
-      onClick={() => {
-        if (props.editor.pickingVersion()) return pickEntry(props.editor, Number(props.item["data-index"]));
-        if (props.entry.type === "body") return props.onOpenCode(props.entry.span);
-        props.editor.openFeature(props.editor.open()?.name === props.entry.name ? undefined : props.entry);
-      }}
+      onClick={() => props.onSelect()}
     >
       <span class="cad-editor__glyph">{GLYPHS[props.entry.type]}</span>
       <span>{names()}</span>
@@ -62,17 +64,16 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
  * Code the timeline doesn't recognize as features (research/02, "Custom Script"). It lists the
  * feature calls the last build ran inside it, which is how references into it can be followed.
  */
-function ScriptItem(props: { editor: Editor; entry: ScriptEntry; onOpen: (span: Span) => void; item: ItemProps }) {
-  const broken = () => props.entry.features.find((f) => status(f) !== "ok");
+function ScriptItem(props: { entry: ScriptEntry; onSelect: () => void; item: ItemProps }) {
   return (
     <button
       {...props.item}
       class="cad-editor__entry cad-editor__entry--script"
       data-kind="script"
       data-lines={props.entry.lines.join("-")}
-      data-status={broken() ? status(broken()) : "ok"}
+      data-status={entryStatus(props.entry)}
       title={`Custom Script, lines ${props.entry.lines.join("–")}`}
-      onClick={() => (props.editor.pickingVersion() ? pickEntry(props.editor, Number(props.item["data-index"])) : props.onOpen(props.entry.span))}
+      onClick={() => props.onSelect()}
     >
       <span class="cad-editor__glyph">{"{ }"}</span>
       <span>
@@ -129,7 +130,6 @@ interface Drop {
 export interface ResultEntry {
   open: boolean;
   onOpen(): void;
-  onHover(hovered: boolean): void;
   /** How many values main returns, if it returns names. */
   count: number | undefined;
 }
@@ -146,16 +146,6 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   const [markerDrag, setMarkerDrag] = createSignal<number>();
   const markerAt = () => markerDrag() ?? editor.marker();
 
-  /** The lanes to highlight: the one hovered in the browser, or those of the hovered entry's versions. */
-  const hoveredLanes = createMemo(() => {
-    const l = editor.lanes();
-    const out = new Set<number>();
-    const lane = editor.hoveredLane();
-    if (lane !== undefined) out.add(lane);
-    const index = editor.hovered();
-    if (l && index !== undefined) for (const v of l.versions.values()) if (v.entry === index) out.add(l.laneOf.get(v.name)!);
-    return out;
-  });
 
   /** The open context menu: whose, and where it was asked for. */
   const [menu, setMenu] = createSignal<{ index: number; x: number; y: number }>();
@@ -204,6 +194,86 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   };
   /** Runs an action of the editor and shows why it didn't happen, if it didn't. */
   const report = (action: Promise<string | undefined>) => void action.then(editor.setNotice);
+  /**
+   * Selects entry `index`, by its button or its node, or `version` of it by its node or its lane:
+   * picks it while a version is picked, else opens its dialog, which the button closes again, or the
+   * code of a Custom Script or a body(), which have none.
+   */
+  const selectEntry = (index: number, toggle: boolean, version?: string) => {
+    const e = entryAt(index);
+    if (!e) return;
+    if (editor.pickingVersion()) return pickEntry(editor, index, version);
+    if (e.kind === "script" || e.type === "body") return props.onOpenCode(e.span);
+    editor.openFeature(toggle && editor.open()?.name === e.name ? undefined : e);
+  };
+  /** What a node or a lane in the lanes is under the pointer: hovering it hovers what it stands for, and clicking it selects that. */
+  const [laneTarget, setLaneTarget] = createSignal<LaneTarget>();
+  const hoverLanes = (target: LaneTarget | undefined) => {
+    const prev = laneTarget();
+    if (JSON.stringify(prev) === JSON.stringify(target)) return;
+    if (prev?.kind === "entry") editor.setHovered(undefined);
+    if (prev?.kind === "lane") editor.setHoveredLane(undefined);
+    if (prev?.kind === "return") editor.setResultHovered(false);
+    setLaneTarget(target);
+    if (target?.kind === "entry") editor.setHovered(target.entry, target.version);
+    if (target?.kind === "lane") editor.setHoveredLane({ lane: target.lane, version: target.version });
+    if (target?.kind === "return") editor.setResultHovered(true);
+  };
+  const clickLanes = (target: LaneTarget) => {
+    if (target.kind === "entry") return selectEntry(target.entry, true, target.version);
+    if (target.kind === "return") return props.result?.onOpen();
+    const entry = editor.lanes()?.versions.get(target.version)?.entry;
+    if (entry !== undefined) selectEntry(entry, false, target.version);
+  };
+  /** What an entry's node mirrors of its button: the same data attributes, and its versions' own pick state. */
+  const nodeData = (index: number, version: string): NodeData => ({
+    get "data-status"() {
+      const e = entryAt(index);
+      return e && entryStatus(e);
+    },
+    get "data-open"() {
+      return editor.open() && editor.open() === entryAt(index) ? "true" : undefined;
+    },
+    get "data-relation"() {
+      return editor.related().get(index)?.relation;
+    },
+    get "data-hovered"() {
+      return entryHovered(index) ? "true" : undefined;
+    },
+    get "data-cross-hover"() {
+      return editor.crossHovered().has(index) ? "true" : undefined;
+    },
+    get "data-dragging"() {
+      return editor.dragging() === index ? "true" : undefined;
+    },
+    get "data-picked"() {
+      return editor.pickedVersions().includes(version) ? "true" : undefined;
+    },
+    get "data-pickable"() {
+      return editor.pickingVersion() ? (editor.pickable(version) ? "true" : "false") : undefined;
+    },
+    get "data-peer"() {
+      return peerColor(index) ? "true" : undefined;
+    },
+    get style() {
+      const color = peerColor(index);
+      return color ? { "--peer-color": color } : {};
+    },
+  });
+  /** The return entry's state, which its ports mirror. */
+  const returnData: NodeData = {
+    get "data-open"() {
+      return props.result?.open ? "true" : undefined;
+    },
+    get "data-hovered"() {
+      return editor.resultHovered() ? "true" : undefined;
+    },
+    get "data-cross-hover"() {
+      return editor.returnCrossHovered() ? "true" : undefined;
+    },
+  };
+  /** Whether entry `index` shows as hovered: it is, or a click on the hovered lineage opens it. */
+  const entryHovered = (index: number) => editor.hovered() === index || editor.lineage()?.primary === index;
 
   // Comments (research/13-collaboration.md, "Comments"): an entry's threads are those whose range starts in its code.
   const comments = () => (props.comments?.enabled() ? props.comments : undefined);
@@ -327,7 +397,10 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       return editor.focused() === index ? "true" : undefined;
     },
     get "data-hovered"() {
-      return editor.hovered() === index ? "true" : undefined;
+      return entryHovered(index) ? "true" : undefined;
+    },
+    get "data-lineage"() {
+      return editor.lineage()?.entries.has(index) ? "true" : undefined;
     },
     get "data-cross-hover"() {
       return editor.crossHovered().has(index) ? "true" : undefined;
@@ -519,8 +592,8 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
           {(entry: () => Entry, index) => (
             <Switch>
               <Match when={renaming()?.index === index && renaming()}>{(r) => <RenameField editor={editor} index={index} from={r().from} onDone={() => endRename(index)} />}</Match>
-              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onOpenCode={props.onOpenCode} />}</Match>
-              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem editor={editor} entry={e()} onOpen={props.onOpenCode} item={item(index)} />}</Match>
+              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
+              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
             </Switch>
           )}
         </Index>
@@ -570,13 +643,15 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
               data-kind="return"
               aria-pressed={result().open}
               data-past-marker={markerAt() <= count() ? "true" : undefined}
+              data-hovered={editor.resultHovered() ? "true" : undefined}
+              data-cross-hover={editor.returnCrossHovered() ? "true" : undefined}
               style={{ order: ORDER.entry(count()) - 1 }}
               title={`What the model returns${result().count === undefined ? "" : `: ${result().count} value${result().count === 1 ? "" : "s"}`}`}
               onClick={() => result().onOpen()}
-              onPointerEnter={() => result().onHover(true)}
-              onPointerLeave={() => result().onHover(false)}
-              onFocus={() => result().onHover(true)}
-              onBlur={() => result().onHover(false)}
+              onPointerEnter={() => editor.setResultHovered(true)}
+              onPointerLeave={() => editor.setResultHovered(false)}
+              onFocus={() => editor.setResultHovered(true)}
+              onBlur={() => editor.setResultHovered(false)}
             >
               <ReturnGlyph />
               <span>return</span>
@@ -584,7 +659,19 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
           )}
         </Show>
         <Show when={editor.lanes() && columns()}>
-          <TimelineLanes lanes={editor.lanes()!} columns={columns()!} hovered={hoveredLanes()} marker={markerAt()} />
+          <TimelineLanes
+            lanes={editor.lanes()!}
+            columns={columns()!}
+            hovered={editor.highlightedLanes()}
+            marker={markerAt()}
+            node={nodeData}
+            returnNode={returnData}
+            target={laneTarget()}
+            picking={editor.pickingVersion()}
+            pickable={editor.pickable}
+            onHover={hoverLanes}
+            onClick={clickLanes}
+          />
         </Show>
         <Show when={editor.marker() <= count()}>
           <button class="cad-editor__to-end" style={{ order: ORDER.marker(count() + 1) + 1 }} aria-label="Move the timeline marker to the end" title="Move the timeline marker to the end" onClick={() => editor.setMarker(count() + 1)}>

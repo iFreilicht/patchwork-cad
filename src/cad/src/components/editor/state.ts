@@ -55,6 +55,15 @@ export interface PickTarget {
   multi: boolean;
 }
 
+/** A hovered lineage: its lane, and the version of it a click there opens or picks (research/15, "The browser"). */
+export interface LaneHover {
+  lane: number;
+  version: string;
+}
+
+/** A lane and the lanes of its returned versions that aren't its head, which go to the return on lanes of their own. */
+export const lineageLanes = (l: Lanes, lane: number): number[] => [lane, ...l.links.flatMap((link) => (link.kind === "output" && link.from.lane === lane ? [link.to.lane] : []))];
+
 export interface Editor {
   source: Accessor<string>;
   /** The last source that parsed, with its timeline; forms are read-only while the code doesn't parse. */
@@ -90,9 +99,19 @@ export interface Editor {
   pickingAt: Accessor<number | undefined>;
   /** The lineages of bodies and their lanes (research/15). */
   lanes: Accessor<Lanes | undefined>;
-  /** The lane hovered in the browser, by index. */
-  hoveredLane: Accessor<number | undefined>;
-  setHoveredLane(lane: number | undefined): void;
+  /** The lineage hovered in the browser or the timeline's lanes. */
+  hoveredLane: Accessor<LaneHover | undefined>;
+  setHoveredLane(hover: LaneHover | undefined): void;
+  /** Whether the return entry, or its code, is hovered. */
+  resultHovered: Accessor<boolean>;
+  setResultHovered(hovered: boolean): void;
+  /**
+   * The lanes to highlight: the hovered lineage's, or those the hovered features write into or end
+   * in, wherever they are hovered (research/15, "The timeline with lanes").
+   */
+  highlightedLanes: Accessor<Set<number>>;
+  /** While a lineage is hovered: the entry a click opens or picks, and those of its other versions and the one it merges into. */
+  lineage: Accessor<{ primary: number | undefined; entries: Set<number> } | undefined>;
   /** Whether the editor can edit what main returns. */
   returnEditable: Accessor<boolean>;
   /** Returns a version or makes it private. */
@@ -113,7 +132,10 @@ export interface Editor {
   markerOf(marker: TimelineMarker | undefined): number;
   /** The entry being hovered or dragged in the timeline. */
   hovered: Accessor<number | undefined>;
-  setHovered(index: number | undefined): void;
+  /** Hovers entry `index`, or one of its versions by its node in the lanes. */
+  setHovered(index: number | undefined, version?: string): void;
+  /** The version a click on the hovered entry or node would pick: the node's, or the entry's only one. */
+  hoveredVersion: Accessor<string | undefined>;
   setDragging(index: number | undefined): void;
   dragging: Accessor<number | undefined>;
   /** The entry whose dependencies are highlighted: the dragged, else the hovered, else the open one. */
@@ -130,6 +152,8 @@ export interface Editor {
   setViewHover(features: string[]): void;
   /** Entries whose features are hovered in the 3D view, or in the code or at its cursor, by entry index. */
   crossHovered: Accessor<Set<number>>;
+  /** Whether the return is hovered in the code or has its cursor. */
+  returnCrossHovered: Accessor<boolean>;
   /** Why the last action in the timeline didn't happen, e.g. a drop or a rename; the status bar shows it. */
   notice: Accessor<string | undefined>;
   setNotice(message: string | undefined): void;
@@ -330,7 +354,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const graph = g();
     return graph ? lanesOf(tl(), graph) : undefined;
   });
-  const [hoveredLane, setHoveredLane] = createSignal<number>();
+  const [hoveredLane, setHoveredLane] = createSignal<LaneHover | undefined>(undefined, { equals: (a, b) => a?.lane === b?.lane && a?.version === b?.version });
+  const [resultHovered, setResultHovered] = createSignal(false);
 
   const pickable = (name: string): boolean => {
     const target = pickTarget();
@@ -439,7 +464,13 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
 
   const [notice, setNotice] = createSignal<string>();
-  const [hovered, setHovered] = createSignal<number>();
+  const [hovered, setHoveredIndex] = createSignal<number>();
+  /** The version of the node hovered in the lanes, if it is a node and not the entry. */
+  const [hoveredNode, setHoveredNode] = createSignal<string>();
+  const setHovered = (index: number | undefined, version?: string) => {
+    setHoveredIndex(index);
+    setHoveredNode(index === undefined ? undefined : version);
+  };
   const [dragging, setDragging] = createSignal<number>();
   /** Whether a body or sketch field is picked: hovering then shows what would be picked, nothing else (research/15, "Availability"). */
   const pickingVersion = () => {
@@ -504,6 +535,51 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const crossHovered = createMemo(() => {
     const names = new Set([...viewHover(), ...codeFeatures()]);
     return new Set(tl().entries.flatMap((e, i) => (ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
+  });
+  /** Whether the code under the pointer or at the cursor is the return. */
+  const codeOnReturn = createMemo(() => {
+    const offset = codeLast() === "hover" ? (codeHover() ?? codeCursor()) : (codeCursor() ?? codeHover());
+    const span = tl().returned;
+    return offset !== undefined && !!span && !syntaxError() && span.start <= offset && offset <= span.end;
+  });
+
+  const sameSet = (a: Set<number>, b: Set<number>) => a.size === b.size && [...a].every((x) => b.has(x));
+  const highlightedLanes = createMemo(
+    () => {
+      const l = lanes();
+      const out = new Set<number>();
+      if (!l) return out;
+      const lane = hoveredLane();
+      if (lane) return new Set(lineageLanes(l, lane.lane));
+      const index = dragging() ?? hovered();
+      const node = hoveredNode();
+      if (node !== undefined && l.laneOf.has(node)) return new Set([l.laneOf.get(node)!]);
+      // While a version is picked, the hover is quiet: only what the pointer is on in the timeline.
+      const entries = new Set([...(index === undefined ? [] : [index]), ...(pickingVersion() ? [] : crossHovered())]);
+      for (const v of l.versions.values()) if (entries.has(v.entry)) out.add(l.laneOf.get(v.name)!);
+      for (const link of l.links) {
+        if (link.kind === "merge" && entries.has(link.to.entry)) out.add(link.from.lane);
+        if (link.kind === "output" && entries.has(link.from.entry)) out.add(link.to.lane);
+      }
+      if (resultHovered() || (!pickingVersion() && codeOnReturn())) l.lanes.forEach((lane, i) => lane.returned && out.add(i));
+      return out;
+    },
+    new Set<number>(),
+    { equals: sameSet },
+  );
+  const lineage = createMemo(() => {
+    const hover = hoveredLane();
+    const l = lanes();
+    if (!hover || !l) return undefined;
+    const primary = l.versions.get(hover.version)?.entry;
+    const entries = new Set<number>();
+    // While a version is picked, only what a click would pick.
+    if (!pickingVersion())
+      for (const i of lineageLanes(l, hover.lane)) {
+        for (const v of l.lanes[i]!.versions) entries.add(v.entry);
+        for (const link of l.links) if (link.kind === "merge" && link.from.lane === i) entries.add(link.to.entry);
+      }
+    return { primary, entries };
   });
 
   const blocked = (index: number, position: number): string | undefined => {
@@ -652,6 +728,10 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     lanes,
     hoveredLane,
     setHoveredLane,
+    resultHovered,
+    setResultHovered,
+    highlightedLanes,
+    lineage,
     returnEditable: () => !syntaxError() && !!analysis() && returnEditable(analysis()!),
     setOutput,
     chainMode: openChainMode,
@@ -662,6 +742,10 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     setMarker,
     hovered: () => dragging() ?? hovered(),
     setHovered,
+    hoveredVersion: () => {
+      const index = hovered();
+      return index === undefined ? undefined : (hoveredNode() ?? versionAt(index));
+    },
     setDragging,
     dragging,
     focused,
@@ -671,6 +755,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     hoveredFeatures,
     setViewHover,
     crossHovered,
+    returnCrossHovered: codeOnReturn,
     blocked,
     notice,
     setNotice,

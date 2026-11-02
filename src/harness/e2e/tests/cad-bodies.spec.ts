@@ -4,7 +4,7 @@
  * M4 (a joined boss, a corner cut by a copy, a private fork and a lid).
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, createModel, dialog, docPathWith, editorView, entities, exampleSource, hideSidebars, modelSource, pickNear, reloadStored, setModelSource, timelineEntry, toolbarButton, versionChips, type Entity } from "../cad.ts";
+import { CAD_MODULES, createModel, dialog, docPathWith, editorView, entities, exampleSource, hideSidebars, modelSource, openCode, pickNear, reloadStored, setModelSource, timelineEntry, toolbarButton, versionChips, type Entity } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -90,6 +90,73 @@ test("M4's bodies: the browser lists what exists at the marker, the lanes show h
   // The ⏭ button goes past the return.
   await page.getByRole("button", { name: "Move the timeline marker to the end" }).click();
   await expect(editorView(page)).toHaveAttribute("data-marker", "11");
+});
+
+/** An entry's node in the lanes, by its version: drawn before and past the marker, the first one. */
+const node = (page: Page, version: string) => lanes(page).locator(`g.cad-editor__node:has(circle[data-version="${version}"])`).first();
+const centre = async (page: Page, version: string) => {
+  const box = (await node(page, version).locator("circle.cad-editor__lane-dot").boundingBox())!;
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+};
+const lineage = (page: Page) => page.locator('.cad-editor__entry[data-lineage="true"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-name")));
+const hoveredEntries = (page: Page) => page.locator('.cad-editor__entry[data-hovered="true"]').evaluateAll((els) => els.map((e) => e.getAttribute("data-name")));
+const selfCode = (page: Page) => page.locator(".cad-model__code .cad-model__related--self").allTextContents();
+
+test("hovering is one thing wherever it starts: an entry, its node or code, a lineage in the browser or the lanes, the return", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await openM4(page);
+  await openCode(page);
+  await page.mouse.move(0, 0);
+
+  // A lineage in the browser: the feature a click opens shows as hovered, its code underlined; its others are marked.
+  await row(page, "plate").hover();
+  await expect.poll(() => hoveredEntries(page)).toEqual(["notched"]);
+  await expect.poll(() => lineage(page)).toEqual(["sketch1", "plate", "joined", "notched"]);
+  await expect.poll(() => selfCode(page)).toEqual([expect.stringContaining("const notched")]);
+  if (shots) await page.screenshot({ path: `${shots}/bodies-hover-lineage.png` });
+
+  // The return entry hovers as a feature does, without its dependencies; it highlights the returned lanes.
+  await returnEntry(page).hover();
+  await expect(returnEntry(page)).toHaveAttribute("data-hovered", "true");
+  await expect.poll(() => selfCode(page)).toEqual(["return [notched, lid];"]);
+  await expect(page.locator(".cad-editor__entry[data-relation]")).toHaveCount(0);
+  await expect(lanes(page).locator('path.cad-editor__lane[data-name="lid"]').first()).toHaveAttribute("data-hovered", "true");
+  // Its ports mirror it.
+  await expect(lanes(page).locator('g.cad-editor__node:has(path.cad-editor__lane-port[data-returned="true"])').first()).toHaveAttribute("data-hovered", "true");
+
+  // A feature's code: its lane and its body's row in the browser.
+  await page.locator(".cad-model__code .cm-line", { hasText: "const lid" }).hover({ position: { x: 30, y: 5 } });
+  await expect(row(page, "lid")).toHaveAttribute("data-hovered", "true");
+  await expect(row(page, "plate")).not.toHaveAttribute("data-hovered", "true");
+  await expect(lanes(page).locator('path.cad-editor__lane[data-name="lid"]').first()).toHaveAttribute("data-hovered", "true");
+  // The return's code: the return entry.
+  await page.locator(".cad-model__code .cm-line", { hasText: "return [notched" }).hover({ position: { x: 30, y: 5 } });
+  await expect(returnEntry(page)).toHaveAttribute("data-cross-hover", "true");
+
+  // Near a node: its entry, which the node mirrors; a click opens it.
+  const fillet1 = await centre(page, "fillet1");
+  await page.mouse.move(fillet1.x + 5, fillet1.y + 2);
+  await expect.poll(() => hoveredEntries(page)).toEqual(["fillet1"]);
+  await expect(node(page, "fillet1")).toHaveAttribute("data-hovered", "true");
+  await expect(node(page, "boss")).toHaveAttribute("data-relation", "dependency");
+  await page.mouse.click(fillet1.x + 5, fillet1.y + 2);
+  await expect(dialog(page)).toHaveAttribute("data-feature", "fillet1");
+  await expect(node(page, "fillet1")).toHaveAttribute("data-open", "true");
+  if (shots) await page.locator(".cad-editor__timeline-wrap").screenshot({ path: `${shots}/bodies-hover-node.png` });
+
+  // On a lane between nodes: its lineage, by the version of that segment, which a click opens.
+  const joined = await centre(page, "joined");
+  const notched = await centre(page, "notched");
+  await page.mouse.move((joined.x + notched.x) / 2, joined.y + 2);
+  await expect(row(page, "plate")).toHaveAttribute("data-hovered", "true");
+  await expect.poll(() => hoveredEntries(page)).toEqual(["joined"]);
+  await expect.poll(() => lineage(page)).toEqual(["sketch1", "plate", "joined", "notched"]);
+  await page.mouse.click((joined.x + notched.x) / 2, joined.y + 2);
+  await expect(dialog(page)).toHaveAttribute("data-feature", "joined");
+  await page.mouse.move(0, 0);
+  await expect.poll(() => lineage(page)).toEqual([]);
 });
 
 test("hiding and showing are this user's; the return entry picks what main returns", async ({ users }) => {
