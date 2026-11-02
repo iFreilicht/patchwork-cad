@@ -29,7 +29,7 @@ A feature's result is a version of a body: in `plate → bore → fillet1` the t
 - **A version that one later feature continues** (`body:` of a fillet, `target:` of a join, a combine or a cut) is followed by that feature's result in its lineage. The last version of a lineage is its head.
 - **A sketch becomes the body a new extrusion makes:** sketch and extrusion are one lane. An extrusion with a target merges its sketch into the target's lineage instead.
 - **A version that several features continue forks:** the continuation with the longest chain after it keeps the lineage, the earlier one on a tie; each other one starts a lineage of its own.
-- **A move copies:** its result starts a lineage of its own, and the copied version goes on.
+- **A move copies:** its result starts a lineage of its own, whose faces are named through it ([07](07-poc-modelling-ui.md#the-reference-syntax)), and the copied version goes on.
 - **A combine merges lineages:** its target's lineage continues, its tools' lineages end there, as Fusion's Combine consumes tool bodies. There is no "Keep Tools": nothing is ever destroyed, so a later feature can use a tool's version again, which forks it.
 - **Custom Script code that uses a version** carries it on into the first version the code declares, as M3's `let body = upright` does, or else ends its lineage. A feature's continuation wins over one in code, which may only refer to the version.
 - **A lineage is named by its first body version** (`plate`, not `sketch1`), so its name stays when features are added; a lineage without one, a sketch's, by the sketch. Renaming a body renames that variable.

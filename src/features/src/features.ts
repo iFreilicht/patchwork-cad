@@ -8,7 +8,7 @@ import { add, cross, describeFace, dot, scale, sub, unit, type Vec } from "./geo
 import { key, type Name } from "./names.ts";
 import { listToArray, oc, progress, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
-import { propagate, withTopology, type Hist, type History } from "./topo.ts";
+import { copyOf, propagate, withTopology, type Hist, type History } from "./topo.ts";
 import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
 import { schemas } from "./schema.ts";
 
@@ -253,8 +253,8 @@ export const combine = defineFeature<{ target: Body; tools: Body[]; operation?: 
 
 /**
  * A copy of a body, translated by `x`, `y` and `z`. The input stays a body of its own, so it is not an
- * input that the copy consumes. Faces and edges keep their names, so references into the copy name
- * the same entities as in the original.
+ * input that the copy consumes. Its faces and edges are named by the copy and their names in the
+ * original, `lid.plate.end`, so that references tell the copy from the original and from other copies.
  */
 export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: number }, Body>({
   type: "move",
@@ -268,7 +268,7 @@ export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: numb
     t.SetTranslation(new o.gp_Vec(x, y, z));
     const mk = new o.BRepBuilderAPI_Transform(body.topo.shape, t, true, false);
     if (!mk.IsDone()) throw new FeatureError("the move failed");
-    return new Body(ctx.name, propagate(mk as unknown as History, [body.topo], [], mk.Shape(), ctx.name));
+    return new Body(ctx.name, copyOf(propagate(mk as unknown as History, [body.topo], [], mk.Shape(), ctx.name), ctx.name));
   },
 });
 

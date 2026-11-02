@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./names": "./src/names.ts",
     "./runtime": "./src/runtime.ts",
     "./schema": "./src/schema.ts"
   },

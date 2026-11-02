@@ -3,6 +3,7 @@
  * Script in `body()` and unwrapping it again (research/11), and deleting a Custom Script.
  */
 import { parse, type AnyNode, type Expression, type Statement } from "acorn";
+import { printCopied, RESERVED } from "@patchwork-cad/features/names";
 import type { Analysis, Span } from "./analyze.ts";
 import { bound, declared, graph, usesIn } from "./deps.ts";
 import { ensureImports, indentOf, lines, replaceIdentifier, type Edit } from "./splice.ts";
@@ -44,8 +45,31 @@ function namesIn(analysis: Analysis): Set<string> {
 }
 
 /**
+ * Whether `node` names the faces of a feature in the model: a variable, `ref.x`, or a feature in a
+ * copy of one (`lid.plate`, `lid.of("end")`), whose features are reached the same way.
+ */
+function isNamed(node: AnyNode, variables: Set<string>): boolean {
+  if (node.type === "Identifier") return variables.has(node.name);
+  if (node.type === "MemberExpression" && !node.computed && node.property.type === "Identifier") {
+    if (node.object.type === "Identifier" && node.object.name === "ref") return true;
+    return !RESERVED.has(node.property.name) && isNamed(node.object, variables);
+  }
+  if (node.type === "MemberExpression" && node.computed && node.object.type === "Identifier" && node.object.name === "ref") return true;
+  return copiedOf(node, variables) !== undefined;
+}
+
+/** The feature `node` reaches through `of()` in a copy, `lid.of("end")`, and where the copy ends. */
+function copiedOf(node: AnyNode, variables: Set<string>): { feature: string; copyEnd: number } | undefined {
+  if (node.type !== "CallExpression" || node.callee.type !== "MemberExpression" || node.callee.computed || node.callee.property.type !== "Identifier" || node.callee.property.name !== "of") return undefined;
+  const arg = node.arguments[0];
+  if (node.arguments.length !== 1 || arg?.type !== "Literal" || typeof arg.value !== "string" || !isNamed(node.callee.object, variables)) return undefined;
+  return { feature: arg.value, copyEnd: node.callee.object.end };
+}
+
+/**
  * Renames variable `from`, which the entry at `index` declares, to `to`: its declaration, its uses
- * in `main` (shorthand properties keep their key) and references through `ref.from`.
+ * in `main` (shorthand properties keep their key), references through `ref.from`, and those to it
+ * in copies, `lid.from`, or `lid.of("from")` where its new name is a property of bodies, and back.
  */
 export function rename(analysis: Analysis, tl: Timeline, index: number, from: string, to: string): Refactoring {
   if (from === to) return { edits: [] };
@@ -60,6 +84,7 @@ export function rename(analysis: Analysis, tl: Timeline, index: number, from: st
     for (const d of statement.declarations) for (const id of bound(d.id)) if ((id as { name: string }).name === from) edits.push({ start: id.start, end: id.end, text: to });
   }
   if (edits.length === 0) return { error: `${from} is not declared by this entry` };
+  const variables = new Set(graph(analysis, tl).declares.flat());
   for (const statement of analysis.main?.statements ?? []) {
     usesIn(statement, names, (id, ancestors) => {
       const parent = ancestors[ancestors.length - 1];
@@ -69,6 +94,9 @@ export function rename(analysis: Analysis, tl: Timeline, index: number, from: st
     // `ref.from`: references to the feature by name.
     const visit = (node: AnyNode) => {
       if (node.type === "MemberExpression" && !node.computed && node.object.type === "Identifier" && node.object.name === "ref" && node.property.type === "Identifier" && node.property.name === from) edits.push({ start: node.property.start, end: node.property.end, text: to });
+      // In a copy: `lid.from` or `lid.of("from")`, whichever the new name needs.
+      else if (node.type === "MemberExpression" && !node.computed && node.property.type === "Identifier" && node.property.name === from && !RESERVED.has(from) && isNamed(node.object, variables)) edits.push({ start: node.object.end, end: node.end, text: printCopied(to) });
+      else if (copiedOf(node, variables)?.feature === from) edits.push({ start: copiedOf(node, variables)!.copyEnd, end: node.end, text: printCopied(to) });
       for (const value of Object.values(node)) for (const v of Array.isArray(value) ? value : [value]) if (v && typeof v === "object" && typeof (v as AnyNode).type === "string") visit(v as AnyNode);
     };
     visit(statement);

@@ -3,7 +3,7 @@
  * history names, with split indices cross-checked by geometry.
  */
 import { describe, dist, type Vec } from "./geom.ts";
-import { chain, isDescendant, key, lastLevel, piece, printAll, type Name } from "./names.ts";
+import { chain, isDescendant, key, lastLevel, piece, printAll, RESERVED, rootKey, type Name } from "./names.ts";
 import type { Kind, Shape } from "./oc.ts";
 import { entities, histOf, indexOf, type Topo } from "./topo.ts";
 
@@ -51,37 +51,63 @@ export class Ref {
 
 const isRef = (x: unknown): x is Ref => x instanceof Ref;
 
-/** The faces a feature named, by feature name; feature results (bodies) are such names too. */
+/** Any other property of a feature's names is a feature in its copy: `lid.plate` is `lid.of("plate")`. */
+const copies: ProxyHandler<Named> = {
+  get: (target, prop, receiver) => (typeof prop === "string" && !RESERVED.has(prop) && !(prop in target) ? target.of(prop) : Reflect.get(target, prop, receiver)),
+};
+
+/** A feature and the copies its faces are in, as names hold them; a function, as every property of a `Named` is reserved. */
+const rootOf = (n: Named): { feature: string; via?: string[] } => (n.via.length ? { feature: n.name, via: [...n.via] } : { feature: n.name });
+
+/**
+ * The faces a feature named, by feature name; feature results (bodies) are such names too. In a
+ * copy (`move`), the faces it copied are named by the copy and their own names: `lid.plate.end`.
+ */
 export class Named {
-  constructor(readonly name: string) {}
+  /** The copies the faces are in, outermost first: `lid.plate` is `plate` via `lid`. */
+  declare readonly via: readonly string[];
+
+  constructor(
+    readonly name: string,
+    via: readonly string[] = [],
+  ) {
+    // Not enumerable: replicad-evaluator spreads a returned body into its shape config.
+    Object.defineProperty(this, "via", { value: via, enumerable: false });
+    return new Proxy(this, copies);
+  }
+
+  /** The faces of feature `feature` in this copy: `lid.of("plate")`, or `lid.plate` if that isn't a property of its own. */
+  of(feature: string): Named {
+    return new Named(feature, [...this.via, this.name]);
+  }
 
   /** Side faces by sketch segment id: `extrude1.side.front`. */
   get side(): Readonly<Record<string, Ref>> {
-    return new Proxy({}, { get: (_, seg) => (typeof seg === "string" ? new Ref("face", [{ t: "side", feature: this.name, seg }]) : undefined) });
+    return new Proxy({}, { get: (_, seg) => (typeof seg === "string" ? new Ref("face", [{ t: "side", ...rootOf(this), seg }]) : undefined) });
   }
 
   get start(): Ref {
-    return new Ref("face", [{ t: "cap", feature: this.name, cap: "start" }]);
+    return new Ref("face", [{ t: "cap", ...rootOf(this), cap: "start" }]);
   }
 
   get end(): Ref {
-    return new Ref("face", [{ t: "cap", feature: this.name, cap: "end" }]);
+    return new Ref("face", [{ t: "cap", ...rootOf(this), cap: "end" }]);
   }
 
   /** The faces a fillet or chamfer created at vertices. */
   get corner(): Ref {
-    return new Ref("face", [{ t: "corner", feature: this.name }]);
+    return new Ref("face", [{ t: "corner", ...rootOf(this) }]);
   }
 
   /** The face a fillet or chamfer created from `edge`. */
   face(edge: Ref): Ref {
-    return new Ref("face", [{ t: "blend", feature: this.name, edge: [...edge.names] }]);
+    return new Ref("face", [{ t: "blend", ...rootOf(this), edge: [...edge.names] }]);
   }
 
   /** The face of a shape adopted with `body()` whose centroid was nearest to `near` (research/11). */
   faceAt(near: readonly number[]): Ref {
     const [x = 0, y = 0, z = 0] = near;
-    return new Ref("face", [{ t: "at", feature: this.name, near: [x, y, z] }]);
+    return new Ref("face", [{ t: "at", ...rootOf(this), near: [x, y, z] }]);
   }
 }
 
@@ -140,9 +166,9 @@ function adoptedNames(t: Topo): Map<string, At[]> {
     for (const n of hist.values()) {
       const base = chain(n).base;
       if (base.t !== "at") continue;
-      const list = out.get(base.feature) ?? [];
+      const list = out.get(rootKey(base)) ?? [];
       if (!list.some((x) => key(x) === key(base))) list.push(base);
-      out.set(base.feature, list);
+      out.set(rootKey(base), list);
     }
   return out;
 }
@@ -155,7 +181,7 @@ function adoptedNames(t: Topo): Map<string, At[]> {
 function snap(n: Name, adopted: Map<string, At[]>, why: string[], forceNearest: boolean): Name {
   switch (n.t) {
     case "at": {
-      const ranked = (adopted.get(n.feature) ?? []).map((c) => ({ c, d: dist(c.near, n.near) })).sort((a, b) => a.d - b.d);
+      const ranked = (adopted.get(rootKey(n)) ?? []).map((c) => ({ c, d: dist(c.near, n.near) })).sort((a, b) => a.d - b.d);
       const [best, second] = ranked;
       if (!best) return n;
       if (!forceNearest && best.d > 1e-6 && second && second.d < 2 * best.d) {

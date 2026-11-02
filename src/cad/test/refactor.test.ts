@@ -165,3 +165,35 @@ export default function main() {
   const unused = source.replace("drawCircle(r)", "drawCircle(5)").replace("drawCircle(r)", "drawCircle(5)");
   expect(applied(unused, deleteScript(unused, analyze(unused), tlOf(unused), 0))).not.toContain("const r = 5;");
 });
+
+const copies = `import { sketch, plane, rect, extrude, move, chamfer, edge } from "@patchwork-cad/features";
+
+export const defaultParams = {};
+
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) });
+  const extrude1 = extrude({ sketch: sketch1, distance: 5 });
+  const lid = move({ body: extrude1, z: 30 });
+  const lid2 = move({ body: lid, x: 30 });
+  const chamfer1 = chamfer({ body: lid2, edges: [edge(lid2.lid.extrude1.end, lid2.lid.extrude1.side.right)], distance: 1 });
+  return [extrude1, chamfer1];
+}
+`;
+
+test("renaming a copied feature renames it in the copies' references, through of() where a body has a property of its name, and back", () => {
+  const index = 1;
+  expect(run(copies).trace.at(-1)).toMatchObject({ name: "chamfer1", status: "ok" });
+  // To a property of bodies: `of("end")`, which doesn't touch `end` itself, the cap.
+  const reserved = applied(copies, rename(analyze(copies), tlOf(copies), index, "extrude1", "end"));
+  expect(reserved).toContain('edges: [edge(lid2.lid.of("end").end, lid2.lid.of("end").side.right)]');
+  expect(reserved).toContain("const lid = move({ body: end, z: 30 });");
+  expect(run(reserved).trace.at(-1)).toMatchObject({ name: "chamfer1", status: "ok" });
+  // And back to a plain name.
+  const plain = applied(reserved, rename(analyze(reserved), tlOf(reserved), index, "end", "plate"));
+  expect(plain).toContain("edges: [edge(lid2.lid.plate.end, lid2.lid.plate.side.right)]");
+  expect(run(plain).trace.at(-1)).toMatchObject({ name: "chamfer1", status: "ok" });
+  // A copy in between, too.
+  const renamed = applied(plain, rename(analyze(plain), tlOf(plain), 2, "lid", "of"));
+  expect(renamed).toContain('edges: [edge(lid2.of("of").plate.end, lid2.of("of").plate.side.right)]');
+  expect(run(renamed).trace.at(-1)).toMatchObject({ name: "chamfer1", status: "ok" });
+});

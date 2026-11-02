@@ -2,7 +2,7 @@
  * Topology with history names, ported from research/03's prototype (model.ts). Every operation
  * names the faces and edges of its result from OCCT's Generated/Modified/IsDeleted history.
  */
-import { key, piece, type Name } from "./names.ts";
+import { copied, key, piece, type Name } from "./names.ts";
 import { listToArray, subShapes, type Kind, type Shape } from "./oc.ts";
 
 /** Names of one entity by key. A face carries several after a merge. */
@@ -74,6 +74,12 @@ export function propagate(h: History, inputs: Topo[], generators: { from: Shape;
 }
 
 /** Completes a topology: adjacency, and names for edges without history (by their adjacent faces). */
+/** The topology of a copy that copy `by` makes of `t`: its entities named by `by` and their names (`copied`). */
+export function copyOf(t: Topo, by: string): Topo {
+  const rename = (h: Hist): Hist => new Map([...h.values()].map((n) => copied(n, by)).map((n) => [key(n), n]));
+  return { ...t, faceHist: t.faceHist.map(rename), edgeHist: t.edgeHist.map(rename) };
+}
+
 export function withTopology(shape: Shape, faces: Shape[], faceHist: Hist[], edges = subShapes(shape, "edge"), edgeHist: Hist[] = edges.map(() => new Map())): Topo {
   const t0 = performance.now();
   const edgeFaces = edges.map(() => [] as number[]);
