@@ -27,3 +27,11 @@
 - Embedding: decal, reference in a sketch, annotation (item 7)
 - Sketches: constraints, e.g. with PlaneGCS (stable segment ids: [07](07-poc-modelling-ui.md#the-feature-library))
 - Assemblies and joints
+
+## Known bugs
+
+<HUMAN-WRITTEN>
+This section exists to note down bugs found during UX testing. We will work on them at some point in the future. If these bugs are re-discovered by an AI during the implementation of some other feature, it must decide whether the bug is relevant to its task. If it is orthogonal, the bug can be left alone. An AI should only fix bugs listed here if they block a feature the AI is tasked with or if a human explicitly asks it to do so.
+</HUMAN-WRITTEN>
+
+- When editing the return feature and selecting bodies, only returned bodies are shown instead of all existing bodies. Workaround; move the marker before the return feature and edit it then.
