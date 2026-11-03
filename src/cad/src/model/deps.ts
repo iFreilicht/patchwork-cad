@@ -97,7 +97,7 @@ export function declared(statement: Statement): string[] {
 }
 
 /** Names that scope `node` declares: a function's name and parameters, a block's declarations, a loop's or a catch clause's variables. */
-function scopeNames(node: AnyNode): string[] {
+export function scopeNames(node: AnyNode): string[] {
   const names = (ids: AnyNode[]) => ids.map((id) => (id as { name: string }).name);
   switch (node.type) {
     case "FunctionDeclaration":

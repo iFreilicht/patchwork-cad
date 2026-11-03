@@ -235,3 +235,44 @@ test("the context menu: keyboard, ⋯ button, rename, unwrap and delete", async 
   await page.keyboard.press("Delete");
   await expect.poll(() => names(page)).toEqual(["sketch1"]);
 });
+
+const destructured = (key: string) => `import { sketch, plane, rect, extrude, body } from "@patchwork-cad/features";
+import { drawRoundedRectangle, drawCircle } from "replicad";
+
+export const defaultParams = { width: 100, depth: 40, height: 12, hole: 30 };
+
+export default function main({ width, depth, height, hole }) {
+  const { cut_plate, ${key}: bore_negative } = body(() => {
+    const plate = drawRoundedRectangle(width, depth, 6).sketchOnPlane().extrude(height);
+    const bore = drawCircle(hole / 2).sketchOnPlane().extrude(height);
+    const cut_plate = plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));
+    return { cut_plate, bore };
+  });
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) });
+  const extrude1 = extrude({ sketch: sketch1, distance: 20 });
+  return { cut_plate, bore_negative, extrude1 };
+}
+`;
+
+test("a body() destructured by a key it doesn't return says so; its variables can take names only its function uses", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  // A typo in a key: the entry fails alone, and the status bar says why, as it has no dialog.
+  await open(page, destructured("broe"));
+  await expect(timelineEntry(page, "cut_plate")).toHaveAttribute("data-status", "failed", { timeout: 120_000 });
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok");
+  await expect(page.locator(".cad-model__status")).toContainText("body() cut_plate, bore_negative: broe isn't one of its outputs, which are cut_plate, bore");
+  await setModelSource(page, destructured("bore"));
+  await expect(timelineEntry(page, "cut_plate")).toHaveAttribute("data-status", "ok");
+  await expect(page.locator(".cad-model__status .cad-model__error")).toHaveCount(0);
+
+  // bore is the function's own variable, not the model's: bore_negative can be named so.
+  await fromMenu(page, 0, "Rename bore_negative");
+  await page.getByRole("textbox", { name: "New name for bore_negative" }).fill("bore");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => modelSource(page)).toContain("const { cut_plate, bore } = body(() => {");
+  // The return keeps its key.
+  expect(await modelSource(page)).toContain("return { cut_plate, bore_negative: bore, extrude1 };");
+  await expect(timelineEntry(page, "cut_plate")).toHaveAttribute("data-status", "ok");
+});

@@ -250,3 +250,26 @@ test("renaming an output renames its key, not its variable", () => {
   const odd = source.replace("{ cut_plate, extrude1 }", "{ ...parts }");
   expect(renameOutput(analyze(odd), "extrude1", "x")).toEqual({ error: "the return isn't names" });
 });
+
+test("a variable can take a name that only a function inside declares, unless that function uses it", () => {
+  const source = `import { body } from "@patchwork-cad/features";
+import { drawCircle } from "replicad";
+export default function main({ hole }) {
+  const { cut_plate, bore: bore_negative } = body(() => {
+    const bore = drawCircle(Math.max(hole, 2) / 2).sketchOnPlane().extrude(1);
+    return { cut_plate: bore, bore };
+  });
+  return { cut_plate, bore_negative };
+}
+`;
+  const out = applied(source, rename(analyze(source), tlOf(source), 0, "bore_negative", "bore"));
+  expect(out).toContain("const { cut_plate, bore } = body(() => {");
+  expect(out).toContain("return { cut_plate, bore_negative: bore };");
+  // Names the module or main declares, and globals it uses, are taken.
+  for (const to of ["hole", "drawCircle", "main", "Math"]) expect(rename(analyze(source), tlOf(source), 0, "bore_negative", to)).toEqual({ error: `${to} is already used in the model` });
+  // A function that uses it and declares the name for itself would capture it.
+  const captured = source.replace("return { cut_plate: bore, bore };", "return { cut_plate: bore, bore: bore_negative };").replace("const { cut_plate, bore: bore_negative } = body(", "const bore_negative = 1;\n  const { cut_plate } = body(").replace("return { cut_plate, bore_negative };", "return { cut_plate };");
+  const tl = tlOf(captured);
+  const index = tl.entries.findIndex((e) => e.kind === "script");
+  expect(rename(analyze(captured), tl, index, "bore_negative", "bore")).toEqual({ error: "bore is already used in the model" });
+});

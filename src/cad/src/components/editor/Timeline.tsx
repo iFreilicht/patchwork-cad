@@ -12,6 +12,7 @@ import markerSvg from "../../assets/timeline-marker.svg?raw";
 import { lanesHeight, type Columns, type LaneTarget } from "./laneGeometry.ts";
 import { ReturnGlyph, TimelineLanes, type NodeData } from "./TimelineLanes.tsx";
 import { NameField } from "./NameField.tsx";
+import { Menu, type MenuItem } from "./Menu.tsx";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
 const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", combine: "⊕\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
@@ -762,86 +763,6 @@ const CommentIcon = () => (
     />
   </svg>
 );
-
-interface MenuItem {
-  label: string;
-  /** Runs the action; a message is why it didn't happen. */
-  run: () => void | Promise<string | undefined>;
-  danger?: boolean;
-  /** Asks again before running, e.g. to delete. */
-  confirm?: string;
-}
-
-/**
- * The context menu of a timeline entry (research/11, "Context menu"): opened with a right-click, the
- * ⋯ button or the context-menu key or Shift+F10, operated with the arrow keys, Enter and Escape.
- */
-function Menu(props: { items: MenuItem[]; label: string; at: { x: number; y: number }; wrap: HTMLElement; onClose: (refocus: boolean) => void }) {
-  let el!: HTMLDivElement;
-  const [confirming, setConfirming] = createSignal<string>();
-  const box = props.wrap.getBoundingClientRect();
-  const focusItem = (delta: number | "first" | "last") => {
-    const items = [...el.querySelectorAll<HTMLButtonElement>("[role=menuitem]")];
-    const at = items.indexOf(document.activeElement as HTMLButtonElement);
-    const next = delta === "first" ? 0 : delta === "last" ? items.length - 1 : (at + delta + items.length) % items.length;
-    items[next]?.focus();
-  };
-  const outside = (event: PointerEvent) => {
-    if (!el.contains(event.target as Node)) props.onClose(false);
-  };
-  queueMicrotask(() => {
-    focusItem("first");
-    document.addEventListener("pointerdown", outside, true);
-  });
-  // WebKit sometimes moves the focus back after the key that opened the menu: focus again once it has rendered.
-  requestAnimationFrame(() => el.isConnected && !el.contains(document.activeElement) && focusItem("first"));
-  onCleanup(() => document.removeEventListener("pointerdown", outside, true));
-  const keys: Record<string, () => void> = {
-    ArrowDown: () => focusItem(1),
-    ArrowUp: () => focusItem(-1),
-    Home: () => focusItem("first"),
-    End: () => focusItem("last"),
-    Escape: () => props.onClose(true),
-    Tab: () => props.onClose(false),
-  };
-  return (
-    <div
-      ref={el}
-      class="cad-editor__menu"
-      role="menu"
-      aria-label={props.label}
-      // It opens upwards from where it was asked for: the timeline is at the bottom.
-      style={{ left: `${Math.max(0, props.at.x - box.left)}px`, bottom: `${box.bottom - props.at.y}px` }}
-      onKeyDown={(event) => {
-        const key = keys[event.key];
-        if (!key) return;
-        event.preventDefault();
-        key();
-      }}
-    >
-      <For each={props.items}>
-        {(item) => (
-          <button
-            role="menuitem"
-            tabIndex={-1}
-            class="cad-editor__menu-item"
-            data-danger={item.danger ? "true" : undefined}
-            onClick={() => {
-              if (item.confirm && confirming() !== item.label) {
-                setConfirming(item.label);
-                return;
-              }
-              props.onClose(true);
-              void item.run();
-            }}
-          >
-            {item.confirm && confirming() === item.label ? item.confirm : item.label}
-          </button>
-        )}
-      </For>
-    </div>
-  );
-}
 
 /** Renames a variable of an entry in place; Enter renames, Escape or leaving the field doesn't. */
 const RenameField = (props: { editor: Editor; index: number; from: string; onDone: () => void }) => (

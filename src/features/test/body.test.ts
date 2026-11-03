@@ -110,5 +110,5 @@ test("a failing closure fails its entry alone in a lenient build", () => {
   expect(currentTrace()[1]).toMatchObject({ name: "fillet1", status: "failed" });
   // Destructuring one shape, or keys it didn't make, is reported.
   expect(() => (beginBuild({ lenient: false }), body(() => plate(100), { destructured: { x: "x", y: "y" } }))).toThrow("x, y are declared, but it made one shape");
-  expect(() => (beginBuild({ lenient: false }), body(() => ({ x: plate(100) }), { destructured: { x: "x", y: "y" } }))).toThrow("it made no y");
+  expect(() => (beginBuild({ lenient: false }), body(() => ({ x: plate(100) }), { destructured: { x: "x", y: "y" } }))).toThrow("y isn't one of its outputs, which are x");
 });

@@ -313,7 +313,10 @@ const adopt = defineFeature<{ source: BodySource }, Body | Record<string, Body>>
     // Destructured, it adopts the declared keys only, as destructuring reads only those.
     const keys = meta.destructured ? Object.keys(meta.destructured) : Object.keys(value);
     const missing = keys.filter((k) => !Object.hasOwn(value, k));
-    if (missing.length > 0) throw new FeatureError(`it made no ${missing.join(", ")}`);
+    if (missing.length > 0) {
+      const made = Object.keys(value);
+      throw new FeatureError(`${missing.join(", ")} ${missing.length === 1 ? "isn't one" : "aren't"} of its outputs${made.length > 0 ? `, which are ${made.join(", ")}` : "; it has none"}`);
+    }
     return Object.fromEntries(keys.map((k) => [k, adoptOne(value[k], meta.destructured?.[k] ?? `${ctx.name}.${k}`)]));
   },
 });

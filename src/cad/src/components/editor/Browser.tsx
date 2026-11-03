@@ -1,6 +1,7 @@
 import { createSignal, Index, Show } from "solid-js";
 import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
+import { Menu, type MenuItem } from "./Menu.tsx";
 import { NameField } from "./NameField.tsx";
 import type { Editor } from "./state.ts";
 
@@ -24,12 +25,27 @@ export const EyeIcon = (props: { open: boolean }) => (
   </svg>
 );
 
+/** What the browser's rows share: the row being renamed and the one whose menu is open, by their keys. */
+interface RowState {
+  renaming: () => string | undefined;
+  setRenaming(key: string | undefined): void;
+  openMenu(row: BodyRow, x: number, y: number): void;
+}
+
 /**
- * One row: the eye and the name, which opens the body's last feature or picks it. F2 or a double
- * click renames it: a returned body's key, else its variable (research/15, "Output").
+ * One row: the eye and the name, which opens the body's last feature or picks it. Its context menu
+ * (a right-click, the context-menu key or Shift+F10) renames it, also F2 or a double click: a
+ * returned body's key, else its variable (research/15, "Output").
  */
-function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
-  const [renaming, setRenaming] = createSignal(false);
+function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow; state: RowState }) {
+  const renaming = () => props.state.renaming() === props.row.key;
+  const setRenaming = (on: boolean) => props.state.setRenaming(on ? props.row.key : undefined);
+  let li!: HTMLLIElement;
+  /** Ends renaming, with the focus back on the name, as in the timeline. */
+  const done = () => {
+    setRenaming(false);
+    queueMicrotask(() => li.querySelector<HTMLElement>(".cad-editor__browser-name")?.focus());
+  };
   const label = () => props.row.name;
   const detail = () => (props.row.version !== props.row.name ? props.row.version : undefined);
   const pickable = () => props.editor.pickingVersion() && props.editor.pickable(props.row.version);
@@ -44,8 +60,10 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
   const hover = () => props.editor.setHoveredLane({ lane: props.row.lane, version: props.row.version });
   return (
     <li
+      ref={li}
       class="cad-editor__browser-row"
       data-kind={props.row.kind}
+      data-key={props.row.key}
       data-name={label()}
       data-version={props.row.version}
       data-visible={props.row.visible ? "true" : "false"}
@@ -54,6 +72,11 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
       data-hovered={props.editor.highlightedLanes().has(props.row.lane) ? "true" : undefined}
       onPointerEnter={hover}
       onPointerLeave={() => props.editor.setHoveredLane(undefined)}
+      onContextMenu={(event) => {
+        if (props.editor.pickingVersion() || renaming()) return;
+        event.preventDefault();
+        props.state.openMenu(props.row, event.clientX, event.clientY);
+      }}
     >
       <button
         class="cad-editor__icon-button"
@@ -66,7 +89,7 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
       </button>
       <Show
         when={!renaming()}
-        fallback={<NameField from={label()} rename={(to) => props.editor.renameBody(props.row.name, props.row.output, to)} onNotice={props.editor.setNotice} onDone={() => setRenaming(false)} />}
+        fallback={<NameField from={label()} rename={(to) => props.editor.renameBody(props.row.name, props.row.output, to)} onNotice={props.editor.setNotice} onDone={done} />}
       >
         <button
           class="cad-editor__browser-name"
@@ -75,9 +98,15 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
           onClick={select}
           onDblClick={() => !props.editor.pickingVersion() && setRenaming(true)}
           onKeyDown={(event) => {
-            if (event.key !== "F2" || props.editor.pickingVersion()) return;
-            event.preventDefault();
-            setRenaming(true);
+            if (props.editor.pickingVersion()) return;
+            if (event.key === "F2") {
+              event.preventDefault();
+              setRenaming(true);
+            } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+              event.preventDefault();
+              const r = event.currentTarget.getBoundingClientRect();
+              props.state.openMenu(props.row, r.left, r.bottom);
+            }
           }}
           onFocus={hover}
           onBlur={() => props.editor.setHoveredLane(undefined)}
@@ -93,13 +122,13 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
 }
 
 /** The rows of the bodies or the sketches at the marker. */
-function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketch" }) {
+function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketch"; state: RowState }) {
   const rows = () => props.bodies.rows().filter((r) => r.kind === props.kind);
   return (
     <ul class="cad-editor__browser-list" aria-label={props.kind === "body" ? "Bodies" : "Sketches"}>
       {/* By position: rows are new objects after every build, and their buttons should stay, e.g. while clicked. */}
       <Index each={rows()} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
-        {(row) => <Row editor={props.editor} bodies={props.bodies} row={row()} />}
+        {(row) => <Row editor={props.editor} bodies={props.bodies} row={row()} state={props.state} />}
       </Index>
     </ul>
   );
@@ -109,9 +138,30 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * The browser (research/15, "The browser"): what exists at the timeline marker, with an eye that
  * shows or hides it for this user only. Before the return, that is every body and sketch that no
  * feature used yet; past it, what main returns. Hovering a row highlights the body, its lane and
- * its features; clicking it opens its last feature, or picks it.
+ * its features; clicking it opens its last feature, or picks it. Its context menu renames it, hides
+ * or shows it, and returns it or makes it private.
  */
 export function Browser(props: { editor: Editor; bodies: Bodies }) {
+  let aside!: HTMLElement;
+  const [renaming, setRenaming] = createSignal<string>();
+  const [menu, setMenu] = createSignal<{ row: BodyRow; x: number; y: number }>();
+  const state: RowState = { renaming, setRenaming, openMenu: (row, x, y) => setMenu({ row, x, y }) };
+  const nameOf = (key: string) => aside.querySelector<HTMLElement>(`.cad-editor__browser-row[data-key="${CSS.escape(key)}"] .cad-editor__browser-name`);
+  /** Closes the menu, and gives the focus back to its row if it was operated with the keyboard. */
+  const closeMenu = (refocus: boolean) => {
+    const m = menu();
+    setMenu(undefined);
+    if (refocus && m) nameOf(m.row.key)?.focus();
+  };
+  const menuItems = (row: BodyRow): MenuItem[] => {
+    const items: MenuItem[] = [
+      { label: "Rename", run: () => void queueMicrotask(() => setRenaming(row.key)) },
+      { label: row.visible ? "Hide" : "Show", run: () => props.bodies.setVisible(row, !row.visible) },
+    ];
+    const returned = props.editor.lanes()?.returned.has(row.version) ?? false;
+    if (props.editor.returnEditable()) items.push({ label: returned ? "Remove from result" : "Add to result", run: () => props.editor.setOutput(row.version, !returned) });
+    return items;
+  };
   const at = () => {
     const n = props.editor.timeline().entries.length;
     if (props.editor.pickingAt() !== undefined) return `Before ${props.editor.open()?.name ?? "the open feature"}`;
@@ -119,15 +169,19 @@ export function Browser(props: { editor: Editor; bodies: Bodies }) {
     return marker > n ? "Returned" : marker === n ? "Before the return" : "At the timeline marker";
   };
   return (
-    <aside class="cad-editor__browser" aria-label="Browser">
-      <p class="cad-editor__muted cad-editor__browser-note">{at()}</p>
-      <h3 class="cad-editor__browser-heading">Bodies</h3>
-      <BodyList editor={props.editor} bodies={props.bodies} kind="body" />
-      <Show when={props.bodies.rows().some((r) => r.kind === "sketch")}>
-        <h3 class="cad-editor__browser-heading">Sketches</h3>
-        <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" />
-      </Show>
-    </aside>
+    <>
+      <aside class="cad-editor__browser" aria-label="Browser" ref={aside}>
+        <p class="cad-editor__muted cad-editor__browser-note">{at()}</p>
+        <h3 class="cad-editor__browser-heading">Bodies</h3>
+        <BodyList editor={props.editor} bodies={props.bodies} kind="body" state={state} />
+        <Show when={props.bodies.rows().some((r) => r.kind === "sketch")}>
+          <h3 class="cad-editor__browser-heading">Sketches</h3>
+          <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
+        </Show>
+      </aside>
+      {/* In the editor, not the browser, which would clip it. */}
+      <Show when={menu()}>{(m) => <Menu items={menuItems(m().row)} label={`Actions for ${m().row.name}`} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
+    </>
   );
 }
 

@@ -5,7 +5,7 @@
 import { parse, type AnyNode, type AssignmentProperty, type Expression, type Property, type Statement } from "acorn";
 import { printCopied, RESERVED } from "@patchwork-cad/features/names";
 import { keyedNames, propertyKey, returnedOutputs, type Analysis, type Span } from "./analyze.ts";
-import { bound, declared, graph, usesIn } from "./deps.ts";
+import { bound, declared, graph, scopeNames, usesIn } from "./deps.ts";
 import { ensureImports, indentOf, lines, outputKeys, replaceIdentifier, setReturned, type Edit } from "./splice.ts";
 import type { Timeline } from "./timeline.ts";
 
@@ -45,6 +45,29 @@ function namesIn(analysis: Analysis): Set<string> {
 }
 
 /**
+ * Whether variable `from` of `main` can't be named `to`: the module or `main` declares `to` (as an
+ * import, a variable or a parameter), code uses it as a global (`Math`), or a function or block
+ * that uses `from` declares a `to` of its own, which would capture it. A name that only a function
+ * inside declares for itself, e.g. a `body()` closure's, is free.
+ */
+function clashes(analysis: Analysis, from: string, to: string): boolean {
+  const program = analysis.program;
+  const moduleNames = program.body.flatMap((s): string[] => {
+    if (s.type === "ImportDeclaration") return s.specifiers.map((sp) => sp.local.name);
+    const d = s.type === "ExportNamedDeclaration" || s.type === "ExportDefaultDeclaration" ? s.declaration : s;
+    return d && (d.type === "VariableDeclaration" || d.type === "FunctionDeclaration" || d.type === "ClassDeclaration") ? declared(d as Statement) : [];
+  });
+  const mainFn = program.body.flatMap((s) => (s.type === "ExportDefaultDeclaration" && (s.declaration.type === "FunctionDeclaration" || s.declaration.type === "FunctionExpression" || s.declaration.type === "ArrowFunctionExpression") ? [s.declaration] : []))[0];
+  const mainNames = [...(mainFn?.params.flatMap((p) => bound(p).map((id) => (id as { name: string }).name)) ?? []), ...(analysis.main?.statements.flatMap(declared) ?? [])];
+  if (moduleNames.includes(to) || mainNames.includes(to)) return true;
+  let found = false;
+  usesIn(program, new Set([to]), () => (found = true));
+  // `from` is declared in main: its uses are found statement by statement, as rename finds them.
+  for (const statement of analysis.main?.statements ?? []) usesIn(statement, new Set([from]), (_, ancestors) => (found ||= ancestors.some((a) => scopeNames(a).includes(to))));
+  return found;
+}
+
+/**
  * Whether `node` names the faces of a feature in the model: a variable, `ref.x`, or a feature in a
  * copy of one (`lid.plate`, `lid.of("end")`), whose features are reached the same way.
  */
@@ -74,7 +97,7 @@ function copiedOf(node: AnyNode, variables: Set<string>): { feature: string; cop
 export function rename(analysis: Analysis, tl: Timeline, index: number, from: string, to: string): Refactoring {
   if (from === to) return { edits: [] };
   if (!declarable(to)) return { error: `${to} is not a valid name` };
-  if (namesIn(analysis).has(to)) return { error: `${to} is already used in the model` };
+  if (clashes(analysis, from, to)) return { error: `${to} is already used in the model` };
   const entry = tl.entries[index];
   if (!entry) return { error: "no such entry" };
   const edits: Edit[] = [];

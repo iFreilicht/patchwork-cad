@@ -315,6 +315,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setCodeOpen(true);
   };
 
+  /** Why a body() failed: it has no dialog to say it (research/11), so the status bar does. */
+  const undialogued = () => editor.timeline().entries.flatMap((e) => (e.kind === "feature" && e.type === "body" && e.trace && e.trace.status !== "ok" && e.trace.message ? [`body() ${e.names.join(", ")}: ${e.trace.message}`] : []));
+
   return (
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
@@ -400,7 +403,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           },
         }}
       />
-      <StatusBar model={model} notice={editor.notice()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} problems={undialogued()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }
