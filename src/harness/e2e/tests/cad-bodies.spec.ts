@@ -283,7 +283,7 @@ test("named outputs: a returned body is named by its key, which the browser and 
   // Renaming a row, from its context menu, renames its key; the variable and what this user hid stay with the body.
   await eye(page, "plate").click();
   await row(page, "plate").click({ button: "right" });
-  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename", "Show", "Remove from result"]);
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Rename", "Show"]);
   await page.getByRole("menu").getByRole("menuitem", { name: "Rename" }).click();
   await page.getByRole("textbox", { name: "New name for plate" }).fill("bracket");
   await page.keyboard.press("Enter");
@@ -321,16 +321,13 @@ test("named outputs: a returned body is named by its key, which the browser and 
   // Shown again, as a body of an object.
   await eye(page, "bracket").click();
   await expect.poll(() => shownBodies(page)).toEqual(["cut", "lid"]);
-  // Double click renames, too; the context menu also opens with Shift+F10, and returns a body or makes it private.
+  // Double click renames, too; the context menu also opens with Shift+F10.
   await row(page, "lid").locator(".cad-editor__browser-name").dblclick();
   await page.getByRole("textbox", { name: "New name for lid" }).press("Escape");
   await row(page, "lid").locator(".cad-editor__browser-name").press("Shift+F10");
-  await page.getByRole("menu").getByRole("menuitem", { name: "Remove from result" }).press("Enter");
-  await expect.poll(() => returned(page)).toBe("{ bracket: cut }");
-  await markerBack(page, 1);
-  await row(page, "lid").locator(".cad-editor__browser-name").press("Shift+F10");
-  await page.getByRole("menu").getByRole("menuitem", { name: "Add to result" }).press("Enter");
-  await expect.poll(() => returned(page)).toBe("{ bracket: cut, lid }");
+  await page.getByRole("menu").getByRole("menuitem", { name: "Hide" }).press("Enter");
+  await expect.poll(() => shownBodies(page)).toEqual(["cut"]);
+  await expect(row(page, "lid").locator(".cad-editor__browser-name")).toBeFocused();
 });
 
 test("body fields are filled by picking: in the view, the browser or the timeline", async ({ users }) => {

@@ -138,8 +138,8 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * The browser (research/15, "The browser"): what exists at the timeline marker, with an eye that
  * shows or hides it for this user only. Before the return, that is every body and sketch that no
  * feature used yet; past it, what main returns. Hovering a row highlights the body, its lane and
- * its features; clicking it opens its last feature, or picks it. Its context menu renames it, hides
- * or shows it, and returns it or makes it private.
+ * its features; clicking it opens its last feature, or picks it. Its context menu renames it, and
+ * hides or shows it.
  */
 export function Browser(props: { editor: Editor; bodies: Bodies }) {
   let aside!: HTMLElement;
@@ -153,15 +153,11 @@ export function Browser(props: { editor: Editor; bodies: Bodies }) {
     setMenu(undefined);
     if (refocus && m) nameOf(m.row.key)?.focus();
   };
-  const menuItems = (row: BodyRow): MenuItem[] => {
-    const items: MenuItem[] = [
-      { label: "Rename", run: () => void queueMicrotask(() => setRenaming(row.key)) },
-      { label: row.visible ? "Hide" : "Show", run: () => props.bodies.setVisible(row, !row.visible) },
-    ];
-    const returned = props.editor.lanes()?.returned.has(row.version) ?? false;
-    if (props.editor.returnEditable()) items.push({ label: returned ? "Remove from result" : "Add to result", run: () => props.editor.setOutput(row.version, !returned) });
-    return items;
-  };
+  // What main returns is the return entry's to edit, not the browser's (research/15, "Output").
+  const menuItems = (row: BodyRow): MenuItem[] => [
+    { label: "Rename", run: () => void queueMicrotask(() => setRenaming(row.key)) },
+    { label: row.visible ? "Hide" : "Show", run: () => props.bodies.setVisible(row, !row.visible) },
+  ];
   const at = () => {
     const n = props.editor.timeline().entries.length;
     if (props.editor.pickingAt() !== undefined) return `Before ${props.editor.open()?.name ?? "the open feature"}`;
