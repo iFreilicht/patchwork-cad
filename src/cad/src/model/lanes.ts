@@ -24,8 +24,13 @@ export interface Link {
 }
 
 export interface Lane {
-  /** The body's name, that of its first body version (research/15); a sketch's own if it has none. */
+  /**
+   * The body's name (research/15): the key `main` returns it under, else that of its first body
+   * version, or a sketch's own if it has none.
+   */
   name: string;
+  /** The key `main` returns it under, if it has one: `plate` in `return { plate: notched }`. */
+  key?: string;
   kind: "body" | "sketch";
   versions: Version[];
   /** The link that starts it, if it forks or copies another lane's version. */
@@ -41,6 +46,8 @@ export interface Lane {
   stop: number;
   /** A lane of its own for an output link (a returned version that isn't a head), not a lineage. */
   output?: boolean;
+  /** An output lane's version. */
+  version?: string;
 }
 
 export interface Lanes {
@@ -52,6 +59,8 @@ export interface Lanes {
   versions: Map<string, Version>;
   /** The names `main` returns. */
   returned: Set<string>;
+  /** The keys `main` returns versions under, by version, if it returns an object. */
+  keys: Map<string, string>;
   rows: number;
 }
 
@@ -107,6 +116,8 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
   const versions = new Map(all.map((v) => [v.name, v]));
   const flows = flowsOf(tl, g, versions);
   const returned = new Set(g.uses.filter((u) => u.role === "return").map((u) => u.name));
+  const keys = new Map<string, string>();
+  for (const u of g.uses) if (u.role === "return" && u.output && !keys.has(u.name)) keys.set(u.name, u.output.key);
   /** The first version an entry declares, which continues the lane it works on. */
   const firstOf = (entry: number) => all.find((v) => v.entry === entry);
 
@@ -172,13 +183,19 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
     const index = out.length;
     const link: Link = { kind: "output", from: { lane: laneOf.get(v.name)!, entry: v.entry }, to: { lane: index, entry: n } };
     links.push(link);
-    out.push({ name: v.name, kind: v.kind, versions: [], from: link, merged: undefined, returned: true, row: 0, start: v.entry, stop: n, output: true });
+    out.push({ name: v.name, kind: v.kind, versions: [], from: link, merged: undefined, returned: true, row: 0, start: v.entry, stop: n, output: true, version: v.name });
   }
 
-  // A returned version that goes to the return on a lane of its own is a body of its own, with its
-  // own name: the lineage it is in takes the name of its first body version that isn't one.
-  const separate = new Set(out.filter((lane) => lane.output).map((lane) => lane.name));
-  for (const lane of out) if (!lane.output) lane.name = lane.versions.find((v) => v.kind === "body" && !separate.has(v.name))?.name ?? lane.name;
+  // A returned body is named by its key. A returned version that goes to the return on a lane of
+  // its own is a body of its own, with its own name: the lineage it is in takes the name of its
+  // first body version that isn't one, nor another body's key.
+  for (const lane of out) {
+    const key = lane.returned ? keys.get(lane.version ?? lane.versions.at(-1)!.name) : undefined;
+    if (key !== undefined) [lane.name, lane.key] = [key, key];
+  }
+  const separate = new Set(out.flatMap((lane) => (lane.output ? [lane.version!] : [])));
+  const taken = new Set(keys.values());
+  for (const lane of out) if (!lane.output && lane.key === undefined) lane.name = lane.versions.find((v) => v.kind === "body" && !separate.has(v.name) && !taken.has(v.name))?.name ?? lane.name;
 
   // Rows: each lane, in the order lanes start, gets the first row whose last lane ended before it
   // starts. A lane ends in a merge's bend or a port, so the next one in its row doesn't read as its continuation.
@@ -188,7 +205,7 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
     lane.row = row < 0 ? ends.length : row;
     ends[lane.row] = lane.stop;
   }
-  return { lanes: out, links, laneOf, versions, returned, rows: ends.length };
+  return { lanes: out, links, laneOf, versions, returned, keys, rows: ends.length };
 }
 
 /**
@@ -199,7 +216,7 @@ export function lanes(tl: Timeline, g: Graph): Lanes {
 export function lanesAt(l: Lanes, marker: number): { lane: number; head: Version }[] {
   return l.lanes.flatMap((lane, index) => {
     if (lane.output) {
-      const version = l.versions.get(lane.name);
+      const version = l.versions.get(lane.version!);
       return version && version.entry < marker ? [{ lane: index, head: version }] : [];
     }
     if (lane.merged !== undefined && lane.merged < marker) return [];

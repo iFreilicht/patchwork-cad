@@ -3,8 +3,8 @@
  * moves and inserts features Fusion-style, rewriting the chain of bodies (research/07, "Reordering"),
  * so a use is either a version use it may rewrite or a hard dependency that bounds a move.
  */
-import type { AnyNode, Pattern, Statement } from "acorn";
-import type { Analysis, Span } from "./analyze.ts";
+import type { AnyNode, Pattern, Property, Statement } from "acorn";
+import { propertyKey, type Analysis, type Span } from "./analyze.ts";
 import type { Timeline } from "./timeline.ts";
 
 /**
@@ -27,6 +27,8 @@ export interface Use {
   shorthand: string | undefined;
   /** The parameter it is the value of, or an element of (`tools: [a, b]`), in its feature's call. */
   key?: string;
+  /** For a `return` use in an object, `return { plate: notched }`: the key it is returned under, and the whole property. */
+  output?: { key: string; property: Span };
 }
 
 export interface Graph {
@@ -174,8 +176,13 @@ export function graph(analysis: Analysis, tl: Timeline): Graph {
   const ret = statements.at(-1);
   if (tl.returned && ret?.type === "ReturnStatement" && ret.argument) {
     const arg = ret.argument;
-    const direct = new Set<AnyNode>(arg.type === "Identifier" ? [arg] : arg.type === "ArrayExpression" ? arg.elements.filter((e): e is NonNullable<typeof e> => e?.type === "Identifier") : []);
-    usesIn(ret, names, (id) => uses.push({ name: id.name, span: { start: id.start, end: id.end }, role: direct.has(id) ? "return" : "hard", owner: tl.entries.length, shorthand: undefined }));
+    const properties = arg.type === "ObjectExpression" ? arg.properties.filter((p): p is Property => propertyKey(p) !== undefined && p.type === "Property" && p.value.type === "Identifier") : [];
+    const direct = new Set<AnyNode>(arg.type === "Identifier" ? [arg] : arg.type === "ArrayExpression" ? arg.elements.filter((e): e is NonNullable<typeof e> => e?.type === "Identifier") : properties.map((p) => p.value));
+    usesIn(ret, names, (id) => {
+      const property = properties.find((p) => p.value === id);
+      const output = property ? { key: propertyKey(property)!, property: { start: property.start, end: property.end } } : undefined;
+      uses.push({ name: id.name, span: { start: id.start, end: id.end }, role: direct.has(id) ? "return" : "hard", owner: tl.entries.length, shorthand: property?.shorthand ? output!.key : undefined, ...(output ? { output } : {}) });
+    });
   }
   return { declares, uses, declaredBy };
 }

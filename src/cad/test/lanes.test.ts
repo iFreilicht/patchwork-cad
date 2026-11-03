@@ -123,6 +123,23 @@ test("a returned version that a later feature continues is a body of its own, on
   expect(at(5)).toEqual(["bore:fillet1", "plate:plate"]);
 });
 
+test("a returned body is named by its key, independent of its features", () => {
+  const l = lanesOf(`${plate}\nreturn { part: fillet1, blank: plate };`);
+  expect(summary(l)).toEqual(["part: sketch1 plate bore fillet1 [0-5] row 0 returned", "sketch2: sketch2 [2-3] row 2 merged@3", "output blank: [1-5] row 1 output from part@1 returned"]);
+  expect(l.lanes.map((lane) => [lane.key, lane.version])).toEqual([
+    ["part", undefined],
+    [undefined, undefined],
+    ["blank", "plate"],
+  ]);
+  expect([...l.keys]).toEqual([
+    ["fillet1", "part"],
+    ["plate", "blank"],
+  ]);
+  // A lineage without a key isn't named like a body that has one: the private one isn't "plate" here.
+  const named = lanesOf(`${plate}\nconst chamfer1 = chamfer({ body: bore, edges: [], distance: 1 });\nreturn { plate: chamfer1 };`);
+  expect(named.lanes.map((lane) => `${lane.name}: ${lane.versions.map((v) => v.name).join(" ")}`)).toEqual(["bore: sketch1 plate bore fillet1", "sketch2: sketch2", "plate: chamfer1"]);
+});
+
 test("open heads that main doesn't return end at their entry; an unused sketch is a lane of its own", () => {
   const l = lanesOf(`${plate}
     const sketch3 = ${SKETCH};
@@ -133,12 +150,12 @@ test("open heads that main doesn't return end at their entry; an unused sketch i
 test("Custom Script names that features use start lanes; body() starts one per name", () => {
   const l = lanesOf(`
     const raw = drawBox();
-    const [left, right] = body(() => [raw, raw]);
+    const { left, right: other } = body(() => ({ left: raw, right: raw }));
     const fillet1 = fillet({ body: left, edges: [], radius: 1 });
     const width = 10;
-    const fillet2 = fillet({ body: right, edges: [], radius: width });
+    const fillet2 = fillet({ body: other, edges: [], radius: width });
     return [fillet1, fillet2];`);
-  expect(summary(l)).toEqual(["left: left fillet1 [1-5] row 0 returned", "right: right fillet2 [1-5] row 1 returned"]);
+  expect(summary(l)).toEqual(["left: left fillet1 [1-5] row 0 returned", "other: other fillet2 [1-5] row 1 returned"]);
 });
 
 test("the lanes at the marker, with their heads there", () => {

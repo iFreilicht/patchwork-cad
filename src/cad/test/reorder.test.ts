@@ -32,15 +32,17 @@ function edit(source: string, edits: (a: ReturnType<typeof analyze>) => Edit[]):
 
 const move = (source: string, name: string, position: number) => edit(source, (a) => moveEntry(source, a, tlOf(source), indexOf(source, name), position));
 
-/** Runs a model directly with the feature library, as a plain module would (strict: broken references throw). */
+/** Runs a model directly with the feature library, as a plain module would (strict: broken references throw); returns its one output. */
 function run(source: string): features.Body {
   const body = source
     .replace(/^import \{([^}]*)\} from "@patchwork-cad\/features";$/m, "const {$1} = features;")
     .replace("export const defaultParams", "const defaultParams")
     .replace("export default function main", "function main");
-  const result = new Function("features", `${body}\nreturn main(defaultParams);`)(features) as unknown;
-  expect(result).toBeInstanceOf(features.Body);
-  return result as features.Body;
+  const result = new Function("features", `${body}\nreturn main(defaultParams);`)(features) as Record<string, unknown>;
+  const [output] = Object.values(result);
+  expect(Object.values(result)).toHaveLength(1);
+  expect(output).toBeInstanceOf(features.Body);
+  return output as features.Body;
 }
 const volume = (b: features.Body) => measureVolume(b.shape as Parameters<typeof measureVolume>[0]);
 
@@ -84,7 +86,7 @@ test("moving a feature to the end makes the return show it", () => {
   expect(names(out).at(-1)).toBe("chamfer1");
   expect(out).toContain("const chamfer1 = chamfer({ body: extrude2, ");
   expect(out).toContain("target: fillet1 });");
-  expect(out).toContain("return chamfer1;");
+  expect(out).toContain("return { block: chamfer1 };");
   run(out);
 });
 
@@ -117,7 +119,7 @@ test("a fillet inserted before the chamfer goes into the chain", () => {
   const out = edit(source, (a) => insertFeatureAt(source, a, tlOf(source), "fillet2", "fillet({ body: fillet1, edges: [edge(extrude1.start, extrude1.side.front)], radius: 1 })", position, { consumes: "fillet1", shows: true }));
   expect(names(out).slice(4, 7)).toEqual(["fillet1", "fillet2", "chamfer1"]);
   expect(out).toContain("  const fillet2 = fillet({ body: fillet1, edges: [edge(extrude1.start, extrude1.side.front)], radius: 1 });\n  const chamfer1 = chamfer({ body: fillet2, ");
-  expect(out).toContain("return extrude2;");
+  expect(out).toContain("return { block: extrude2 };");
   expect(volume(run(out))).toBeLessThan(volume(run(source)));
 });
 

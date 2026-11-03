@@ -13,5 +13,5 @@ export default function main({ w, d, h, a, r }) {
   const chamfer1 = chamfer({ body: fillet1, edges: [edge(extrude1.end, extrude1.side.front).piece(notch, 1, { near: [49.75, 0, 20] })], distance: 1 });
   const sketch3 = sketch({ body: chamfer1, plane: extrude1.side.front.piece(notch, 2, { near: [49.501, 0, 9.499] }), profile: circle({ center: [w - 6, h / 2], radius: 2 }) });
   const extrude2 = extrude({ sketch: sketch3, distance: 4, operation: "join", target: chamfer1 });
-  return extrude2;
+  return { block: extrude2 };
 }

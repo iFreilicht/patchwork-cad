@@ -74,7 +74,7 @@ export function laneTargetAt(l: Lanes, c: Columns, x: number, y: number): LaneTa
   const column = (entry: number) => (entry >= c.xs.length ? c.returnX : c.xs[entry]!);
   const on = inRow.find(({ lane }) => column(lane.start) <= x && x <= column(lane.stop) + (privateHead(lane) ? LANES.dot + 2 + LANES.port : 0));
   if (!on) return undefined;
-  if (on.lane.output) return { kind: "lane", lane: on.i, version: on.lane.name };
+  if (on.lane.output) return { kind: "lane", lane: on.i, version: on.lane.version! };
   const version = on.lane.versions.filter((v) => c.xs[v.entry]! <= x).at(-1) ?? on.lane.versions[0]!;
   return { kind: "lane", lane: on.i, version: version.name };
 }

@@ -7,9 +7,10 @@ import { splice } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
-import { FEATURES_MODULE, type Analysis, type FeatureCall, type Prop, type Span } from "./analyze.ts";
+import { FEATURES_MODULE, returnedOutputs, type Analysis, type FeatureCall, type Output, type Prop, type Span } from "./analyze.ts";
 import { graph, inputOf as consumedInput, type Graph, type Use } from "./deps.ts";
-import type { FeatureEntry, Timeline } from "./timeline.ts";
+import { lanes } from "./lanes.ts";
+import { timeline, type FeatureEntry, type Timeline } from "./timeline.ts";
 
 export interface Edit {
   start: number;
@@ -109,20 +110,56 @@ export function indentOf(source: string, offset: number): string {
   return /^[ \t]*/.exec(source.slice(lineStart))![0];
 }
 
-/** The identifiers a `return` returns: `return extrude2` or `return [a, b]`. */
-function returnedNames(analysis: Analysis): { node: Expression; names: string[] } | undefined {
-  const statement = analysis.main?.statements.at(-1);
-  if (statement?.type !== "ReturnStatement" || !statement.argument) return undefined;
-  const arg = statement.argument;
-  if (arg.type === "Identifier") return { node: arg, names: [arg.name] };
-  if (arg.type === "ArrayExpression" && arg.elements.every((e) => e?.type === "Identifier")) return { node: arg, names: arg.elements.map((e) => (e as { name: string }).name) };
-  return undefined;
-}
+/** What `main` returns, as the editor edits it: a version by its variable, under its key; one it adds has none yet. */
+export type Out = Pick<Output, "name"> & { key: string | undefined };
 
 /** The variables `main` returns, i.e. the visible bodies. */
-export const returnedVariables = (analysis: Analysis): string[] => returnedNames(analysis)?.names ?? [];
+export const returnedVariables = (analysis: Analysis): string[] => returnedOutputs(analysis)?.outputs.map((o) => o.name) ?? [];
 
-const printReturn = (names: string[]) => (names.length === 1 ? names[0]! : `[${names.join(", ")}]`);
+const has = (outs: Out[], name: string) => outs.some((o) => o.name === name);
+const without = (outs: Out[], name: string | undefined) => outs.filter((o) => o.name !== name);
+/** Adds a version under `key`, or else its variable's name, unless it is returned already. */
+const withName = (outs: Out[], name: string, key?: string): Out[] => (has(outs, name) ? outs : [...outs, { key: key !== undefined && !outs.some((o) => o.key === key) ? key : undefined, name }]);
+
+/**
+ * The name of the body that version `name` is the head of (research/15, "Bodies and lineages"), if
+ * it isn't the version's: the key a version gets when the editor returns it, so that returning a
+ * body doesn't rename it.
+ */
+function bodyName(analysis: Analysis, name: string | undefined): string | undefined {
+  if (name === undefined) return undefined;
+  // Lanes don't need the source, which only gives Custom Scripts their lines.
+  const tl = timeline("", analysis, []);
+  const l = lanes(tl, graph(analysis, tl));
+  const lane = l.lanes[l.laneOf.get(name) ?? -1];
+  return lane && !lane.output && lane.versions.at(-1)?.name === name && lane.name !== name ? lane.name : undefined;
+}
+/** Returns `to` where `from` was, under the same key; a version once, under its first key. */
+const rewire = (outs: Out[], from: string, to: string): Out[] => outs.map((o) => (o.name === from ? { ...o, name: to } : o)).filter((o, i, all) => all.findIndex((p) => p.name === o.name) === i);
+
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * The keys outputs are returned under: their own, or else their variable's, numbered if another
+ * output has that key already (research/15, "Output").
+ */
+export function outputKeys(outs: Out[]): string[] {
+  const taken = new Set(outs.flatMap((o) => (o.key === undefined ? [] : [o.key])));
+  return outs.map((o) => {
+    if (o.key !== undefined) return o.key;
+    let key = o.name;
+    for (let n = 2; taken.has(key); n++) key = `${o.name}_${n}`;
+    taken.add(key);
+    return key;
+  });
+}
+
+/** `{ plate: notched, lid }`: an output whose key is its variable's name is shorthand. */
+export function printReturn(outs: Out[]): string {
+  const keys = outputKeys(outs);
+  const props = outs.map((o, i) => (keys[i] === o.name ? o.name : `${IDENTIFIER.test(keys[i]!) ? keys[i] : JSON.stringify(keys[i])}: ${o.name}`));
+  return props.length === 0 ? "{}" : `{ ${props.join(", ")} }`;
+}
 
 /**
  * What a new feature does to the result: its body or sketch shows (`shows`), in place of the body it
@@ -134,16 +171,23 @@ export interface InsertEffect {
   hides?: string;
 }
 
-/** The names a return shows after inserting feature `name`. */
-function showing(names: string[], name: string, effect: InsertEffect): string[] {
-  const replaced = [effect.consumes, effect.hides].find((n) => n !== undefined && names.includes(n));
-  const shown = !effect.shows ? names : replaced ? names.map((n) => (n === replaced ? name : n)) : [...names, name];
-  return shown.filter((n) => n !== effect.hides);
+/**
+ * What a return shows after inserting feature `name`: in place of what it replaces, under its key.
+ * A sketch returned under its own name, `{ sketch2 }`, has no key of its own: the body made of it
+ * goes under the body's name.
+ */
+function showing(analysis: Analysis, outs: Out[], name: string, effect: InsertEffect): Out[] {
+  const replaced = [effect.consumes, effect.hides].find((n) => n !== undefined && has(outs, n));
+  const own = (o: Out) => o.name === effect.hides && (o.key === undefined || o.key === o.name);
+  const unkeyed = outs.map((o) => (own(o) ? { key: undefined, name: o.name } : o));
+  const shown = !effect.shows ? outs : replaced ? rewire(unkeyed, replaced, name) : withName(outs, name, bodyName(analysis, effect.consumes));
+  return without(shown, effect.hides);
 }
 
-/** Replaces the names a simple return returns, if they change. */
-function setReturned(returned: { node: Expression; names: string[] }, names: string[]): Edit[] {
-  return names.join() === returned.names.join() ? [] : [{ start: returned.node.start, end: returned.node.end, text: printReturn(names) }];
+/** Rewrites what `main` returns as an object, if it changes; a return that no edit changes keeps its form. */
+export function setReturned(returned: { node: Expression; outputs: Out[] }, outs: Out[]): Edit[] {
+  const same = outs.length === returned.outputs.length && outs.every((o, i) => o.name === returned.outputs[i]!.name && o.key === returned.outputs[i]!.key);
+  return same ? [] : [{ start: returned.node.start, end: returned.node.end, text: printReturn(outs) }];
 }
 
 /** Inserts `const name = code;` as the last feature of `main`, before its `return`, which changes by `effect`. */
@@ -154,12 +198,12 @@ export function insertFeature(source: string, analysis: Analysis, name: string, 
   const statement = `const ${name} = ${code};`;
   if (ret?.type === "ReturnStatement") {
     edits.push({ start: ret.start, end: ret.start, text: `${statement}\n${indentOf(source, ret.start)}` });
-    const returned = returnedNames(analysis);
-    if (returned) edits.push(...setReturned(returned, showing(returned.names, name, effect)));
+    const returned = returnedOutputs(analysis);
+    if (returned) edits.push(...setReturned(returned, showing(analysis, returned.outputs, name, effect)));
   } else {
     const indent = analysis.main.statements[0] ? indentOf(source, analysis.main.statements[0].start) : "  ";
     const close = analysis.main.body.end - 1;
-    edits.push({ start: close, end: close, text: `${indent}${statement}\n${effect.shows ? `${indent}return ${name};\n` : ""}` });
+    edits.push({ start: close, end: close, text: `${indent}${statement}\n${effect.shows ? `${indent}return ${printReturn([{ key: undefined, name }])};\n` : ""}` });
   }
   return edits;
 }
@@ -197,14 +241,15 @@ export function deleteFeature(source: string, analysis: Analysis, entry: Feature
   const edits: Edit[] = [{ ...lines(source, entry.span), text: "" }];
   // A sketch's body is the one its plane lies on, not an input it passes on.
   const input = entry.type === "sketch" ? undefined : inputOf(source, entry.call);
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (returned) {
-    // Without an input to use instead (a new extrude, a body(), a sketch), its results leave the result.
-    const names = returned.names.flatMap((n) => (!entry.names.includes(n) ? [n] : input ? [input] : []));
+    // Its input takes its place under its key; without one (a new extrude, a body(), a sketch), its results leave the result.
+    let outs: Out[] = returned.outputs;
+    for (const n of entry.names) outs = input ? rewire(outs, n, input) : without(outs, n);
     const sketch = prop(entry.call, "sketch")?.node;
-    const freed = sketch?.type === "Identifier" && !names.includes(sketch.name) && !usesSketch(analysis, sketch.name, entry.call) ? [sketch.name] : [];
-    const tools = (arrayOf(entry.call, "tools")?.elements ?? []).flatMap((e) => (e?.type === "Identifier" && !names.includes(e.name) && !consumedBy(analysis, e.name, entry.call) ? [e.name] : []));
-    edits.push(...setReturned(returned, [...new Set([...names, ...freed, ...tools])]));
+    if (sketch?.type === "Identifier" && !has(outs, sketch.name) && !usesSketch(analysis, sketch.name, entry.call)) outs = withName(outs, sketch.name, bodyName(analysis, sketch.name));
+    for (const e of arrayOf(entry.call, "tools")?.elements ?? []) if (e?.type === "Identifier" && !has(outs, e.name) && !consumedBy(analysis, e.name, entry.call)) outs = withName(outs, e.name, bodyName(analysis, e.name));
+    edits.push(...setReturned(returned, outs));
   }
   walk(analysis.program as Program, (node, ancestors) => {
     if (node.type !== "Identifier" || !entry.names.includes(node.name) || node.start < entry.span.end) return;
@@ -252,11 +297,11 @@ function usesSketch(analysis: Analysis, name: string, except: FeatureCall): bool
  * `next` no longer shows, and `previous`, if nothing else uses it, shows again.
  */
 export function resketch(analysis: Analysis, call: FeatureCall, previous: string | undefined, next: string | undefined): Edit[] {
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (!returned) return [];
-  const names = returned.names.filter((n) => n !== next);
-  if (previous && previous !== next && !names.includes(previous) && !usesSketch(analysis, previous, call)) names.push(previous);
-  return setReturned(returned, names);
+  let outs = without(returned.outputs, next);
+  if (previous && previous !== next && !has(outs, previous) && !usesSketch(analysis, previous, call)) outs = withName(outs, previous, bodyName(analysis, previous));
+  return setReturned(returned, outs);
 }
 
 /**
@@ -265,13 +310,13 @@ export function resketch(analysis: Analysis, call: FeatureCall, previous: string
  * any more, comes back into the result instead of being silently dropped.
  */
 export function retarget(analysis: Analysis, call: FeatureCall, name: string, previous: string | undefined, next: string | undefined): Edit[] {
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (!returned) return [];
-  let names = [...returned.names];
-  if (next && names.includes(next)) names = names.includes(name) ? names.filter((n) => n !== next) : names.map((n) => (n === next ? name : n));
-  if (previous && previous !== next && !names.includes(previous) && !consumedBy(analysis, previous, call)) names.push(previous);
-  if (names.join() === returned.names.join()) return [];
-  return [{ start: returned.node.start, end: returned.node.end, text: printReturn(names) }];
+  let outs: Out[] = returned.outputs;
+  // It stands for `next` now; returned already, it keeps the first of the two keys.
+  if (next && has(outs, next)) outs = rewire(outs, next, name);
+  if (previous && previous !== next && !has(outs, previous) && !consumedBy(analysis, previous, call)) outs = withName(outs, previous, bodyName(analysis, previous));
+  return setReturned(returned, outs);
 }
 
 /**
@@ -279,34 +324,34 @@ export function retarget(analysis: Analysis, call: FeatureCall, name: string, pr
  * tool no longer shows on its own, and a removed one, if nothing else uses it, shows again.
  */
 export function retool(analysis: Analysis, call: FeatureCall, added: string | undefined, removed: string | undefined): Edit[] {
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (!returned) return [];
-  const names = returned.names.filter((n) => n !== added);
-  if (removed && !names.includes(removed) && !consumedBy(analysis, removed, call)) names.push(removed);
-  return setReturned(returned, names);
+  let outs = without(returned.outputs, added);
+  if (removed && !has(outs, removed) && !consumedBy(analysis, removed, call)) outs = withName(outs, removed, bodyName(analysis, removed));
+  return setReturned(returned, outs);
 }
 
 /** Adds a feature's result to what `main` returns. */
 export function addToReturn(source: string, analysis: Analysis, name: string): Edit[] {
-  const returned = returnedNames(analysis);
-  if (returned) return returned.names.includes(name) ? [] : [{ start: returned.node.start, end: returned.node.end, text: printReturn([...returned.names, name]) }];
+  const returned = returnedOutputs(analysis);
+  if (returned) return setReturned(returned, withName(returned.outputs, name, bodyName(analysis, name)));
   if (!analysis.main) return [];
   const statement = analysis.main.statements.at(-1);
   const indent = statement ? indentOf(source, statement.start) : "  ";
   const close = analysis.main.body.end - 1;
-  return [{ start: close, end: close, text: `${indent}return ${name};\n` }];
+  return [{ start: close, end: close, text: `${indent}return ${printReturn([{ key: undefined, name }])};\n` }];
 }
 
 /** Removes a name from what `main` returns. */
 export function removeFromReturn(analysis: Analysis, name: string): Edit[] {
-  const returned = returnedNames(analysis);
-  return returned ? setReturned(returned, returned.names.filter((n) => n !== name)) : [];
+  const returned = returnedOutputs(analysis);
+  return returned ? setReturned(returned, without(returned.outputs, name)) : [];
 }
 
-/** Whether the editor can add to and remove from what `main` returns: it returns names, one or a list of them, or nothing yet. */
+/** Whether the editor can add to and remove from what `main` returns: it returns names, an object, one or a list of them, or nothing yet. */
 export function returnEditable(analysis: Analysis): boolean {
   const last = analysis.main?.statements.at(-1);
-  return returnedNames(analysis) !== undefined || last?.type !== "ReturnStatement";
+  return returnedOutputs(analysis) !== undefined || last?.type !== "ReturnStatement";
 }
 
 /** Where code goes that is inserted before entry `position`: the start of its line, or of the return's line at the end. */
@@ -322,7 +367,10 @@ type Names = string[];
 
 /** The edits that rename uses whose name changed, except those in `skip`. */
 const renames = (g: Graph, names: Names, skip: Span | undefined): Edit[] =>
-  g.uses.flatMap((u, k) => (names[k] !== u.name && !(skip && u.span.start >= skip.start && u.span.end <= skip.end) ? [replaceIdentifier(u.span, names[k]!, u.shorthand)] : []));
+  g.uses.flatMap((u, k) => (names[k] !== u.name && !(skip && u.span.start >= skip.start && u.span.end <= skip.end) ? [renameUse(u, names[k]!)] : []));
+
+/** Replaces a use by `text`; an output whose key `text` is becomes shorthand, `{ plate }`. */
+const renameUse = (u: Use, text: string): Edit => (u.output?.key === text ? { ...u.output.property, text } : replaceIdentifier(u.span, text, u.shorthand));
 
 /**
  * Inserts `const name = code;` before entry `position` (research/07, "The timeline marker"). A
@@ -336,12 +384,12 @@ export function insertFeatureAt(source: string, analysis: Analysis, tl: Timeline
   if (at === undefined) return [];
   const g = graph(analysis, tl);
   const edits: Edit[] = [...ensureImports(analysis, usedFunctions(code)), { start: at, end: at, text: `${indentOf(source, tl.entries[position]!.span.start)}const ${name} = ${code};\n` }];
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (effect.consumes) {
     // A feature in a chain of bodies doesn't use a sketch, so there is none to hide.
     const names = g.uses.map((u) => (u.name === effect.consumes && u.role !== "hard" && u.owner >= position ? name : u.name));
     edits.push(...renames(g, names, undefined));
-  } else if (returned) edits.push(...setReturned(returned, showing(returned.names, name, effect)));
+  } else if (returned) edits.push(...setReturned(returned, showing(analysis, returned.outputs, name, effect)));
   else if (effect.shows) edits.push(...addToReturn(source, analysis, name));
   return edits;
 }
@@ -373,8 +421,8 @@ export function setChainMode(source: string, analysis: Analysis, tl: Timeline, i
   const [from, to] = mode === "join" ? [input.name, own] : [own, input.name];
   const names = g.uses.map((u) => (u.name === from && u.owner > index && u.owner < g.declares.length && (u.role === "consume" || u.role === "tool") ? to : u.name));
   const edits = renames(g, names, undefined);
-  const returned = returnedNames(analysis);
-  if (returned) edits.push(...setReturned(returned, mode === "join" ? returned.names.filter((n) => n !== own) : returned.names.includes(own) ? returned.names : [...returned.names, own]));
+  const returned = returnedOutputs(analysis);
+  if (returned) edits.push(...setReturned(returned, mode === "join" ? without(returned.outputs, own) : withName(returned.outputs, own, bodyName(analysis, own))));
   else if (mode === "branch") edits.push(...addToReturn(source, analysis, own));
   return edits;
 }
@@ -403,12 +451,12 @@ export function rebody(analysis: Analysis, tl: Timeline, index: number, next: st
   });
   // The return is rewritten as a whole: a name may come into it.
   const edits = renames(g, names.map((name, k) => (g.uses[k]!.owner >= n ? g.uses[k]!.name : name)), undefined);
-  const returned = returnedNames(analysis);
+  const returned = returnedOutputs(analysis);
   if (!returned) return edits;
   // Its result stood in the return for its old body, unless it branched off it; it stands for `next` now.
-  let result = returned.names.map((name) => (name === own && !branches ? previous : name === next ? own : name)).filter((name, i, all) => all.indexOf(name) === i);
+  let result: Out[] = returned.outputs.map((o) => ({ ...o, name: o.name === own && !branches ? previous : o.name === next ? own : o.name })).filter((o, i, all) => all.findIndex((p) => p.name === o.name) === i);
   const usedLater = (name: string) => g.uses.some((u, k) => names[k] === name && u.owner < n && u.owner !== index && (u.role === "consume" || u.role === "tool"));
-  if (!result.includes(previous) && !usedLater(previous)) result = [...result, previous];
+  if (!has(result, previous) && !usedLater(previous)) result = withName(result, previous, bodyName(analysis, previous));
   return [...edits, ...setReturned(returned, result)];
 }
 

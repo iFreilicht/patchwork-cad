@@ -29,7 +29,7 @@ test("M1's timeline is a list of features", () => {
   const source = example("m1");
   const tl = timeline(source, analyze(source), []);
   expect(tl.entries.map((e) => (e.kind === "feature" ? e.name : "script"))).toEqual(["sketch1", "extrude1", "sketch2", "notch", "fillet1", "chamfer1", "sketch3", "extrude2"]);
-  expect(source.slice(tl.returned!.start, tl.returned!.end)).toBe("return extrude2;");
+  expect(source.slice(tl.returned!.start, tl.returned!.end)).toBe("return { block: extrude2 };");
 });
 
 test("M3's rib loop is a Custom Script entry with the features it ran", () => {
@@ -53,16 +53,37 @@ test("a picked edge is appended to the edge list", () => {
   expect(out).toContain("edges: [edge(extrude1.end, notch.side.c), edge(extrude1.start, notch.side.c)]");
 });
 
-test("a new feature goes before the return, which shows its result", () => {
+test("a new feature goes before the return, which shows its result under the same key", () => {
   const source = example("m1");
   const out = edit(source, (a) => insertFeature(source, a, "fillet2", "fillet({ body: extrude2, edges: [], radius: 1 })", { consumes: "extrude2", shows: true }));
-  expect(out).toContain("  const fillet2 = fillet({ body: extrude2, edges: [], radius: 1 });\n  return fillet2;");
+  expect(out).toContain("  const fillet2 = fillet({ body: extrude2, edges: [], radius: 1 });\n  return { block: fillet2 };");
+  // A key that is its variable's name stays as well: callers keep getting the body by it.
+  const shorthand = source.replace("{ block: extrude2 }", "{ extrude2 }");
+  expect(returnOf(edit(shorthand, (a) => insertFeature(shorthand, a, "fillet2", "fillet({ body: extrude2, edges: [], radius: 1 })", { consumes: "extrude2", shows: true })))).toBe("return { extrude2: fillet2 };");
+});
+
+test("a return that isn't an object yet becomes one when an edit changes it, keyed by the variables", () => {
+  const source = example("m1").replace("{ block: extrude2 }", "extrude2");
+  expect(returnOf(edit(source, (a) => insertFeature(source, a, "fillet2", "fillet({ body: extrude2, edges: [], radius: 1 })", { consumes: "extrude2", shows: true })))).toBe("return { extrude2: fillet2 };");
+  const list = sketches("[plate, sketch2, sketch3]");
+  expect(returnOf(edit(list, (a) => insertFeature(list, a, "extrude1", "extrude({ sketch: sketch2, distance: 4 })", { shows: true, hides: "sketch2" })))).toBe("return { plate, extrude1, sketch3 };");
+  // Without a return, the first body shown starts one.
+  const none = list.replace("  return [plate, sketch2, sketch3];\n", "");
+  expect(returnOf(edit(none, (a) => insertFeature(none, a, "extrude1", "extrude({ sketch: sketch2, distance: 4 })", { shows: true, hides: "sketch2" })))).toBe("return { extrude1 };");
+});
+
+test("a key that a variable would get twice is numbered, and a rewired output named by its variable is shorthand", () => {
+  const source = sketches("{ sketch3: plate }");
+  expect(returnOf(edit(source, (a) => insertFeature(source, a, "extrude1", "extrude({ sketch: sketch3, distance: 4 })", { shows: true, hides: "sketch3" })))).toBe("return { sketch3: plate, extrude1 };");
+  expect(returnOf(edit(source, (a) => insertFeature(source, a, "sketch4", "sketch({ plane: plane(\"XY\"), profile: circle({ center: [0, 0], radius: 1 }) })", { shows: true })))).toBe("return { sketch3: plate, sketch4 };");
+  const taken = sketches("{ sketch4: plate }");
+  expect(returnOf(edit(taken, (a) => insertFeature(taken, a, "sketch4", "sketch({ plane: plane(\"XY\"), profile: circle({ center: [0, 0], radius: 1 }) })", { shows: true })))).toBe("return { sketch4: plate, sketch4_2: sketch4 };");
 });
 
 test("a new body is added to the return, and its functions are imported", () => {
   const source = example("m1");
   const out = edit(source, (a) => insertFeature(source, a, "extrude3", "extrude({ sketch: polygon({}), distance: 1 })", { shows: true }));
-  expect(out).toContain("return [extrude2, extrude3];");
+  expect(out).toContain("return { block: extrude2, extrude3 };");
   expect(out).toContain('chamfer, edge, polygon } from "@patchwork-cad/features"');
 });
 
@@ -89,31 +110,34 @@ export default function main() {
 const returnOf = (source: string) => /return .*;/.exec(source)![0];
 
 test("a new extrusion shows in place of the sketch it uses", () => {
-  const source = sketches("[plate, sketch2, sketch3]");
+  const source = sketches("{ plate, sketch2, sketch3 }");
   const out = edit(source, (a) => insertFeature(source, a, "extrude1", "extrude({ sketch: sketch2, distance: 4 })", { shows: true, hides: "sketch2" }));
-  expect(returnOf(out)).toBe("return [plate, extrude1, sketch3];");
+  expect(returnOf(out)).toBe("return { plate, extrude1, sketch3 };");
+  // A sketch under a key of its own leaves the key to the body made of it.
+  const keyed = sketches("{ plate, profile: sketch2 }");
+  expect(returnOf(edit(keyed, (a) => insertFeature(keyed, a, "extrude1", "extrude({ sketch: sketch2, distance: 4 })", { shows: true, hides: "sketch2" })))).toBe("return { plate, profile: extrude1 };");
 });
 
 test("deleting an extrusion shows its sketch again, unless another feature uses it", () => {
-  const source = sketches("[plate, sketch2]").replace("  return", "  const boss = extrude({ sketch: sketch3, distance: 4 });\n  return");
-  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "boss"))))).toBe("return [plate, sketch2, sketch3];");
+  const source = sketches("{ plate, sketch2 }").replace("  return", "  const boss = extrude({ sketch: sketch3, distance: 4 });\n  return");
+  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "boss"))))).toBe("return { plate, sketch2, sketch3 };");
   const shared = source.replace("  return", "  const boss2 = extrude({ sketch: sketch3, distance: 8 });\n  return");
-  expect(returnOf(edit(shared, (a) => deleteFeature(shared, a, feature(shared, "boss"))))).toBe("return [plate, sketch2];");
+  expect(returnOf(edit(shared, (a) => deleteFeature(shared, a, feature(shared, "boss"))))).toBe("return { plate, sketch2 };");
 });
 
 test("deleting a sketch on a face takes it out of the result, without showing the face's body twice", () => {
-  const source = sketches("[plate, sketch2]");
-  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "sketch2"))))).toBe("return plate;");
+  const source = sketches("{ plate, sketch2 }");
+  expect(returnOf(edit(source, (a) => deleteFeature(source, a, feature(source, "sketch2"))))).toBe("return { plate };");
 });
 
 test("an extrusion that switches sketches hides the new one and shows the old one again", () => {
-  const source = sketches("[plate, sketch3]").replace("  return", "  const boss = extrude({ sketch: sketch2, distance: 4 });\n  return");
+  const source = sketches("{ plate, sketch3 }").replace("  return", "  const boss = extrude({ sketch: sketch2, distance: 4 });\n  return");
   const out = edit(source, (a) => {
     const call = a.calls.find((c) => c.variable === "boss")!;
     return [...setProp(call, "sketch", "sketch3"), ...resketch(a, call, "sketch2", "sketch3")];
   });
   expect(out).toContain("extrude({ sketch: sketch3, distance: 4 })");
-  expect(returnOf(out)).toBe("return [plate, sketch2];");
+  expect(returnOf(out)).toBe("return { plate, sketch2 };");
 });
 
 /** A plate whose chamfer runs around a filleted edge, with an extrusion that is retargeted. */
@@ -142,14 +166,16 @@ function retargetExtrude(source: string, next: string): string {
 }
 
 test("a feature that works on a returned body replaces it in the result", () => {
-  expect(retargetExtrude(branching("", "[chamfer1, extrude1]"), "chamfer1")).toBe("return extrude1;");
+  expect(retargetExtrude(branching("", "{ chamfer1, extrude1 }"), "chamfer1")).toBe("return { chamfer1: extrude1 };");
+  // Of two keys for it, the first stays; one it takes over keeps its key.
+  expect(retargetExtrude(branching("", "{ plate: chamfer1 }"), "chamfer1")).toBe("return { plate: extrude1 };");
 });
 
 test("a body that a retargeted feature no longer uses comes back into the result instead of being dropped", () => {
-  expect(retargetExtrude(branching("chamfer1", "extrude1"), "fillet1")).toBe("return [extrude1, chamfer1];");
+  expect(retargetExtrude(branching("chamfer1", "{ extrude1 }"), "fillet1")).toBe("return { extrude1, chamfer1 };");
 });
 
 test("a body that another feature still uses doesn't come back", () => {
   // fillet1 stays used by chamfer1.
-  expect(retargetExtrude(branching("fillet1", "[extrude1, chamfer1]"), "chamfer1")).toBe("return extrude1;");
+  expect(retargetExtrude(branching("fillet1", "{ extrude1, chamfer1 }"), "chamfer1")).toBe("return { extrude1 };");
 });

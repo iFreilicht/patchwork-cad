@@ -39,7 +39,7 @@ export default function main({ w, d, h, a, r }) {
   const extrude1 = extrude({ sketch: sketch1, distance: h });
   const sketch2 = sketch({ plane: plane("XY"), profile: circle({ center: [a, 0], radius: r }) });
   const notch = extrude({ sketch: sketch2, operation: "cut", target: extrude1, extent: "through" });
-  return notch;
+  return { block: notch };
 }
 `;
 
@@ -58,7 +58,7 @@ export default function main({ w, d, t, H, ribs, ribT }) {
     const rib = sketch({ plane: plane("YZ", x - ribT / 2), profile });
     body = extrude({ sketch: rib, distance: ribT, operation: "join", target: body }, { name: \`rib\${i}\` });
   }
-  return body;
+  return { bracket: body };
 }
 `;
 
@@ -136,7 +136,7 @@ test("M1: forms and picks in the editor, code in its code pane, references survi
   // The sketch lies on chamfer1, which the join or cut therefore targets.
   await expect(versionChips(a, "target")).toHaveText(["chamfer1"]);
   await allOk(a, ["sketch1", "extrude1", "sketch2", "notch", "fillet1", "chamfer1", "sketch3", "extrude2"]);
-  await expect.poll(() => modelSource(b)).toContain("return extrude2;");
+  await expect.poll(() => modelSource(b)).toContain("return { block: extrude2 };");
   await expect(cadView(b)).toHaveAttribute("data-state", "ready");
   if (shots) await a.screenshot({ path: `${shots}/collab-m1-a.png` });
   if (shots) await b.screenshot({ path: `${shots}/collab-m1-b.png` });

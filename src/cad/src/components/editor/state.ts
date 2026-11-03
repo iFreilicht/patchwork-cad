@@ -8,7 +8,7 @@ import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import { schemas, type FeatureType, type ParamSpec } from "@patchwork-cad/features/schema";
-import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
+import { analyze, returnedOutputs, type Analysis, type FeatureCall } from "../../model/analyze.ts";
 import { allowedRange, canMove, graph, inputOf, paramRole, relations, type Graph, type Relation } from "../../model/deps.ts";
 import {
   addToReturn,
@@ -30,6 +30,7 @@ import {
   retarget,
   retool,
   returnEditable,
+  outputKeys,
   returnedVariables,
   setChainMode,
   setProp,
@@ -37,7 +38,7 @@ import {
   type Edit,
 } from "../../model/splice.ts";
 import { lanes as lanesOf, type Lanes } from "../../model/lanes.ts";
-import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
+import { deleteScript, rename, renameOutput, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, ownerNames, ownersOf, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
 import type { CadModelDoc, TimelineMarker } from "../../types.ts";
 import type { Model } from "../createModel.ts";
@@ -117,6 +118,15 @@ export interface Editor {
   lineage: Accessor<{ primary: number | undefined; entries: Set<number> } | undefined>;
   /** Whether the editor can edit what main returns. */
   returnEditable: Accessor<boolean>;
+  /** What main returns, each version under its key (research/15, "Output"), if the editor can edit it. */
+  outputs: Accessor<{ key: string; name: string }[]>;
+  /** Renames output `from` to `to`; resolves to why not. */
+  renameOutput(from: string, to: string): Promise<string | undefined>;
+  /**
+   * Renames a body as the browser lists it: a returned one by its key, `output`, else the variable
+   * of its version `name`; resolves to why not.
+   */
+  renameBody(name: string, output: string | undefined, to: string): Promise<string | undefined>;
   /** Returns a version or makes it private. */
   setOutput(name: string, returned: boolean): void;
   /** Whether the open feature joins its input's chain or branches off it, if it has the choice. */
@@ -653,11 +663,34 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
 
   const renameEntry = async (index: number, from: string, to: string) => {
+    // A body named by its key in the return keeps its name.
+    const keyed = [...(lanes()?.keys.values() ?? [])].includes(from);
     const why = await refactorEntry(index, (_, a, fresh, i) => rename(a, fresh, i, from, to), `Renaming ${from} to ${to}`);
     // What this user shows or hides goes with the name.
-    if (!why) ui.renameVisibility({ [`body:${from}`]: `body:${to}`, [`version:${from}`]: `version:${to}` });
+    if (!why) ui.renameVisibility({ ...(keyed ? {} : { [`body:${from}`]: `body:${to}` }), [`version:${from}`]: `version:${to}` });
     return why;
   };
+  const renameOutputKey = async (from: string, to: string) => {
+    const f = fresh();
+    if (!f) return "The code doesn't parse.";
+    const r = renameOutput(f.a, from, to);
+    if ("error" in r) return `Renaming ${from} to ${to} doesn't work: ${r.error}.`;
+    apply(handle, r.edits);
+    ui.renameVisibility({ [`body:${from}`]: `body:${to}` });
+    return undefined;
+  };
+  const renameBody = (name: string, output: string | undefined, to: string) => {
+    if (output !== undefined) return renameOutputKey(output, to);
+    const index = lanes()?.versions.get(name)?.entry;
+    return index === undefined ? Promise.resolve(`${name} isn't a variable of the model.`) : renameEntry(index, name, to);
+  };
+  const outputs = createMemo(() => {
+    const a = analysis();
+    const returned = a && !syntaxError() ? returnedOutputs(a) : undefined;
+    if (!returned) return [];
+    const keys = outputKeys(returned.outputs);
+    return returned.outputs.map((o, i) => ({ key: keys[i]!, name: o.name }));
+  });
   const wrap = (index: number) => refactorEntry(index, wrapInBody, `Wrapping ${labelOf(tl().entries[index])} in body()`, true);
   const unwrap = (index: number) => refactorEntry(index, unwrapBody, `Unwrapping ${labelOf(tl().entries[index])}`);
   const remove = (index: number) => {
@@ -755,6 +788,9 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     highlightedLanes,
     lineage,
     returnEditable: () => !syntaxError() && !!analysis() && returnEditable(analysis()!),
+    outputs,
+    renameOutput: renameOutputKey,
+    renameBody,
     setOutput,
     chainMode: openChainMode,
     setChainMode: setOpenChainMode,

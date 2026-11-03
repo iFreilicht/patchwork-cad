@@ -17,8 +17,8 @@ export interface FeatureMeta {
   line?: number;
   /** Whether `name` is a variable in scope, so references can be printed with it. */
   variable?: boolean;
-  /** The variables a destructured result is declared as (`const [left, right] = body(…)`), which name its bodies. */
-  names?: string[];
+  /** The variables a destructured result is declared as, by key (`const { base, lid: top } = body(…)`), which name its bodies. */
+  destructured?: Record<string, string>;
 }
 
 // ---------- bodies ----------
@@ -216,14 +216,14 @@ export interface FeatureDefinition<P extends Record<string, unknown>, R> {
 
 export type Feature<P extends Record<string, unknown>, R> = ((params: P, meta?: FeatureMeta) => R) & { readonly definition: FeatureDefinition<P, R> };
 
-export function defineFeature<P extends Record<string, unknown>, R extends Body | Sketch | Body[]>(def: FeatureDefinition<P, R>): Feature<P, R> {
+export function defineFeature<P extends Record<string, unknown>, R extends Body | Sketch | Record<string, Body>>(def: FeatureDefinition<P, R>): Feature<P, R> {
   const call = (params: P, meta: FeatureMeta = {}): R => {
     const count = (context.counts.get(def.type) ?? 0) + 1;
     context.counts.set(def.type, count);
     const name = meta.name ?? `${def.type}${meta.line !== undefined ? `@L${meta.line}` : ""}#${count}`;
     const entry: TraceEntry = { name, type: def.type, variable: meta.variable ?? false, status: "ok", refs: [], before: [...context.live], inputs: [], sketches: Object.values(params ?? {}).filter((v): v is Sketch => v instanceof Sketch), results: [], after: [], ms: 0, namingMs: 0 };
     if (meta.line !== undefined) entry.line = meta.line;
-    if (meta.names) entry.names = meta.names;
+    if (meta.destructured) entry.names = Object.values(meta.destructured);
     context.trace.push(entry);
     const inputs = (def.inputs?.(params) ?? []).filter((b): b is Body => b instanceof Body);
     entry.inputs = inputs;
@@ -247,9 +247,9 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
       return passThrough as R;
     }
     if (result instanceof Sketch) entry.sketch = result;
-    const bodies = Array.isArray(result) ? result : result instanceof Body ? [result] : [];
+    const bodies = result instanceof Body ? [result] : result instanceof Sketch ? [] : Object.values(result);
     if (bodies.length > 0) {
-      entry.result = bodies[0];
+      entry.result = bodies[0]!;
       entry.results = bodies;
       context.live = [...context.live.filter((b) => !inputs.includes(b)), ...bodies];
     }

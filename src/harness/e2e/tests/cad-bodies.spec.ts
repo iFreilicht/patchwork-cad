@@ -120,7 +120,7 @@ test("hovering is one thing wherever it starts: an entry, its node or code, a li
   // The return entry hovers as a feature does, without its dependencies; it highlights the returned lanes.
   await returnEntry(page).hover();
   await expect(returnEntry(page)).toHaveAttribute("data-hovered", "true");
-  await expect.poll(() => selfCode(page)).toEqual(["return [notched, lid];"]);
+  await expect.poll(() => selfCode(page)).toEqual(["return { plate: notched, lid };"]);
   await expect(page.locator(".cad-editor__entry[data-relation]")).toHaveCount(0);
   await expect(lanes(page).locator('path.cad-editor__lane[data-name="lid"]').first()).toHaveAttribute("data-hovered", "true");
   // Its ports mirror it.
@@ -132,7 +132,7 @@ test("hovering is one thing wherever it starts: an entry, its node or code, a li
   await expect(row(page, "plate")).not.toHaveAttribute("data-hovered", "true");
   await expect(lanes(page).locator('path.cad-editor__lane[data-name="lid"]').first()).toHaveAttribute("data-hovered", "true");
   // The return's code: the return entry.
-  await page.locator(".cad-model__code .cm-line", { hasText: "return [notched" }).hover({ position: { x: 30, y: 5 } });
+  await page.locator(".cad-model__code .cm-line", { hasText: "return { plate" }).hover({ position: { x: 30, y: 5 } });
   await expect(returnEntry(page)).toHaveAttribute("data-cross-hover", "true");
 
   // Near a node: its entry, which the node mirrors; a click opens it.
@@ -167,7 +167,7 @@ export default function main() {
   const sketch2 = sketch({ plane: plane("XY", 8), profile: rect({ from: [10, 10], to: [30, 30] }) });
   const extrude1 = extrude({ sketch: sketch2, distance: 10, operation: "join", target: plate });
   const chamfer1 = chamfer({ body: extrude1, edges: [], distance: 1 });
-  return [plate, chamfer1];
+  return { plate, chamfered: chamfer1 };
 }
 `;
 
@@ -183,26 +183,30 @@ test("a returned version that a later feature continues is a body of its own: na
   await setModelSource(page, JOINED);
   // Without edges yet, it fails alone.
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "failed", { timeout: 120_000 });
-  // plate, and the lineage that joined onto it, named by its first version that isn't returned by itself.
-  await expect.poll(() => rows(page)).toEqual(["plate:plate shown", "extrude1:chamfer1 shown"]);
+  // plate, and the lineage that joined onto it, named by their keys.
+  await expect.poll(() => rows(page)).toEqual(["plate:plate shown", "chamfered:chamfer1 shown"]);
   await row(page, "plate").hover();
-  await expect(row(page, "extrude1")).not.toHaveAttribute("data-hovered", "true");
+  await expect(row(page, "chamfered")).not.toHaveAttribute("data-hovered", "true");
   await expect(lanes(page).locator('path.cad-editor__lane[data-link="output"]').first()).toHaveAttribute("data-hovered", "true");
   await page.mouse.move(0, 0);
 
   // Before the chamfer, plate exists, too: the view shows it, though the join consumed it, and its edges can be picked.
   await timelineEntry(page, "chamfer1").click();
   await dialog(page).getByRole("button", { name: "Select edges" }).click();
-  await expect.poll(() => rows(page)).toEqual(["extrude1:extrude1 shown", "plate:plate shown"]);
+  await expect.poll(() => rows(page)).toEqual(["chamfered:extrude1 shown", "plate:plate shown"]);
   await expect.poll(() => shownBodies(page)).toEqual(["extrude1", "plate"]);
   // The join covers plate, which is inside it: hiding it lets plate's edges through.
-  await eye(page, "extrude1").click();
+  await eye(page, "chamfered").click();
   await expect.poll(() => shownBodies(page)).toEqual(["plate"]);
   await pickNear(page, "edge", [60, 20, 8], "plate");
   await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: plate, edges: \[edge\(plate\.\S+, plate\.\S+\)\]/);
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
-  expect(await returned(page)).toBe("[chamfer1, extrude1]");
+  // The chamfer stands in the return for plate now, and the join for what it was the chamfer of.
+  expect(await returned(page)).toBe("{ plate: chamfer1, chamfered: extrude1 }");
   await dialog(page).getByRole("button", { name: "Done selecting" }).click();
+  // The join kept its key, and so its name: it stays hidden until it is shown again.
+  await expect.poll(() => rows(page)).toEqual(["plate:chamfer1 shown", "chamfered:extrude1"]);
+  await eye(page, "chamfered").click();
   // A branch from history, plate being consumed by the join, too: picking shows what it works on.
   await dialog(page).getByRole("button", { name: "Select edges" }).click();
   await expect.poll(() => shownBodies(page)).toEqual(["extrude1", "plate"]);
@@ -240,29 +244,81 @@ test("hiding and showing are this user's; the return entry picks what main retur
   // The return entry: a chip per returned name, removed with ×, added by picking any body or sketch.
   await returnEntry(page).click();
   await expect(dialog(page)).toHaveAttribute("data-feature", "return");
-  await expect(versionChips(page, "return")).toHaveText(["notched", "lid"]);
+  await expect(versionChips(page, "return")).toHaveText(["plate", "lid"]);
   await dialog(page).getByRole("button", { name: "remove lid" }).click();
-  await expect.poll(() => returned(page)).toBe("notched");
+  await expect.poll(() => returned(page)).toBe("{ plate: notched }");
   await expect(timelineEntry(page, "lid")).toHaveAttribute("data-status", "unused");
   await expect.poll(() => rows(page)).toEqual(["plate:notched shown"]);
   await dialog(page).getByRole("button", { name: "Select" }).click();
   await timelineEntry(page, "rounded").click();
-  await expect.poll(() => returned(page)).toBe("[notched, rounded]");
+  await expect.poll(() => returned(page)).toBe("{ plate: notched, rounded }");
   // A version that a later feature consumes, too: it goes to the return on a lane of its own.
   await timelineEntry(page, "joined").click();
-  await expect.poll(() => returned(page)).toBe("[notched, rounded, joined]");
+  await expect.poll(() => returned(page)).toBe("{ plate: notched, rounded, joined }");
   await expect(lanes(page).locator('path.cad-editor__lane[data-link="output"]').first()).toBeAttached();
   await expect.poll(() => rows(page)).toEqual(["plate:notched shown", "rounded:rounded shown", "joined:joined shown"]);
   if (shots) await page.screenshot({ path: `${shots}/bodies-result.png` });
   // Picking a returned one takes it out.
   await timelineEntry(page, "joined").click();
-  await expect.poll(() => returned(page)).toBe("[notched, rounded]");
+  await expect.poll(() => returned(page)).toBe("{ plate: notched, rounded }");
   await dialog(page).getByRole("button", { name: "Done selecting" }).click();
 
-  // A return that isn't a list of names shows as code, and can't be picked into.
-  await setModelSource(page, (await modelSource(page)).replace("return [notched, rounded];", "return [...[notched, rounded]];"));
+  // A return that isn't names shows as code, and can't be picked into.
+  await setModelSource(page, (await modelSource(page)).replace("return { plate: notched, rounded };", "return [...[notched, rounded]];"));
   await expect(versionChips(page, "return")).toHaveText(["[...[notched, rounded]]"]);
   await expect(dialog(page).getByRole("button", { name: "Select" })).toBeDisabled();
+});
+
+test("named outputs: a returned body is named by its key, which the browser and the return entry rename, not its features", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await openM4(page);
+  // M4 returns { plate: notched, lid }: the lineage that ends in notched is plate, by its key.
+  await expect.poll(() => rows(page)).toEqual(["plate:notched shown", "lid:lid shown"]);
+  await returnEntry(page).click();
+  await expect(versionChips(page, "return")).toHaveText(["plate", "lid"]);
+  await expect(dialog(page).locator('.cad-editor__version[data-key="plate"]')).toContainText("notched");
+
+  // Renaming a row renames its key; the variable and what this user hid stay with the body.
+  await eye(page, "plate").click();
+  await row(page, "plate").locator(".cad-editor__browser-name").dblclick();
+  await page.getByRole("textbox", { name: "New name for plate" }).fill("bracket");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => returned(page)).toBe("{ bracket: notched, lid }");
+  await expect.poll(() => rows(page)).toEqual(["bracket:notched", "lid:lid shown"]);
+  await expect(lanes(page).locator('path.cad-editor__lane[data-name="bracket"]').first()).toBeAttached();
+  await expect.poll(() => shownBodies(page)).toEqual(["lid"]);
+
+  // On a chip of the return entry: F2, and a key that is taken is refused in the status bar.
+  await dialog(page).getByRole("button", { name: "close" }).click();
+  await returnEntry(page).click();
+  await dialog(page).getByLabel("rename lid").press("F2");
+  await page.getByRole("textbox", { name: "New name for lid" }).fill("bracket");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".cad-model__status")).toContainText("bracket is returned already");
+  await page.getByRole("textbox", { name: "New name for lid" }).fill("top");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => returned(page)).toBe("{ bracket: notched, top: lid }");
+  await expect(versionChips(page, "return")).toHaveText(["bracket", "top"]);
+  if (shots) await page.screenshot({ path: `${shots}/bodies-named-outputs.png` });
+
+  // Renaming a variable in the timeline keeps the key: the body keeps its name.
+  await dialog(page).getByRole("button", { name: "close" }).click();
+  await timelineEntry(page, "notched").focus();
+  await page.keyboard.press("F2");
+  await page.getByRole("textbox", { name: "New name for notched" }).fill("cut");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => returned(page)).toBe("{ bracket: cut, top: lid }");
+  await expect.poll(() => rows(page)).toEqual(["bracket:cut", "top:lid shown"]);
+  // A key renamed to its variable's name is shorthand again.
+  await row(page, "top").locator(".cad-editor__browser-name").press("F2");
+  await page.getByRole("textbox", { name: "New name for top" }).fill("lid");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => returned(page)).toBe("{ bracket: cut, lid }");
+  // Shown again, as a body of an object.
+  await eye(page, "bracket").click();
+  await expect.poll(() => shownBodies(page)).toEqual(["cut", "lid"]);
 });
 
 test("body fields are filled by picking: in the view, the browser or the timeline", async ({ users }) => {
@@ -340,7 +396,7 @@ test("combine from the toolbar: its target is the last body, its tools are picke
   await expect(versionChips(page, "tools")).toHaveText(["notched"]);
   await expect(timelineEntry(page, "combine1")).toHaveAttribute("data-status", "ok");
   // It consumes both: the return has the combine instead.
-  await expect.poll(() => returned(page)).toBe("combine1");
+  await expect.poll(() => returned(page)).toBe("{ lid: combine1 }");
   if (shots) await page.screenshot({ path: `${shots}/bodies-combine.png` });
   // The combine carries lid's body on, and plate's ends in it.
   await dialog(page).getByRole("button", { name: "Done selecting" }).click();
@@ -349,7 +405,8 @@ test("combine from the toolbar: its target is the last body, its tools are picke
   // Deleting it brings its tool back into the result.
   await dialog(page).getByRole("button", { name: "Delete", exact: true }).click();
   await dialog(page).getByRole("button", { name: "Delete combine1" }).click();
-  await expect.poll(() => returned(page)).toBe("[lid, notched]");
+  // Under the name of its body.
+  await expect.poll(() => returned(page)).toBe("{ lid, plate: notched }");
 });
 
 test("a feature joins its input's chain or branches off it", async ({ users }) => {
@@ -362,13 +419,14 @@ test("a feature joins its input's chain or branches off it", async ({ users }) =
   await expect(chain.getByRole("radio", { name: "Join" })).toHaveAttribute("aria-checked", "true");
   await chain.getByRole("radio", { name: "Branch" }).click();
   await expect.poll(() => modelSource(page)).toContain("const joined = combine({ target: plate, tools: [boss] });");
-  await expect.poll(() => returned(page)).toBe("[notched, lid, fillet1]");
+  // Under the name of its body, boss.
+  await expect.poll(() => returned(page)).toBe("{ plate: notched, lid, boss: fillet1 }");
   await expect(chain.getByRole("radio", { name: "Branch" })).toHaveAttribute("aria-checked", "true");
   await expect.poll(() => rows(page)).toEqual(["plate:notched shown", "lid:lid shown", "boss:fillet1 shown"]);
   if (shots) await page.screenshot({ path: `${shots}/bodies-branch.png` });
   await chain.getByRole("radio", { name: "Join" }).click();
   await expect.poll(() => modelSource(page)).toContain("const joined = combine({ target: plate, tools: [fillet1] });");
-  await expect.poll(() => returned(page)).toBe("[notched, lid]");
+  await expect.poll(() => returned(page)).toBe("{ plate: notched, lid }");
   // A copy has no chain to join: no choice.
   await timelineEntry(page, "lid").click();
   await expect(dialog(page).getByRole("radiogroup", { name: "Chain" })).toHaveCount(0);

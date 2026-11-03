@@ -2,11 +2,11 @@
  * Refactorings of timeline entries as text edits: renaming an entry's variables, wrapping a Custom
  * Script in `body()` and unwrapping it again (research/11), and deleting a Custom Script.
  */
-import { parse, type AnyNode, type Expression, type Statement } from "acorn";
+import { parse, type AnyNode, type AssignmentProperty, type Expression, type Property, type Statement } from "acorn";
 import { printCopied, RESERVED } from "@patchwork-cad/features/names";
-import type { Analysis, Span } from "./analyze.ts";
+import { keyedNames, propertyKey, returnedOutputs, type Analysis, type Span } from "./analyze.ts";
 import { bound, declared, graph, usesIn } from "./deps.ts";
-import { ensureImports, indentOf, lines, replaceIdentifier, type Edit } from "./splice.ts";
+import { ensureImports, indentOf, lines, outputKeys, replaceIdentifier, setReturned, type Edit } from "./splice.ts";
 import type { Timeline } from "./timeline.ts";
 
 /** Edits, or why there are none. */
@@ -81,15 +81,22 @@ export function rename(analysis: Analysis, tl: Timeline, index: number, from: st
   const names = new Set([from]);
   for (const statement of statementsOf(analysis, entry.span)) {
     if (statement.type !== "VariableDeclaration") continue;
-    for (const d of statement.declarations) for (const id of bound(d.id)) if ((id as { name: string }).name === from) edits.push({ start: id.start, end: id.end, text: to });
+    for (const d of statement.declarations) {
+      // In `const { base } = body(…)` the key reads the body: it stays, `{ base: plate }`, and `{ plate: base }` becomes `{ plate }`.
+      const properties = d.id.type === "ObjectPattern" ? d.id.properties : [];
+      for (const id of bound(d.id)) {
+        if ((id as { name: string }).name !== from) continue;
+        const property = properties.find((p) => p.type === "Property" && p.value === id);
+        edits.push(property ? renameProperty(property as AssignmentProperty, to) : { start: id.start, end: id.end, text: to });
+      }
+    }
   }
   if (edits.length === 0) return { error: `${from} is not declared by this entry` };
   const variables = new Set(graph(analysis, tl).declares.flat());
   for (const statement of analysis.main?.statements ?? []) {
     usesIn(statement, names, (id, ancestors) => {
       const parent = ancestors[ancestors.length - 1];
-      const shorthand = parent?.type === "Property" && parent.shorthand && parent.key.type === "Identifier" ? parent.key.name : undefined;
-      edits.push(replaceIdentifier(id, to, shorthand));
+      edits.push(parent?.type === "Property" && parent.value === id ? renameProperty(parent, to) : replaceIdentifier(id, to, undefined));
     });
     // `ref.from`: references to the feature by name.
     const visit = (node: AnyNode) => {
@@ -102,6 +109,33 @@ export function rename(analysis: Analysis, tl: Timeline, index: number, from: st
     visit(statement);
   }
   return { edits };
+}
+
+/**
+ * Renames output `from` of what `main` returns to `to` (research/15, "Output"): its key, not the
+ * variable, which stays the name of the version inside the model. The return becomes an object.
+ */
+export function renameOutput(analysis: Analysis, from: string, to: string): Refactoring {
+  const returned = returnedOutputs(analysis);
+  if (!returned) return { error: "the return isn't names" };
+  const keys = outputKeys(returned.outputs);
+  const index = keys.indexOf(from);
+  if (index < 0) return { error: `nothing is returned as ${from}` };
+  if (from === to) return { edits: [] };
+  if (!IDENTIFIER.test(to)) return { error: `${to} is not a valid name` };
+  if (keys.includes(to)) return { error: `${to} is returned already` };
+  // Every output keeps its key, so that numbering one doesn't change with this rename.
+  return { edits: setReturned(returned, returned.outputs.map((o, i) => ({ key: i === index ? to : keys[i], name: o.name }))) };
+}
+
+/**
+ * Renames the variable that is property `p`'s value, keeping its key in the shortest form: `{ key }`
+ * if the new name is the key, else `{ key: to }`.
+ */
+function renameProperty(p: Property | AssignmentProperty, to: string): Edit {
+  const key = propertyKey(p);
+  if (key === to) return { start: p.start, end: p.end, text: to };
+  return p.shorthand ? { start: p.start, end: p.end, text: `${key}: ${to}` } : { start: p.value.start, end: p.value.end, text: to };
 }
 
 /** Indents every non-empty line of `text` by `by`, or removes up to that much indentation. */
@@ -127,8 +161,8 @@ function bindings(analysis: Analysis): Set<string> {
   return out;
 }
 
-/** `name` or `[a, b]` for the declaration and the return of a body(). */
-const pattern = (names: string[]) => (names.length === 1 ? names[0]! : `[${names.join(", ")}]`);
+/** `name` or `{ a, b }` for the declaration and the return of a body(). */
+const pattern = (names: string[]) => (names.length === 1 ? names[0]! : `{ ${names.join(", ")} }`);
 
 /**
  * Wraps the Custom Script at `index` in `body()`: its code becomes a function, and the names that
@@ -175,11 +209,12 @@ export function unwrapBody(source: string, analysis: Analysis, tl: Timeline, ind
   const last = body.at(-1);
   if (last?.type !== "ReturnStatement" || !last.argument) return { error: "its function doesn't end with a return" };
   const own = body.slice(0, -1).flatMap((s) => declared(s as Statement));
-  // `return cut_plate` of its own `cut_plate` (or `[a, b]` of its own a and b), as wrapping writes
+  // `return cut_plate` of its own `cut_plate` (or `{ a, b }` of its own a and b), as wrapping writes
   // it: the function's code declares the names itself.
   const result = last.argument;
-  const returnedIds = result.type === "Identifier" ? [result.name] : result.type === "ArrayExpression" && result.elements.every((e) => e?.type === "Identifier") ? result.elements.map((e) => (e as { name: string }).name) : undefined;
-  const same = returnedIds !== undefined && returnedIds.join() === entry.names.join() && entry.call.destructured === (result.type === "ArrayExpression") && returnedIds.every((n) => own.includes(n));
+  const returned = result.type === "Identifier" && !entry.call.keys ? [{ key: "", name: result.name }] : result.type === "ObjectExpression" && entry.call.keys ? keyedNames(result.properties) : undefined;
+  const declaredPairs = entry.call.keys?.map((key, i) => ({ key, name: entry.names[i]! })) ?? [{ key: "", name: entry.names[0]! }];
+  const same = returned !== undefined && returned.length === declaredPairs.length && declaredPairs.every((d) => returned.some((r) => r.key === d.key && r.name === d.name && own.includes(r.name)));
   // The function's other names must not clash with the model's.
   const outer = new Set(g.declares.flat());
   const clash = own.filter((n) => outer.has(n) || (!same && entry.names.includes(n)));

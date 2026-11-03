@@ -65,9 +65,13 @@ let lastTrace: readonly TraceEntry[] = [];
 /** A body without faces, which a failed feature leaves behind; there is nothing to mesh. */
 const isEmptyBody = (v: unknown) => v instanceof features.Body && v.topo.faces.length === 0;
 
+/** Whether main returned an object of outputs, `{ plate: notched, lid }`, rather than a shape or a list of them. */
+const isOutputs = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype && !("shape" in value);
+
 /**
  * Wraps a model module so that its `main` result is recorded, without empty bodies. The evaluator
- * gets it without sketches, which it can't show; the view draws them itself.
+ * gets it without sketches, which it can't show; the view draws them itself. Outputs of an object
+ * are named by their keys (research/15, "Output").
  */
 function recordMain(module: Record<string, unknown>): Record<string, unknown> {
   const main = module["default"];
@@ -76,6 +80,11 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
     ...module,
     default: (...args: unknown[]) => {
       const value = (main as (...a: unknown[]) => unknown)(...args);
+      if (isOutputs(value)) {
+        const entries = Object.entries(value).filter(([, v]) => !isEmptyBody(v));
+        returned = entries.map(([, v]) => v);
+        return entries.flatMap(([name, v]) => (v instanceof features.Sketch ? [] : v instanceof features.Body ? [{ name, shape: v.shape }] : v instanceof replicad.Shape ? [{ name, shape: v }] : [v]));
+      }
       returned = Array.isArray(value) ? value.filter((v) => !isEmptyBody(v)) : isEmptyBody(value) ? [] : value;
       return Array.isArray(returned) ? returned.filter((v) => !(v instanceof features.Sketch)) : returned instanceof features.Sketch ? [] : returned;
     },

@@ -126,7 +126,7 @@ export default function main({ width, depth, height, hole }) {
   const chamfer1 = chamfer({ body: fillet2, edges: [edge(plate.end, plate.side.left)], distance: 3 });
   const sketch3 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) });
   const extrude1 = extrude({ sketch: sketch3, distance: -10, operation: "join", target: fillet2 });
-  return extrude1;
+  return { plate: extrude1 };
 }
 `;
 
@@ -145,15 +145,16 @@ test("a result that nothing uses is marked, and retargeting keeps bodies in the 
 
   await timelineEntry(page, "chamfer1").click();
   await dialog(page).getByRole("button", { name: "Add to result" }).click();
-  await expect.poll(() => modelSource(page)).toContain("return [extrude1, chamfer1];");
+  // Under its body's name: its lineage from plate is bore, as plate is the key of extrude1's.
+  await expect.poll(() => modelSource(page)).toContain("return { plate: extrude1, bore: chamfer1 };");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
 
   await timelineEntry(page, "extrude1").click();
   await pickVersion(page, "target", "chamfer1");
-  await expect.poll(() => modelSource(page)).toContain("return extrude1;");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: extrude1 };");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
   await pickVersion(page, "target", "fillet2");
-  await expect.poll(() => modelSource(page)).toContain("return [extrude1, chamfer1];");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: extrude1, chamfer1 };");
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
 });
 
@@ -171,7 +172,7 @@ test("sketches that no feature uses show in the view", async ({ users }) => {
   await expect.poll(() => shownSketches(page)).toBe("");
 
   await toolbarButton(page, "Sketch").click();
-  await expect.poll(() => modelSource(page)).toContain("return [fillet1, sketch3];");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: fillet1, sketch3 };");
   await expect.poll(() => shownSketches(page)).toBe("sketch3");
   await expect(page.locator(".cad-model__warning")).toHaveCount(0);
   // On the plate's top face, where it shows without the open dialog's highlight.
@@ -183,7 +184,7 @@ test("sketches that no feature uses show in the view", async ({ users }) => {
   if (shots) await page.screenshot({ path: `${shots}/editor-sketch-shown.png` });
 
   await toolbarButton(page, "Extrude").click();
-  await expect.poll(() => modelSource(page)).toContain("return [fillet1, extrude1];");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: fillet1, extrude1 };");
   await expect.poll(() => shownSketches(page)).toBe("");
   // Rolled back before the extrusion (past the return, then before it), the sketch is unused again.
   const marker = page.getByRole("slider", { name: "Timeline marker" });
@@ -198,10 +199,10 @@ test("sketches that no feature uses show in the view", async ({ users }) => {
   await expect(dialog(page)).toHaveAttribute("data-feature", "extrude1");
   await dialog(page).getByRole("button", { name: "Delete", exact: true }).click();
   await dialog(page).getByRole("button", { name: "Delete extrude1" }).click();
-  await expect.poll(() => modelSource(page)).toContain("return [fillet1, sketch3];");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: fillet1, sketch3 };");
   await expect.poll(() => shownSketches(page)).toBe("sketch3");
 
-  await setModelSource(page, (await modelSource(page)).replace("return [fillet1, sketch3];", "return fillet1;"));
+  await setModelSource(page, (await modelSource(page)).replace("return { plate: fillet1, sketch3 };", "return { plate: fillet1 };"));
   await expect(timelineEntry(page, "sketch3")).toHaveAttribute("data-status", "unused");
   await expect.poll(() => shownSketches(page)).toBe("");
   await timelineEntry(page, "sketch3").click();
@@ -222,7 +223,7 @@ test("a move copies the result next to it", async ({ users }) => {
 
   await toolbarButton(page, "Move").click();
   await expect.poll(() => modelSource(page)).toContain("const move1 = move({ body: fillet1, x: 20 });");
-  await expect.poll(() => modelSource(page)).toContain("return [fillet1, move1];");
+  await expect.poll(() => modelSource(page)).toContain("return { plate: fillet1, move1 };");
   await expect(timelineEntry(page, "move1")).toHaveAttribute("data-status", "ok");
   await expect(view).toHaveAttribute("data-state", "ready");
   await expect.poll(async () => new Set((await entities(page, "face")).map((e) => e.body))).toEqual(new Set(["fillet1", "move1"]));

@@ -73,7 +73,8 @@ test("deleting a feature on a tool rewires the combine; deleting the combine bri
   expect(statement(del("fillet1"), "combine1")).toBe('const combine1 = combine({ target: plate, tools: [boss], operation: "cut" });');
   const without = del("combine1");
   expect(statement(without, "chamfer1")).toBe("const chamfer1 = chamfer({ body: plate, edges: [], distance: 1 });");
-  expect(returned(without)).toBe("[chamfer1, fillet1]");
+  // The tool comes back under its body's name, boss, which it keeps that way.
+  expect(returned(without)).toBe("{ chamfer1, boss: fillet1 }");
 });
 
 const branched = (mode: "join" | "branch") =>
@@ -83,7 +84,7 @@ const branched = (mode: "join" | "branch") =>
     const chamfer1 = chamfer({ body: plate, edges: [], distance: 1 });
     const fillet1 = fillet({ body: ${mode === "join" ? "chamfer1" : "plate"}, edges: [], radius: 1 });
     const combine1 = combine({ target: plate, tools: [fillet1] });
-    return ${mode === "join" ? "fillet1" : "[fillet1, chamfer1]"};`);
+    return ${mode === "join" ? "{ fillet1 }" : "{ fillet1, chamfer1 }"};`);
 
 test("a feature joins its input's chain or branches off it", () => {
   for (const mode of ["join", "branch"] as const) {
@@ -102,20 +103,24 @@ test("switching between joining and branching rewires the later features and the
   expect(statement(branch, "fillet1")).toBe("const fillet1 = fillet({ body: plate, edges: [], radius: 1 });");
   // The combine's target isn't after the chamfer's input in the chain: it stays.
   expect(statement(branch, "combine1")).toBe("const combine1 = combine({ target: plate, tools: [fillet1] });");
-  expect(returned(branch)).toBe("[fillet1, chamfer1]");
+  expect(returned(branch)).toBe("{ fillet1, chamfer1 }");
   const back = edit(branch, (a) => setChainMode(branch, a, tlOf(branch), indexOf(branch, "chamfer1"), "join"));
   expect(statement(back, "fillet1")).toBe("const fillet1 = fillet({ body: chamfer1, edges: [], radius: 1 });");
-  expect(returned(back)).toBe("fillet1");
+  expect(returned(back)).toBe("{ fillet1 }");
 });
 
-test("the return is edited by name, and only while it is a list of names", () => {
-  const source = model(`${base}\nreturn chamfer1;`);
+test("the return is edited by name, and only while it is names", () => {
+  const source = model(`${base}\nreturn { part: chamfer1 };`);
   const both = edit(source, (a) => addToReturn(source, a, "boss"));
-  expect(returned(both)).toBe("[chamfer1, boss]");
-  expect(returned(edit(both, (a) => removeFromReturn(a, "chamfer1")))).toBe("boss");
-  expect(returned(edit(source, (a) => removeFromReturn(a, "chamfer1")))).toBe("[]");
+  expect(returned(both)).toBe("{ part: chamfer1, boss }");
+  expect(returned(edit(both, (a) => removeFromReturn(a, "chamfer1")))).toBe("{ boss }");
+  expect(returned(edit(source, (a) => removeFromReturn(a, "chamfer1")))).toBe("{}");
   expect(returnEditable(analyze(source))).toBe(true);
-  expect(returnEditable(analyze(model(`${base}\nreturn [...[chamfer1]];`)))).toBe(false);
+  // A key that is a string is a key all the same.
+  expect(returnEditable(analyze(model(`${base}\nreturn { "part": chamfer1, boss };`)))).toBe(true);
+  // A list or a single name is rewritten as an object.
+  expect(returned(edit(model(`${base}\nreturn [chamfer1];`), (a) => addToReturn(source, a, "boss")))).toBe("{ chamfer1, boss }");
+  for (const code of ["[...[chamfer1]]", "{ ...parts }", "{ [name]: chamfer1 }", "{ part: chamfer1.shape }"]) expect(returnEditable(analyze(model(`${base}\nreturn ${code};`)))).toBe(false);
   expect(returnEditable(analyze(model(base)))).toBe(true);
 });
 
@@ -133,9 +138,10 @@ const moved = (source: string, to: string) => edit(source, (a) => rebody(a, tlOf
 
 test("a feature moved to another body leaves its old one as it was before it, and joins the new one's chain", () => {
   // At the end: the chamfer stood in the return for bar, and stands for plate now.
-  const last = moved(twoBodies("bar", "", "[plate, chamfer1]"), "plate");
+  const last = moved(twoBodies("bar", "", "{ plate, bar: chamfer1 }"), "plate");
   expect(statement(last, "chamfer1")).toBe("const chamfer1 = chamfer({ body: plate, edges: [], distance: 1 });");
-  expect(returned(last)).toBe("[chamfer1, bar]");
+  // Outputs keep their keys: plate gets the chamfer, bar is bar without it.
+  expect(returned(last)).toBe("{ plate: chamfer1, bar }");
   // In the middle of chains: plate's fillet works on plate again, bar's on the chamfer.
   const middle = moved(twoBodies("plate", "const fillet1 = fillet({ body: chamfer1, edges: [], radius: 1 });\nconst fillet2 = fillet({ body: bar, edges: [], radius: 1 });", "[fillet1, fillet2]"), "bar");
   expect(statement(middle, "chamfer1")).toBe("const chamfer1 = chamfer({ body: bar, edges: [], distance: 1 });");
@@ -146,5 +152,5 @@ test("a feature moved to another body leaves its old one as it was before it, an
   const branch = moved(twoBodies("plate", "const fillet1 = fillet({ body: plate, edges: [], radius: 1 });", "[fillet1, chamfer1, bar]"), "bar");
   expect(statement(branch, "chamfer1")).toBe("const chamfer1 = chamfer({ body: bar, edges: [], distance: 1 });");
   expect(statement(branch, "fillet1")).toBe("const fillet1 = fillet({ body: plate, edges: [], radius: 1 });");
-  expect(returned(branch)).toBe("[fillet1, chamfer1]");
+  expect(returned(branch)).toBe("{ fillet1, chamfer1 }");
 });

@@ -32,27 +32,32 @@ A feature's result is a version of a body: in `plate → bore → fillet1` the t
 - **A move copies:** its result starts a lineage of its own, whose faces are named through it ([07](07-poc-modelling-ui.md#the-reference-syntax)), and the copied version goes on.
 - **A combine merges lineages:** its target's lineage continues, its tools' lineages end there, as Fusion's Combine consumes tool bodies. There is no "Keep Tools": nothing is ever destroyed, so a later feature can use a tool's version again, which forks it.
 - **Custom Script code that uses a version** carries it on into the first version the code declares, as M3's `let body = upright` does, or else ends its lineage. A feature's continuation wins over one in code, which may only refer to the version.
-- **A lineage is named by its first body version** (`plate`, not `sketch1`), so its name stays when features are added; a lineage without one, a sketch's, by the sketch. Renaming a body renames that variable.
-- **A returned version that a later feature continues is a body of its own:** `return [plate, chamfer1]` with `chamfer1` continuing `plate` returns two bodies, as the code keeps `plate` as it was. It goes to the return on a lane of its own, is named, hovered and hidden by itself, and the lineage it leaves takes the name of its first body version that isn't returned by itself (`extrude1`).
+- **A returned lineage is named by its key** in the return ([Output](#output)): `return { plate: notched }` names the lineage that ends in `notched` `plate`, whatever its features are called. Renaming it renames the key.
+- **Any other lineage is named by its first body version** (`plate`, not `sketch1`), so its name stays when features are added; a lineage without one, a sketch's, by the sketch; a version whose name is another body's key is skipped. Renaming such a body renames that variable.
+- **A returned version that a later feature continues is a body of its own:** `return { plate, chamfered: chamfer1 }` with `chamfer1` continuing `plate` returns two bodies, as the code keeps `plate` as it was. It goes to the return on a lane of its own, is named by its key, hovered and hidden by itself, and the lineage it leaves takes the name of its first body version that isn't returned by itself.
 
 ## Visibility
 
 What a user sees is view state, like the timeline marker ([07](07-poc-modelling-ui.md#the-timeline-marker)): hiding a body to look inside the model changes neither the model nor what a collaborator sees, unlike Onshape's shared hiding.
 
 - **The view shows what exists at the marker,** which is what the browser lists: before the return, every body and sketch that no feature has used, and every returned version from where it is made (the workshop's view); past it, at the end, what main returns (a caller's view, and the viewer tool's). While a field is picked, what the open feature works on exists, too, also a version that an earlier feature consumed, which it branches from. The build drops a body from what it shows once a feature consumes it, though its variable keeps it as it was; such a body comes from the last build, meshed on demand. So a private leaf, one that nothing uses or returns, shows as soon as the marker is before the return, and no other default is needed.
-- **Each user hides bodies** with the eyes in the [browser](#the-browser). Hidden bodies are stored with the marker in the account's tool storage ([10](10-view-state.md#storage)) as `visibility: { "body:plate": false, "version:joined": false }`: a lineage by its name, a version that is a body of its own by the version's. A lineage's name follows the code's structure, so a change that renames it, e.g. returning its first version by itself, shows it again. Renaming a variable in the timeline moves its keys.
+- **Each user hides bodies** with the eyes in the [browser](#the-browser). Hidden bodies are stored with the marker in the account's tool storage ([10](10-view-state.md#storage)) as `visibility: { "body:plate": false, "version:joined": false }`: a lineage by its name, a version that is a body of its own by the version's. A lineage's name follows the code's structure, so a change that renames it, e.g. returning its first version by itself, shows it again. Renaming a variable in the timeline, or a key in the return, moves its keys; renaming the variable of a body named by its key doesn't, as its name stays.
 - **Presence wins over hiding:** what a collaborator hovers or selects in a body this user hid shows as a ghost (`createPeerHighlights` resolves it against the hidden bodies, too).
 - **Peeking already works:** hovering an entry whose result isn't shown draws that result ([12](12-hover-highlighting.md#design)), and hovering a hidden body in the browser draws it as a ghost, meshed by the worker on demand (`result`), once per build.
 - **Isolate**, per user, comes later.
 
 ## Output
 
-A model is a function, and `return` is its public interface: a caller (`body(() => model.default(…))`, [11](11-adopting-shapes.md#body)) gets what it lists. Every other version is private.
+A model is a function, and `return` is its public interface: an object of named outputs, `return { plate: notched, lid }`, which a caller destructures by key (`const { plate, lid } = body(() => m4.default(m4.defaultParams))`, [11](11-adopting-shapes.md#body)). Every other version is private. Keys make the interface independent of the features: adding a fillet to `notched` returns `{ plate: fillet2 }`, and callers still get `plate`. An array would be by position, and a variable's name changes with every feature.
 
-- **Heads are returned by default.** A new feature's result takes its input's place in the return ([07](07-poc-modelling-ui.md#the-editor)), a combine's tools leave it, and deleting a combine brings its tools back. A head that nothing uses or returns is useless to a caller, so the timeline greys it out; it still shows before the return.
+- **Heads are returned by default.** A new feature's result takes its input's place in the return, under its key ([07](07-poc-modelling-ui.md#the-editor)), a combine's tools leave it, and deleting a combine brings its tools back. A head that nothing uses or returns is useless to a caller, so the timeline greys it out; it still shows before the return.
 - **Any version can be returned,** also a consumed one, e.g. a tool body before the cut.
-- **The [return entry](#the-timeline-with-lanes)'s dialog edits it,** and nothing else does: visibility is the browser's, output the return's. It has a chip per returned name, in the return's order, removed with ×, and a "Select" button that picks any body or sketch, in the view, the browser or the timeline, also consumed versions; picking a returned one takes it out. It edits the return only while that is a name or a list of names (`returnEditable`); otherwise the dialog shows the return's code as its only chip, and "Select" is disabled.
+- **The [return entry](#the-timeline-with-lanes)'s dialog edits it,** and nothing else does: visibility is the browser's, output the return's. It has a chip per returned name, in the return's order, removed with ×, and a "Select" button that picks any body or sketch, in the view, the browser or the timeline, also consumed versions; picking a returned one takes it out. A chip shows the key, and the variable where it differs. It edits the return only while that is names: an object of them, a list or one (`returnEditable`); otherwise the dialog shows the return's code as its only chip, and "Select" is disabled.
 - **Which versions are returned shows in the lanes:** a lane that goes to the return ends in a port, a half disc on its flat side, filled when returned, hollow for a private leaf. It is neither an eye nor an arrow, which reads as a modelling command (extrude, revolve). The browser doesn't repeat it.
+- **Keys are written in the shortest form:** `{ lid }` where the key is the variable's name, else `{ plate: notched }`. A version the editor adds to the return gets the name of the body it is the head of, so that returning a body doesn't rename it (a combine's tool `fillet1` comes back as `{ boss: fillet1 }`), else its variable's name, numbered (`sketch4_2`) if that key is taken. A version that replaces another takes its key, except that the body an extrusion makes of a sketch returned under its own name (`{ sketch2 }`) gets its own name, since the sketch had no name of its own to keep.
+- **Other forms are rewritten,** `return extrude2` or `return [a, b]`: they still run, and the editor reads them with the variables as keys, but the first edit of the return writes an object. New models start with `return { plate: fillet1 }`.
+- **Renaming a returned body renames its key,** in the browser (F2 or a double click on its row) and in the return entry's dialog (on its chip); renaming its variable in the timeline keeps the key (`{ plate: base }`), and a key that becomes its variable's name collapses to shorthand. The lineage keeps its name, and so does its visibility.
+- **Outside the editor,** a caller gets the object. replicad's evaluator, e.g. in its studio, shows a returned shape or a list of `{ name, shape }` entries, but not an object of them, so a model is shown there through `export default (p) => Object.entries(main(p)).map(([name, body]) => ({ name, shape: body.shape }))`; `Object.values(main(p))` works, too, with the features' names ([portability test](../src/features/test/portability.test.ts)). The editor's worker does the former (`recordMain` in [`worker.ts`](../src/cad/src/kernel/worker.ts)).
 
 ## Availability
 
@@ -76,7 +81,7 @@ A new feature goes in at the marker and joins the chain it works on: with the ma
 ```js
 const chamfer1 = chamfer({ body: bore, … });
 const fillet1 = fillet({ body: chamfer1, … });
-return [fillet1];
+return { plate: fillet1 };
 ```
 
 A branch leaves `fillet1` as it is and makes a second body that shares `plate → bore`, e.g. a variant, a lid made from the same base as its box, or a clearance body used as a cut's tool:
@@ -84,7 +89,7 @@ A branch leaves `fillet1` as it is and makes a second body that shares `plate �
 ```js
 const chamfer1 = chamfer({ body: bore, … });
 const fillet1 = fillet({ body: bore, … });
-return [fillet1, chamfer1];
+return { plate: fillet1, chamfer1 };
 ```
 
 The dialog of a feature with an input body has a "Chain" control, Join or Branch, whenever a feature after it continues its input or its result (`chainMode`). Branching rewires the later features that work on its result to its input, and returns its result; joining does the opposite (`setChainMode`). A move's copy and a sketch have no chain to join. Picking a consumed version as a field's value is always a branch.
@@ -106,7 +111,7 @@ The timeline stays a view of the code: its x-axis is the order of statements, on
 
 ## The browser
 
-A pane left of the 3D view, toggled in the toolbar (open by default, per user), listing what exists at the marker, or before the open feature while a field is picked: the bodies with their version there (`plate notched`) and the sketches that no feature used yet; past the return, the returned versions, in the return's order. A label at its top says which ("Returned", "Before the return", "At the timeline marker", "Before joined"). Each row has an eye and the name, nothing else. Hovering a row hovers its lineage ([The timeline with lanes](#the-timeline-with-lanes)): the body, as a ghost if it doesn't show, its lane and its features; clicking it opens its version's dialog, or picks it. Construction geometry would go into folders of its own.
+A pane left of the 3D view, toggled in the toolbar (open by default, per user), listing what exists at the marker, or before the open feature while a field is picked: the bodies with their version there (`plate notched`) and the sketches that no feature used yet; past the return, the returned versions, in the return's order. A label at its top says which ("Returned", "Before the return", "At the timeline marker", "Before joined"). Each row has an eye and the name, nothing else; F2 or a double click renames it in place ([Output](#output)). Hovering a row hovers its lineage ([The timeline with lanes](#the-timeline-with-lanes)): the body, as a ghost if it doesn't show, its lane and its features; clicking it opens its version's dialog, or picks it. Construction geometry would go into folders of its own.
 
 ## Combine
 
@@ -115,6 +120,5 @@ A pane left of the 3D view, toggled in the toolbar (open by default, per user), 
 ## Open
 
 - Which use of a forked version continues its lineage and keeps its name. The longest chain fails right after inserting a branch at a rolled-back marker: the branch and the chain's continuation both have one version, and the branch, earlier in the code, takes the lineage and its name. And while a feature that branches from history is picked, the browser lists the version it branches from next to the lineage that continued it, both with its name (`plate` and `plate extrude1`).
-- Named outputs (`return { bracket, mountingPlate }`), together with `body()`'s arrays ([11](11-adopting-shapes.md#body)), and names of bodies independent of features.
 - The lanes of large models: many crossing links, and lanes too thin to hover or click.
 - A sketch can't be picked in the 3D view, only in the browser and the timeline.

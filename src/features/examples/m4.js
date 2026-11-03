@@ -16,5 +16,5 @@ export default function main({ w, d, h }) {
   const corner = move({ body: plate, x: w / 2, y: d / 2, z: h / 2 });
   const notched = combine({ target: joined, tools: [corner], operation: "cut" });
   const lid = move({ body: plate, z: 30 });
-  return [notched, lid];
+  return { plate: notched, lid };
 }

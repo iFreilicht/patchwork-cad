@@ -10,7 +10,7 @@ import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 
-const plate = (target: string, extra = "", returned = "[cut_plate, extrude1]") => `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
+const plate = (target: string, extra = "", returned = "{ cut_plate, extrude1 }") => `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
 import { drawRoundedRectangle, drawCircle } from "replicad";
 
 export const defaultParams = { width: 100, depth: 40, height: 12, hole: 30 };
@@ -98,7 +98,7 @@ test("the marker rolls replicad shapes back once they are bodies", async ({ user
   if (!a) throw new Error("users(1) returned no user");
   const { page } = a;
   const other = "\n  const other_plate = drawRoundedRectangle(depth, width, 6).sketchOnPlane().extrude(-height);";
-  await open(page, plate('operation: "new"', other, "[cut_plate, extrude1, other_plate]"));
+  await open(page, plate('operation: "new"', other, "{ cut_plate, extrude1, other_plate }"));
   await fromMenu(page, 0, "Wrap in body()");
   await expect.poll(() => names(page)).toEqual(["cut_plate", "sketch1", "extrude1", "script"]);
   await expect(editorView(page)).toHaveAttribute("data-state", "ready");
@@ -135,7 +135,7 @@ import { drawRoundedRectangle } from "replicad";
 
 export default function main() {
   const block = body(() => drawRoundedRectangle(60, 40, 6).sketchOnPlane().extrude(10));
-  return block;
+  return { block };
 }
 `,
   );
@@ -204,7 +204,8 @@ test("the context menu: keyboard, ⋯ button, rename, unwrap and delete", async 
   const source = await modelSource(page);
   expect(source).toContain("const base = body(() => {");
   expect(source).toContain("target: base });");
-  expect(source).toContain("return [base, extrude1];");
+  // The return keeps its key: callers still get the body as cut_plate.
+  expect(source).toContain("return { cut_plate: base, extrude1 };");
   await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok");
 
   // F2 renames too; Escape keeps the name.
@@ -225,7 +226,7 @@ test("the context menu: keyboard, ⋯ button, rename, unwrap and delete", async 
   await expect.poll(() => names(page)).toEqual(["sketch1", "extrude1"]);
   const deleted = await modelSource(page);
   expect(deleted).toContain("target: ref.base });");
-  expect(deleted).toContain("return extrude1;");
+  expect(deleted).toContain("return { extrude1 };");
 
   // Delete twice on a focused entry deletes it as well.
   await timelineEntry(page, "extrude1").focus();

@@ -173,11 +173,13 @@ test("hovering a feature in the timeline or code highlights what it made, also p
 const adopted = `import { body, sketch, plane, rect, extrude } from "@patchwork-cad/features";
 import { drawRoundedRectangle } from "replicad";
 
+const plate = (x) => drawRoundedRectangle(40, 40, 4).sketchOnPlane().extrude(10).translate(x, 0, 0);
+
 export default function main() {
-  const [left, right] = body(() => [-30, 30].map((x) => drawRoundedRectangle(40, 40, 4).sketchOnPlane().extrude(10).translate(x, 0, 0)));
+  const { left, right } = body(() => ({ left: plate(-30), right: plate(30) }));
   const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [-5, -5], to: [5, 5] }) });
   const extrude1 = extrude({ sketch: sketch1, distance: 20 });
-  return [left, right, extrude1];
+  return { left, right, extrude1 };
 }
 `;
 

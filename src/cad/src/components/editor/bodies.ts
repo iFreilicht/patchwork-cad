@@ -5,15 +5,17 @@
  * a field is picked, also what the open feature works on. All of it shows unless the user hides it.
  */
 import { createMemo, type Accessor } from "solid-js";
-import { lanesAt, type Lanes, type Version } from "../../model/lanes.ts";
+import { lanesAt, type Lane, type Lanes, type Version } from "../../model/lanes.ts";
 import type { UiState } from "../uiState.ts";
 import type { Editor } from "./state.ts";
 
 /** A body (or a sketch) that exists at the marker, by its version there. */
 export interface BodyRow {
   lane: number;
-  /** The body's name, its first body version's. */
+  /** The body's name: its key in the return, or its first body version's. */
   name: string;
+  /** The key `main` returns it under, if it has one, which renaming it renames. */
+  output?: string;
   /** Its version at the marker. */
   version: string;
   kind: "body" | "sketch";
@@ -31,8 +33,15 @@ export interface Bodies {
   setVisible(row: BodyRow, visible: boolean): void;
 }
 
-/** A version that is a body of its own, on lane `lane`: named and kept visible by itself. */
-const versionRow = (lane: number, v: Version, visible: (key: string) => boolean): BodyRow => ({ lane, name: v.name, version: v.name, kind: v.kind, key: `version:${v.name}`, visible: visible(`version:${v.name}`) });
+/** A version that is a body of its own, on lane `lane`: named by its key, if it has one, and kept visible by itself. */
+const versionRow = (lane: number, v: Version, visible: (key: string) => boolean, output?: string): BodyRow => ({ lane, name: output ?? v.name, ...(output !== undefined ? { output } : {}), version: v.name, kind: v.kind, key: `version:${v.name}`, visible: visible(`version:${v.name}`) });
+
+/** A lineage's row, by its version `version`; a sketch that a later extrusion makes a body of is still named as a sketch. */
+const lineageRow = (lane: number, info: Lane, version: Version, visible: (key: string) => boolean): BodyRow => {
+  const key = `body:${info.name}`;
+  const sketch = info.kind === "body" && version.kind === "sketch";
+  return { lane, name: sketch ? version.name : info.name, ...(info.key !== undefined && !sketch ? { output: info.key } : {}), version: version.name, kind: sketch ? "sketch" : info.kind, key, visible: visible(key) };
+};
 
 /** The returned versions, in the return's order, as rows. */
 function returnedRows(l: Lanes, visible: (key: string) => boolean): BodyRow[] {
@@ -42,9 +51,9 @@ function returnedRows(l: Lanes, visible: (key: string) => boolean): BodyRow[] {
     if (!v || lane === undefined) return [];
     const info = l.lanes[lane]!;
     // A body's head is the body; a version inside it, consumed later, is a body of its own, on its own lane to the return.
-    if (info.versions.at(-1) === v && info.merged === undefined) return [{ lane, name: info.name, version: name, kind: v.kind, key: `body:${info.name}`, visible: visible(`body:${info.name}`) }];
-    const output = l.lanes.findIndex((x) => x.output && x.name === name);
-    return [versionRow(output < 0 ? lane : output, v, visible)];
+    if (info.versions.at(-1) === v && info.merged === undefined) return [lineageRow(lane, info, v, visible)];
+    const output = l.lanes.findIndex((x) => x.output && x.version === name);
+    return [versionRow(output < 0 ? lane : output, v, visible, l.keys.get(name))];
   });
 }
 
@@ -57,9 +66,8 @@ export function createBodies(editor: Editor, ui: Pick<UiState, "visibility" | "s
     if (marker > editor.timeline().entries.length) return returnedRows(l, visible);
     return lanesAt(l, marker).map(({ lane, head }) => {
       const info = l.lanes[lane]!;
-      if (info.output) return versionRow(lane, head, visible);
-      const key = `body:${info.name}`;
-      return { lane, name: info.name, version: head.name, kind: info.kind === "body" && head.kind === "body" ? "body" : head.kind, key, visible: visible(key) };
+      if (info.output) return versionRow(lane, head, visible, info.key);
+      return lineageRow(lane, info, head, visible);
     });
   };
   // While something is picked, the view is rolled back to the open feature, and so are the rows;

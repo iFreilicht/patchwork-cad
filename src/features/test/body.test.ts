@@ -65,16 +65,20 @@ test("a join onto an adopted body, and a fillet by its face names, also after it
   expect(currentTrace().find((t) => t.name === "fillet1")!.status).toBe("ok");
 });
 
-test("an array becomes several bodies, named by the declared variables", () => {
+test("an object becomes several bodies, named by the declared variables", () => {
   beginBuild({ lenient: false });
-  const [left, right] = body(() => [plate(100).translate(-60, 0, 0), plate(100).translate(60, 0, 0)], { name: "left", names: ["left", "right"], variable: true });
-  expect([left!.name, right!.name]).toEqual(["left", "right"]);
+  // `const { left, right: other } = body(…)`: the keys pick the bodies, the variables name them.
+  const { left, right } = body(() => ({ left: plate(100).translate(-60, 0, 0), right: plate(100).translate(60, 0, 0), unused: plate(10) }), { name: "left", destructured: { left: "left", right: "other" }, variable: true });
+  expect([left!.name, right!.name]).toEqual(["left", "other"]);
   const [entry] = currentTrace();
   expect(entry!.results).toEqual([left, right]);
   expect(entry!.after).toEqual([left, right]);
   // Each body owns its faces under its own name, which the editor highlights an entry's bodies by (research/12).
   expect(Object.keys(owners(left!))).toEqual(["left"]);
-  expect(owners(right!)["right"]!.faces).toHaveLength(right!.topo.faces.length);
+  expect(owners(right!)["other"]!.faces).toHaveLength(right!.topo.faces.length);
+  // Without a declaration, every key is adopted, named through the call.
+  const all = body({ a: plate(80), b: plate(60) }, { name: "parts" });
+  expect(Object.values(all).map((b) => b.name)).toEqual(["parts.a", "parts.b"]);
   // A bare shape and a library body are adopted as well; a body loses its history.
   const bare = body(plate(80), { name: "bare" });
   const again = body(bare, { name: "again" });
@@ -97,13 +101,14 @@ test("a failing closure fails its entry alone in a lenient build", () => {
   beginBuild({ lenient: false });
   expect(() => body(() => { throw new Error("boom"); })).toThrow("boom");
   beginBuild({ lenient: true });
-  const [a, b] = body((): Shape3D[] => { throw new Error("boom"); }, { name: "a", names: ["a", "b"] });
+  const { a, b } = body((): Record<"a" | "b", Shape3D> => { throw new Error("boom"); }, { name: "a", destructured: { a: "a", b: "b" } });
   expect([a!.topo.faces.length, b!.topo.faces.length, a!.name, b!.name]).toEqual([0, 0, "a", "b"]);
   expect(currentTrace()[0]).toMatchObject({ status: "failed", message: "boom" });
   // Its users fail as broken, and the build goes on.
   const f = fillet({ body: a!, edges: [], radius: 1 }, { name: "fillet1" });
   expect(f).toBe(a);
   expect(currentTrace()[1]).toMatchObject({ name: "fillet1", status: "failed" });
-  // Destructuring one shape is reported.
-  expect(() => (beginBuild({ lenient: false }), body(() => plate(100), { names: ["x", "y"] }))).toThrow("2 bodies are declared, but it made one shape");
+  // Destructuring one shape, or keys it didn't make, is reported.
+  expect(() => (beginBuild({ lenient: false }), body(() => plate(100), { destructured: { x: "x", y: "y" } }))).toThrow("x, y are declared, but it made one shape");
+  expect(() => (beginBuild({ lenient: false }), body(() => ({ x: plate(100) }), { destructured: { x: "x", y: "y" } }))).toThrow("it made no y");
 });

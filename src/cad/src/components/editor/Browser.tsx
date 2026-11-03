@@ -1,6 +1,7 @@
-import { Index, Show } from "solid-js";
+import { createSignal, Index, Show } from "solid-js";
 import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
+import { NameField } from "./NameField.tsx";
 import type { Editor } from "./state.ts";
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
@@ -23,10 +24,14 @@ export const EyeIcon = (props: { open: boolean }) => (
   </svg>
 );
 
-/** One row: the eye and the name, which opens the body's last feature or picks it. */
+/**
+ * One row: the eye and the name, which opens the body's last feature or picks it. F2 or a double
+ * click renames it: a returned body's key, else its variable (research/15, "Output").
+ */
 function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
-  const label = () => (props.row.kind === "sketch" ? props.row.version : props.row.name);
-  const detail = () => (props.row.kind === "body" && props.row.version !== props.row.name ? props.row.version : undefined);
+  const [renaming, setRenaming] = createSignal(false);
+  const label = () => props.row.name;
+  const detail = () => (props.row.version !== props.row.name ? props.row.version : undefined);
   const pickable = () => props.editor.pickingVersion() && props.editor.pickable(props.row.version);
   const select = () => {
     if (props.editor.pickingVersion()) {
@@ -59,12 +64,30 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow }) {
       >
         <EyeIcon open={props.row.visible} />
       </button>
-      <button class="cad-editor__browser-name" title={detail() ? `${label()}, as of ${detail()}` : label()} disabled={props.editor.pickingVersion() && !pickable()} onClick={select} onFocus={hover} onBlur={() => props.editor.setHoveredLane(undefined)}>
-        <span>{label()}</span>
-        <Show when={detail()}>
-          <span class="cad-editor__muted">{detail()}</span>
-        </Show>
-      </button>
+      <Show
+        when={!renaming()}
+        fallback={<NameField from={label()} rename={(to) => props.editor.renameBody(props.row.name, props.row.output, to)} onNotice={props.editor.setNotice} onDone={() => setRenaming(false)} />}
+      >
+        <button
+          class="cad-editor__browser-name"
+          title={detail() ? `${label()}, as of ${detail()}` : label()}
+          disabled={props.editor.pickingVersion() && !pickable()}
+          onClick={select}
+          onDblClick={() => !props.editor.pickingVersion() && setRenaming(true)}
+          onKeyDown={(event) => {
+            if (event.key !== "F2" || props.editor.pickingVersion()) return;
+            event.preventDefault();
+            setRenaming(true);
+          }}
+          onFocus={hover}
+          onBlur={() => props.editor.setHoveredLane(undefined)}
+        >
+          <span>{label()}</span>
+          <Show when={detail()}>
+            <span class="cad-editor__muted">{detail()}</span>
+          </Show>
+        </button>
+      </Show>
     </li>
   );
 }
@@ -109,11 +132,45 @@ export function Browser(props: { editor: Editor; bodies: Bodies }) {
 }
 
 /**
+ * A returned version's chip: its key, and its variable if that differs. F2 or a double click on the
+ * key renames it; × makes the version private.
+ */
+function OutputChip(props: { editor: Editor; output: string; name: string }) {
+  const [renaming, setRenaming] = createSignal(false);
+  return (
+    <span class="cad-editor__version" data-kind={props.editor.lanes()?.versions.get(props.name)?.kind ?? "body"} data-key={props.output} title={props.output === props.name ? props.output : `${props.output}: ${props.name}`}>
+      <Show
+        when={!renaming()}
+        fallback={<NameField from={props.output} rename={(to) => props.editor.renameOutput(props.output, to)} onNotice={props.editor.setNotice} onDone={() => setRenaming(false)} />}
+      >
+        <code
+          tabindex="0"
+          aria-label={`rename ${props.output}`}
+          onDblClick={() => setRenaming(true)}
+          onKeyDown={(event) => {
+            if (event.key !== "F2") return;
+            event.preventDefault();
+            setRenaming(true);
+          }}
+        >
+          {props.output}
+        </code>
+        <Show when={props.output !== props.name}>
+          <span class="cad-editor__muted">{props.name}</span>
+        </Show>
+      </Show>
+      <button class="cad-editor__link" aria-label={`remove ${props.output}`} onClick={() => props.editor.setOutput(props.name, false)}>
+        ×
+      </button>
+    </span>
+  );
+}
+
+/**
  * The return entry's dialog (research/15, "Output"): what main returns, a chip per name, filled by
  * picking any body or sketch in the view, the browser or the timeline.
  */
 export function ResultDialog(props: { editor: Editor; onClose: () => void; onEditCode: () => void }) {
-  const returned = () => [...(props.editor.lanes()?.returned ?? [])];
   const editable = () => props.editor.returnEditable();
   const code = () => {
     const span = props.editor.timeline().returned;
@@ -138,15 +195,8 @@ export function ResultDialog(props: { editor: Editor; onClose: () => void; onEdi
               </span>
             }
           >
-            <Index each={returned()} fallback={<span class="cad-editor__muted">nothing</span>}>
-              {(name) => (
-                <span class="cad-editor__version" data-kind={props.editor.lanes()?.versions.get(name())?.kind ?? "body"} title={name()}>
-                  <code>{name()}</code>
-                  <button class="cad-editor__link" aria-label={`remove ${name()}`} onClick={() => props.editor.setOutput(name(), false)}>
-                    ×
-                  </button>
-                </span>
-              )}
+            <Index each={props.editor.outputs()} fallback={<span class="cad-editor__muted">nothing</span>}>
+              {(output) => <OutputChip editor={props.editor} output={output().key} name={output().name} />}
             </Index>
           </Show>
           <PickButton editor={props.editor} param="return" kind="version" multi disabled={!editable()} label="Select" />

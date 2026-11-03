@@ -11,6 +11,7 @@ import { entryOf } from "../../model/comments.ts";
 import markerSvg from "../../assets/timeline-marker.svg?raw";
 import { lanesHeight, type Columns, type LaneTarget } from "./laneGeometry.ts";
 import { ReturnGlyph, TimelineLanes, type NodeData } from "./TimelineLanes.tsx";
+import { NameField } from "./NameField.tsx";
 
 // U+FE0E asks for the text form of each symbol: browsers may draw some as emoji, which ignore CSS colors.
 const GLYPHS: Record<string, string> = { sketch: "✎\uFE0E", extrude: "⬆\uFE0E", fillet: "◜\uFE0E", chamfer: "◸\uFE0E", combine: "⊕\uFE0E", move: "✥\uFE0E", body: "◆\uFE0E" };
@@ -843,33 +844,6 @@ function Menu(props: { items: MenuItem[]; label: string; at: { x: number; y: num
 }
 
 /** Renames a variable of an entry in place; Enter renames, Escape or leaving the field doesn't. */
-function RenameField(props: { editor: Editor; index: number; from: string; onDone: () => void }) {
-  let busy = false;
-  return (
-    <input
-      class="cad-editor__rename"
-      aria-label={`New name for ${props.from}`}
-      value={props.from}
-      spellcheck={false}
-      style={{ order: ORDER.entry(props.index) }}
-      ref={(el) =>
-        queueMicrotask(() => {
-          el.focus();
-          el.select();
-        })
-      }
-      onKeyDown={(event) => {
-        if (event.key === "Escape") return props.onDone();
-        if (event.key !== "Enter" || busy) return;
-        busy = true;
-        const to = event.currentTarget.value.trim();
-        void props.editor.rename(props.index, props.from, to).then((why) => {
-          busy = false;
-          props.editor.setNotice(why);
-          if (!why) props.onDone();
-        });
-      }}
-      onBlur={() => !busy && props.onDone()}
-    />
-  );
-}
+const RenameField = (props: { editor: Editor; index: number; from: string; onDone: () => void }) => (
+  <NameField from={props.from} rename={(to) => props.editor.rename(props.index, props.from, to)} onNotice={props.editor.setNotice} onDone={props.onDone} style={{ order: ORDER.entry(props.index) }} />
+);

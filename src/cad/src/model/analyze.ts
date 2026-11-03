@@ -1,4 +1,4 @@
-import { parse, type AnyNode, type CallExpression, type Expression, type ModuleDeclaration, type Program, type Statement } from "acorn";
+import { parse, type AnyNode, type AssignmentProperty, type CallExpression, type Expression, type ModuleDeclaration, type ObjectPattern, type Program, type Property, type RestElement, type SpreadElement, type Statement } from "acorn";
 import { isFeatureType, type FeatureType } from "@patchwork-cad/features/schema";
 
 /** The module models import features from. */
@@ -35,11 +35,11 @@ export interface FeatureCall {
   variable: string | undefined;
   /**
    * All variables the call initializes: `[variable]`, or the names of a destructured result
-   * (`const [left, right] = body(…)`) under the same conditions as `variable`.
+   * (`const { base, lid: top } = body(…)`) under the same conditions as `variable`.
    */
   variables: string[];
-  /** Whether the result is destructured as an array, even of one name. */
-  destructured: boolean;
+  /** The keys a destructured result is read by, one per variable (`["base", "lid"]`); undefined if it isn't destructured. */
+  keys: string[] | undefined;
   /** The statement of `main` (or the module) that contains the call. */
   statement: Statement | ModuleDeclaration | undefined;
 }
@@ -105,6 +105,50 @@ export function analyze(source: string): Analysis {
   return { program, imports, main, calls };
 }
 
+/** The key of a property that isn't computed: `a` or `"a"` in `{ a: x }`. */
+export function propertyKey(p: Property | SpreadElement | AssignmentProperty | RestElement): string | undefined {
+  if (p.type !== "Property" || p.computed) return undefined;
+  return p.key.type === "Identifier" ? p.key.name : p.key.type === "Literal" && typeof p.key.value === "string" ? p.key.value : undefined;
+}
+
+/** `{ a, b: c }` as keys and the identifiers they hold, if every property is one such pair: an object, or a destructuring pattern. */
+export function keyedNames(properties: readonly (Property | SpreadElement | AssignmentProperty | RestElement)[]): { key: string; name: string; span: Span }[] | undefined {
+  const pairs = properties.map((p) => {
+    const key = propertyKey(p);
+    return key !== undefined && p.type === "Property" && p.value.type === "Identifier" ? { key, name: p.value.name, span: { start: p.value.start, end: p.value.end } } : undefined;
+  });
+  return pairs.every((p) => p !== undefined) ? (pairs as { key: string; name: string; span: Span }[]) : undefined;
+}
+
+/** `{ base, lid: top }` as keys and variables. */
+function destructuring(pattern: ObjectPattern): { key: string; name: string }[] | undefined {
+  const pairs = keyedNames(pattern.properties);
+  return pairs && pairs.length > 0 ? pairs : undefined;
+}
+
+/**
+ * One thing `main` returns (research/15, "Output"): a version, by its variable, under its key. In
+ * `return x` or `return [a, b]`, as in `return { x }`, the key is the variable's name.
+ */
+export interface Output {
+  key: string;
+  name: string;
+  /** The returned identifier. */
+  span: Span;
+}
+
+/** What `main` returns, if it is names: an object of them (`return { plate: notched, lid }`), one, or a list of them. */
+export function returnedOutputs(analysis: Pick<Analysis, "main">): { node: Expression; outputs: Output[] } | undefined {
+  const statement = analysis.main?.statements.at(-1);
+  if (statement?.type !== "ReturnStatement" || !statement.argument) return undefined;
+  const arg = statement.argument;
+  const span = (n: AnyNode) => ({ start: n.start, end: n.end });
+  if (arg.type === "Identifier") return { node: arg, outputs: [{ key: arg.name, name: arg.name, span: span(arg) }] };
+  if (arg.type === "ArrayExpression" && arg.elements.every((e) => e?.type === "Identifier")) return { node: arg, outputs: arg.elements.map((e) => ({ key: (e as { name: string }).name, name: (e as { name: string }).name, span: span(e!) })) };
+  const outputs = arg.type === "ObjectExpression" ? keyedNames(arg.properties) : undefined;
+  return outputs ? { node: arg, outputs } : undefined;
+}
+
 function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNode[], mainFn: FunctionNode | undefined, program: Program): FeatureCall {
   const first = call.arguments[0];
   const object = first?.type === "ObjectExpression" ? first : undefined;
@@ -123,12 +167,8 @@ function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNod
   const parent = ancestors[ancestors.length - 1];
   const declaration = ancestors[ancestors.length - 2];
   const declared = inScope && !loop && parent?.type === "VariableDeclarator" && parent.init === call && declaration?.type === "VariableDeclaration" && declaration.kind === "const" ? parent.id : undefined;
-  const variables =
-    declared?.type === "Identifier"
-      ? [declared.name]
-      : declared?.type === "ArrayPattern" && declared.elements.length > 0 && declared.elements.every((e) => e?.type === "Identifier")
-        ? declared.elements.map((e) => (e as { name: string }).name)
-        : [];
+  const pattern = declared?.type === "ObjectPattern" ? destructuring(declared) : undefined;
+  const variables = declared?.type === "Identifier" ? [declared.name] : (pattern?.map((p) => p.name) ?? []);
   const variable = variables[0];
 
   const inMain = mainFn !== undefined && mainFn.start <= call.start && call.end <= mainFn.end;
@@ -144,7 +184,7 @@ function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNod
     object: object ? { start: object.start, end: object.end } : undefined,
     variable,
     variables,
-    destructured: declared?.type === "ArrayPattern" && variables.length > 0,
+    keys: pattern?.map((p) => p.key),
     statement,
   };
 }

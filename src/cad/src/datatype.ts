@@ -10,7 +10,7 @@ export default function main({ width, depth, height, hole }) {
   const sketch2 = sketch({ plane: plane("XY"), profile: circle({ center: [width / 2, depth / 2], radius: hole / 2 }) });
   const bore = extrude({ sketch: sketch2, operation: "cut", target: plate, extent: "through" });
   const fillet1 = fillet({ body: bore, edges: [edge(plate.end, bore.side.c)], radius: 1.5 });
-  return fillet1;
+  return { plate: fillet1 };
 }
 `;
 

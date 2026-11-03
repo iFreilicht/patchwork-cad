@@ -17,7 +17,7 @@ export default function main() {
   const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [60, 40] }) });
   const extrude1 = extrude({ sketch: sketch1, distance: 8 });
   const move1 = move({ body: extrude1, z: 30 });
-  return [extrude1, move1];
+  return { plate: extrude1, lid: move1 };
 }
 `;
 
@@ -65,7 +65,7 @@ test("a chamfer on a copy works on the copy, and leaves the original and the ret
   await pickNear(page, "edge", [60, 20, 38], "move1");
   await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: move1, edges: \[edge\(move1\.extrude1\.(end|side\.\w+), move1\.extrude1\.(end|side\.\w+)\)\], distance: 1 \}\)/);
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
-  expect(await returned(page)).toBe("[extrude1, chamfer1]");
+  expect(await returned(page)).toBe("{ plate: extrude1, lid: chamfer1 }");
   await expect(editorView(page)).toHaveAttribute("data-state", "ready");
   if (shots) await page.screenshot({ path: `${shots}/copies-chamfer.png` });
   // Picking it again takes it out, as for any edge.
@@ -92,7 +92,7 @@ test("renaming the copied feature to a property of bodies reaches it through of(
   if (!a) throw new Error("users(1) returned no user");
   const { page } = a;
   await open(page);
-  await setModelSource(page, (await modelSource(page)).replace("return [extrude1, move1];", "const chamfer1 = chamfer({ body: move1, edges: [edge(move1.extrude1.end, move1.extrude1.side.right)], distance: 1 });\n  return [extrude1, chamfer1];").replace("move }", "move, chamfer, edge }"));
+  await setModelSource(page, (await modelSource(page)).replace("return { plate: extrude1, lid: move1 };", "const chamfer1 = chamfer({ body: move1, edges: [edge(move1.extrude1.end, move1.extrude1.side.right)], distance: 1 });\n  return { plate: extrude1, lid: chamfer1 };").replace("move }", "move, chamfer, edge }"));
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
   const rename = async (from: string, to: string) => {
     await timelineEntry(page, from).focus();
@@ -126,7 +126,7 @@ test("the edges decide a chamfer's body, one per feature, until they are removed
   await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: extrude1, edges: \[edge\(extrude1\.\S+, extrude1\.\S+\)\]/);
   await expect(on()).toHaveText("extrude1");
   // As if it had been inserted on extrude1: move1, which it was inserted on, is back in the result, and extrude1 isn't, beside it.
-  expect(await returned(page)).toBe("[chamfer1, move1]");
+  expect(await returned(page)).toBe("{ plate: chamfer1, lid: move1 }");
   // Now only extrude1's edges can be picked: the copy fades and takes no clicks.
   await expect.poll(faded).toBe("move1");
   const copyEdges = (await entities(page, "edge")).filter((e) => e.body === "move1");
@@ -139,7 +139,7 @@ test("the edges decide a chamfer's body, one per feature, until they are removed
   await pickNear(page, "edge", [60, 20, 38], "move1");
   await expect.poll(() => modelSource(page)).toMatch(/chamfer\(\{ body: move1, edges: \[edge\(move1\.extrude1\.\S+, move1\.extrude1\.\S+\)\]/);
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok");
-  expect(await returned(page)).toBe("[extrude1, chamfer1]");
+  expect(await returned(page)).toBe("{ plate: extrude1, lid: chamfer1 }");
   await dialog(page).getByRole("button", { name: "Done selecting" }).click();
 
   // A sketch on a face works on that face's body; picking another face moves it there.

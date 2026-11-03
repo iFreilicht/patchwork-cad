@@ -13,7 +13,7 @@ const cut_plate = plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));
 const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) });
 const extrude1 = extrude({ sketch: sketch1, distance: 20, operation: "new" });
 const other_plate = drawRoundedRectangle(depth, width, 6).sketchOnPlane().extrude(-height);
-return [cut_plate, extrude1, other_plate];
+return { cut_plate, extrude1, other_plate };
 ```
 
 - **A shape is not a target.** `extrude({ …, operation: "join", target: cut_plate })` fails: [`features.ts`](../src/features/src/features.ts) checks `target instanceof Body`. The failing extrude has no input body to pass through, so it gives an empty body in the editor's lenient builds, which fails it and its users alone.
@@ -37,21 +37,21 @@ const cut_plate = body(() => {
   const bore = drawCircle(hole / 2).sketchOnPlane().extrude(height);
   return plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));
 });
-const [left, right] = body(() => [a, b]);
+const { left, right: other } = body(() => ({ left: a, right: b }));
 const imported = body(shape);
 ```
 
-- **One function, the same convention as `main`:** the closure (or a bare shape, or an array of them) returns one shape or an array of shapes, and `body` returns one body or an array of bodies. Several bodies are destructured into top-level names.
-- **Composition:** a model's `main` is such a function, so `const [base, lid] = body(() => box.default(box.defaultParams))` brings another model's bodies in (imports: [02](02-model-storage.md#verdict-imports-in-code)).
-- **A black box:** the closure is opaque code. Its intermediates (`plate`, `bore`) stay local, so only the adopted bodies are top-level names, and the question of what replicad code consumed doesn't arise. Renaming a body is renaming its name in the declaration.
+- **One function, the same convention as `main`:** the closure (or a bare shape, or an object of them) returns one shape or an object of shapes by name ([15](15-bodies.md#output)), and `body` returns one body or an object of bodies. Several bodies are destructured by key into top-level names; destructured, it adopts only the declared keys, and a declared key that the closure didn't make fails the entry (`it made no right`).
+- **Composition:** a model's `main` is such a function, so `const { plate, lid } = body(() => m4.default(m4.defaultParams))` brings another model's bodies in by their output names (imports: [02](02-model-storage.md#verdict-imports-in-code)).
+- **A black box:** the closure is opaque code. Its intermediates (`plate`, `bore`) stay local, so only the adopted bodies are top-level names, and the question of what replicad code consumed doesn't arise. Renaming a body is renaming its name in the declaration; a destructured one keeps the key it is read by, `{ left: base }`, written as shorthand again where the name becomes the key.
 - **A feature like the others:** it registers its bodies as live, so rollback shows them ([07](07-poc-modelling-ui.md#the-timeline-marker)), and it is traced with its status and time. An exception in the closure fails this entry alone in the editor's lenient builds: it gives empty bodies, as many as are declared, and features using them fail. Run directly, it throws. Being a function, the closure can later be skipped when it is rolled back.
 - **Names are geometric.** An adopted body has no history. Each face is named by its centroid at adoption (`cut_plate.faceAt([0, 0, 12])`), each edge by its adjacent faces (`edge(cut_plate.faceAt(…), cut_plate.faceAt(…))`), so a picked edge needs no name of its own. A `faceAt` resolves to the adopted face nearest to it if that one is clearly the nearest (the next one at least twice as far); otherwise it reports itself as ambiguous, with the nearest as a suggestion. So references survive changes of the code that move faces less than they are apart; this is the weakest strategy of the naming benchmark ([03](03-topological-naming.md)), and the code shows where it applies. Faces with the same centroid, e.g. two concentric cylinders, get the same name.
-- **Timeline:** one entry per `body()` statement, with its names (`◆ left, right`): the bodies are made at once. Each body starts its own chain of bodies ([07](07-poc-modelling-ui.md#reordering)), and body choices in forms list them separately. The tool passes the destructured names to `body()`, which names its bodies by them. [`deps.ts`](../src/cad/src/model/deps.ts) resolves names by scope, so a closure's own variables are not the model's.
+- **Timeline:** one entry per `body()` statement, with its names (`◆ left, right`): the bodies are made at once. Each body starts its own chain of bodies ([07](07-poc-modelling-ui.md#reordering)), and body choices in forms list them separately. The tool passes the destructured keys and names to `body()` (`destructured: { left: "left", right: "other" }`), which names its bodies by them; without it, a body is named through the call, `body#1.left`. [`deps.ts`](../src/cad/src/model/deps.ts) resolves names by scope, so a closure's own variables are not the model's.
 - **No dialog:** the code can't be edited in a form. Selecting the entry opens the code pane at the closure, as for a Custom Script; its status is in the entry's title and the status bar; rename and delete are in the [context menu](#context-menu).
 
 ### Wrap in `body()`
 
-An editor action that turns a Custom Script into a `body()` entry. The deps graph knows which names the script declares and which of them later entries use: the script becomes the closure as it is, and the names used later become its declaration and its return value. Whether they hold shapes shows only when the code runs, so a trial build without meshing decides, as for moving a Custom Script ([07](07-poc-modelling-ui.md#reordering)). It is refused where a variable of the model is named `body` (M3's), which would hide the function. The action is offered in two places:
+An editor action that turns a Custom Script into a `body()` entry. The deps graph knows which names the script declares and which of them later entries use: the script becomes the closure as it is, and the names used later become its declaration and its return value: `const cut_plate = body(() => { …; return cut_plate; })` for one, `const { a, b } = body(() => { …; return { a, b }; })` for several. Whether they hold shapes shows only when the code runs, so a trial build without meshing decides, as for moving a Custom Script ([07](07-poc-modelling-ui.md#reordering)). It is refused where a variable of the model is named `body` (M3's), which would hide the function. The action is offered in two places:
 
 - the context menu of a Custom Script entry, and
 - the error that needs it: a feature's dialog shows "Wrap cut_plate in body()" next to "target: a replicad shape …".

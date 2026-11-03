@@ -11,7 +11,7 @@ import { beginBuild, currentTrace } from "@patchwork-cad/features/runtime";
 import { loadOC } from "../../features/test/oc.ts";
 import { prepare } from "../src/kernel/prepare.ts";
 import { analyze } from "../src/model/analyze.ts";
-import { deleteScript, rename, unwrapBody, wrapInBody, type Refactoring } from "../src/model/refactor.ts";
+import { deleteScript, rename, renameOutput, unwrapBody, wrapInBody, type Refactoring } from "../src/model/refactor.ts";
 import { apply, deleteFeature } from "../src/model/splice.ts";
 import { timeline, type FeatureEntry } from "../src/model/timeline.ts";
 import type { CadModelDoc } from "../src/types.ts";
@@ -29,7 +29,7 @@ export default function main({ width, depth, height, hole }) {
   const cut_plate = plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));
   const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) });
   const extrude1 = extrude({ sketch: sketch1, distance: 20, operation: "join", target: cut_plate });
-  return [cut_plate, extrude1];
+  return { cut_plate, extrude1 };
 }
 `;
 
@@ -56,11 +56,12 @@ function run(source: string) {
 }
 
 test("a destructured body() is one timeline entry with all its names, which prepare passes on", () => {
-  const source = plate.replace('const cut_plate = plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));', "const [cut_plate] = body(() => [plate.cut(bore)]);").replace("extrude } from", "extrude, body } from");
-  expect(names(source)).toEqual(["script", "cut_plate", "sketch1", "extrude1"]);
-  expect(prepare(source)).toContain(`{ name: "cut_plate", line: 9, variable: true, names: ["cut_plate"] })`);
-  const { trace } = run(source);
-  expect(trace.map((t) => [t.name, t.status])).toEqual([["cut_plate", "ok"], ["sketch1", "ok"], ["extrude1", "ok"]]);
+  const source = plate.replace('const cut_plate = plate.cut(bore).fillet(1.5, (e) => e.inPlane("XY", height));', "const { cut, bore: drill } = body(() => ({ cut: plate.cut(bore), bore }));").replace("extrude } from", "extrude, body } from").replaceAll("cut_plate", "cut");
+  expect(names(source)).toEqual(["script", "cut,drill", "sketch1", "extrude1"]);
+  expect(prepare(source)).toContain(`{ name: "cut", line: 9, variable: true, destructured: {"cut":"cut","bore":"drill"} })`);
+  const { trace, result } = run(source);
+  expect(trace.map((t) => [t.name, t.status, t.results.map((b) => b.name).join()])).toEqual([["cut", "ok", "cut,drill"], ["sketch1", "ok", ""], ["extrude1", "ok", "extrude1"]]);
+  expect(Object.keys(result as object)).toEqual(["cut", "extrude1"]);
 });
 
 test("wrapping the script in body() lets the join use it", () => {
@@ -93,30 +94,30 @@ test("unwrapping a closure that ends in an expression, and refusing clashing nam
   const source = `import { body } from "@patchwork-cad/features";
 import { drawCircle } from "replicad";
 export default function main() {
-  const [a, b] = body(() => {
+  const { a, b } = body(() => {
     const disc = drawCircle(5).sketchOnPlane().extrude(1);
-    return [disc, disc.translate(20, 0, 0)];
+    return { a: disc, b: disc.translate(20, 0, 0) };
   });
-  return [a, b];
+  return { a, b };
 }
 `;
   const tl = tlOf(source);
   expect(names(source)).toEqual(["a,b"]);
   const unwrapped = applied(source, unwrapBody(source, analyze(source), tl, 0));
   expect(unwrapped).toContain(`  const disc = drawCircle(5).sketchOnPlane().extrude(1);
-  const [a, b] = [disc, disc.translate(20, 0, 0)];
-  return [a, b];`);
-  const clashing = source.replace("return [a, b];\n}", "const disc = 1;\n  return [a, b];\n}");
+  const { a, b } = { a: disc, b: disc.translate(20, 0, 0) };
+  return { a, b };`);
+  const clashing = source.replace("return { a, b };\n}", "const disc = 1;\n  return { a, b };\n}");
   expect(unwrapBody(clashing, analyze(clashing), tlOf(clashing), 0)).toEqual({ error: "its disc would clash with the model's" });
 });
 
 test("wrapping is refused where body would be hidden or nothing escapes", () => {
   const m3 = plate.replace("const plate =", "let body = 1;\n  const plate =");
   expect(wrapInBody(m3, analyze(m3), tlOf(m3), 0)).toEqual({ error: "the model has its own variable named body" });
-  const unusedScript = plate.replace("target: cut_plate", "target: undefined").replace("return [cut_plate, extrude1];", "return extrude1;");
+  const unusedScript = plate.replace("target: cut_plate", "target: undefined").replace("return { cut_plate, extrude1 };", "return { extrude1 };");
   expect(wrapInBody(unusedScript, analyze(unusedScript), tlOf(unusedScript), 0)).toEqual({ error: "nothing it declares is used later" });
   // A property named body (fillet({ body })) doesn't count as a variable.
-  const withProp = plate.replace("return [cut_plate, extrude1];", "const x = { body: 1 };\n  return [cut_plate, extrude1];");
+  const withProp = plate.replace("return { cut_plate, extrude1 };", "const x = { body: 1 };\n  return { cut_plate, extrude1 };");
   expect("edits" in wrapInBody(withProp, analyze(withProp), tlOf(withProp), 0)).toBe(true);
 });
 
@@ -128,7 +129,8 @@ test("renaming a body updates its uses, shorthand properties and ref lookups", (
   expect(renamed).toContain("const cut_plate = plate.cut(bore)");
   expect(renamed).toContain("return cut_plate;\n  });");
   expect(renamed).toContain('target: base });');
-  expect(renamed).toContain("return [base, extrude1];");
+  // The return keeps its key, so callers still get the body as cut_plate.
+  expect(renamed).toContain("return { cut_plate: base, extrude1 };");
   run(renamed);
   const tl = tlOf(renamed);
   expect(rename(analyze(renamed), tl, 0, "base", "sketch1")).toEqual({ error: "sketch1 is already used in the model" });
@@ -147,19 +149,19 @@ test("deleting a body() takes it out of the result; a script is deleted only if 
 import { drawCircle } from "replicad";
 export default function main() {
   const r = 5;
-  const [a, b] = body(() => [drawCircle(r).sketchOnPlane().extrude(1), drawCircle(r).sketchOnPlane().extrude(2)]);
+  const { a, b } = body(() => ({ a: drawCircle(r).sketchOnPlane().extrude(1), b: drawCircle(r).sketchOnPlane().extrude(2) }));
   const c = body(drawCircle(1).sketchOnPlane().extrude(3));
-  return [a, c, b];
+  return { a, c, b };
 }
 `;
   const tl = tlOf(source);
   const entry = tl.entries[1] as FeatureEntry;
   const out = applied(source, { edits: deleteFeature(source, analyze(source), entry) });
-  expect(out).toContain("return c;");
-  expect(out).not.toContain("const [a, b]");
+  expect(out).toContain("return { c };");
+  expect(out).not.toContain("const { a, b }");
   expect(deleteScript(source, analyze(source), tl, 0)).toEqual({ error: "later code uses its r" });
   // A feature that uses a deleted body without an input gets a ref lookup, which fails it alone.
-  const used = source.replace("return [a, c, b];", "const f = fillet({ body: c, edges: [], radius: 1 });\n  return [a, f, b];");
+  const used = source.replace("return { a, c, b };", "const f = fillet({ body: c, edges: [], radius: 1 });\n  return { a, f, b };");
   const withoutC = applied(used, { edits: deleteFeature(used, analyze(used), tlOf(used).entries[2] as FeatureEntry) });
   expect(withoutC).toContain("fillet({ body: ref.c, edges: [], radius: 1 })");
   const unused = source.replace("drawCircle(r)", "drawCircle(5)").replace("drawCircle(r)", "drawCircle(5)");
@@ -196,4 +198,55 @@ test("renaming a copied feature renames it in the copies' references, through of
   const renamed = applied(plain, rename(analyze(plain), tlOf(plain), 2, "lid", "of"));
   expect(renamed).toContain('edges: [edge(lid2.of("of").plate.end, lid2.of("of").plate.side.right)]');
   expect(run(renamed).trace.at(-1)).toMatchObject({ name: "chamfer1", status: "ok" });
+});
+
+test("wrapping several names destructures them by key, and unwrapping gives the code back", () => {
+  const source = plate.replace("target: cut_plate", "target: plate").replace("{ cut_plate, extrude1 }", "{ cut_plate, extrude1, plate }");
+  const script = tlOf(source).entries[0]!;
+  expect(script.kind).toBe("script");
+  const wrapped = applied(source, wrapInBody(source, analyze(source), tlOf(source), 0));
+  expect(wrapped).toContain("  const { plate, cut_plate } = body(() => {");
+  expect(wrapped).toContain("    return { plate, cut_plate };\n  });");
+  expect(names(wrapped)).toEqual(["plate,cut_plate", "sketch1", "extrude1"]);
+  expect(run(wrapped).trace.map((t) => [t.name, t.status])).toEqual([["plate", "ok"], ["sketch1", "ok"], ["extrude1", "ok"]]);
+  const unused = wrapped.replace('operation: "join", target: plate', 'operation: "new"');
+  expect(applied(unused, unwrapBody(unused, analyze(unused), tlOf(unused), 0))).toBe(source.replace('operation: "join", target: plate', 'operation: "new"').replace("extrude } from", "extrude, body } from"));
+});
+
+test("renaming a destructured body keeps the key it is read by, as shorthand where they are the same", () => {
+  const source = `import { body, fillet } from "@patchwork-cad/features";
+export default function main() {
+  const { base, lid } = body(() => other());
+  const f = fillet({ body: lid, edges: [], radius: 1 });
+  return { lid: f, base };
+}
+`;
+  const renamed = applied(source, rename(analyze(source), tlOf(source), 0, "lid", "top"));
+  expect(renamed).toContain("const { base, lid: top } = body(() => other());");
+  expect(renamed).toContain("fillet({ body: top,");
+  // In the return, the key stays, too: `{ base: plate }`, and a key that is the new name becomes shorthand.
+  const again = applied(renamed, rename(analyze(renamed), tlOf(renamed), 0, "base", "plate"));
+  expect(again).toContain("const { base: plate, lid: top } = body(() => other());");
+  expect(again).toContain("return { lid: f, base: plate };");
+  const back = applied(again, rename(analyze(again), tlOf(again), 0, "plate", "base"));
+  expect(back).toContain("const { base, lid: top } = body(() => other());");
+  expect(back).toContain("return { lid: f, base };");
+  const f = applied(back, rename(analyze(back), tlOf(back), 1, "f", "lid"));
+  expect(f).toContain("return { lid, base };");
+});
+
+test("renaming an output renames its key, not its variable", () => {
+  const source = plate;
+  const out = applied(source, renameOutput(analyze(source), "cut_plate", "plate_with_bore"));
+  expect(out).toContain("return { plate_with_bore: cut_plate, extrude1 };");
+  // Renaming it back to its variable's name makes it shorthand again.
+  expect(applied(out, renameOutput(analyze(out), "plate_with_bore", "cut_plate"))).toBe(source);
+  // A return that isn't an object yet becomes one.
+  const list = source.replace("{ cut_plate, extrude1 }", "[cut_plate, extrude1]");
+  expect(applied(list, renameOutput(analyze(list), "extrude1", "joined"))).toContain("return { cut_plate, joined: extrude1 };");
+  expect(renameOutput(analyze(source), "extrude1", "cut_plate")).toEqual({ error: "cut_plate is returned already" });
+  expect(renameOutput(analyze(source), "extrude1", "1x")).toEqual({ error: "1x is not a valid name" });
+  expect(renameOutput(analyze(source), "nothing", "x")).toEqual({ error: "nothing is returned as nothing" });
+  const odd = source.replace("{ cut_plate, extrude1 }", "{ ...parts }");
+  expect(renameOutput(analyze(odd), "extrude1", "x")).toEqual({ error: "the return isn't names" });
 });

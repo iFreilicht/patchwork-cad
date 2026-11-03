@@ -276,8 +276,11 @@ export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: numb
 
 type Adoptable = AnyShape | Body;
 
-/** What `body()` adopts: a shape, a body, several of them, or a function that returns those, like a model's `main`. */
-export type BodySource = Adoptable | readonly Adoptable[] | (() => Adoptable | readonly Adoptable[]);
+/** What `body()` adopts: a shape, a body, an object of them by name, or a function that returns those, like a model's `main`. */
+export type BodySource = Adoptable | Readonly<Record<string, Adoptable>> | (() => Adoptable | Readonly<Record<string, Adoptable>>);
+
+/** Whether `value` is an object of shapes by name, like a model's `return { base, lid }`, rather than a shape. */
+const isNamed = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype;
 
 /**
  * A body from a shape without history. Each face is named by its centroid (`cut_plate.faceAt([…])`),
@@ -295,27 +298,34 @@ function adoptOne(value: unknown, name: string): Body {
   return new Body(name, withTopology(shape, faces, hist));
 }
 
-const adopt = defineFeature<{ source: BodySource }, Body | Body[]>({
+const adopt = defineFeature<{ source: BodySource }, Body | Record<string, Body>>({
   type: "body",
   ...schemas.body,
   // A failing function makes empty bodies, as many as are declared, so that only it and its users fail.
-  fallback: (_, name, _message, meta) => (meta.names ? meta.names.map((n) => emptyBody(n)) : emptyBody(name)),
+  fallback: (_, name, _message, meta) => (meta.destructured ? Object.fromEntries(Object.entries(meta.destructured).map(([k, n]) => [k, emptyBody(n)])) : emptyBody(name)),
   build({ source }, ctx, meta: FeatureMeta) {
     const value = typeof source === "function" ? source() : source;
-    if (Array.isArray(value)) return value.map((v, i) => adoptOne(v, meta.names?.[i] ?? `${ctx.name}[${i}]`));
-    if (meta.names) throw new FeatureError(`${meta.names.length} bodies are declared, but it made one shape`);
-    return adoptOne(value, ctx.name);
+    if (!isNamed(value)) {
+      const declared = Object.keys(meta.destructured ?? {});
+      if (declared.length > 0) throw new FeatureError(`${declared.join(", ")} ${declared.length === 1 ? "is" : "are"} declared, but it made one shape`);
+      return adoptOne(value, ctx.name);
+    }
+    // Destructured, it adopts the declared keys only, as destructuring reads only those.
+    const keys = meta.destructured ? Object.keys(meta.destructured) : Object.keys(value);
+    const missing = keys.filter((k) => !Object.hasOwn(value, k));
+    if (missing.length > 0) throw new FeatureError(`it made no ${missing.join(", ")}`);
+    return Object.fromEntries(keys.map((k) => [k, adoptOne(value[k], meta.destructured?.[k] ?? `${ctx.name}.${k}`)]));
   },
 });
 
 /**
  * Adopts shapes made with replicad as bodies that features can use, e.g.
- * `const cut_plate = body(() => plate.cut(bore))` or `const [left, right] = body(() => [a, b])`
- * (research/11). It returns a body for a shape and an array of bodies for an array, as `main` does.
+ * `const cut_plate = body(() => plate.cut(bore))` or `const { base, lid } = body(() => box.default(box.defaultParams))`
+ * (research/11). It returns a body for a shape and an object of bodies for an object, as `main` does.
  */
 export function body(source: Adoptable | (() => Adoptable), meta?: FeatureMeta): Body;
-export function body(source: readonly Adoptable[] | (() => readonly Adoptable[]), meta?: FeatureMeta): Body[];
-export function body(source: BodySource, meta?: FeatureMeta): Body | Body[];
-export function body(source: BodySource, meta?: FeatureMeta): Body | Body[] {
+export function body<K extends string>(source: Readonly<Record<K, Adoptable>> | (() => Readonly<Record<K, Adoptable>>), meta?: FeatureMeta): Record<K, Body>;
+export function body(source: BodySource, meta?: FeatureMeta): Body | Record<string, Body>;
+export function body(source: BodySource, meta?: FeatureMeta): Body | Record<string, Body> {
   return adopt({ source }, meta);
 }
