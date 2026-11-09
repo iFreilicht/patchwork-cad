@@ -1,6 +1,6 @@
 # Parameters
 
-How a model's parameters are managed in the editor, and how a parametrized model is used elsewhere in Patchwork: customized without editing it, instantiated with named values, embedded, composed or driven by other documents. This is ideation; nothing here is built yet.
+How a model's parameters are managed in the editor, and how a parametrized model is used elsewhere in Patchwork: customized without editing it, kept as named sets of values, embedded, or driven by values from other documents. This is ideation; nothing here is built yet.
 
 ## What exists
 
@@ -28,130 +28,153 @@ The tool never passes parameters: the worker calls `builder.buildShapesFromCode(
 `defaultParams` stays the source of truth, for portability ([02](02-model-storage.md#design-goal-portable-models)) and because replicad's own tools read it. A parameter is two spans: a property of the `defaultParams` literal and a name in `main`'s destructuring. The editor edits both with minimal splices, as forms edit feature arguments:
 
 - **Add:** append `k: v` to the literal and `k` to the pattern.
-- **Rename:** both spans and every use in `main`, with the refactoring that renames bodies ([`refactor.ts`](../src/cad/src/model/refactor.ts)).
+- **Rename:** both spans, its key in [`paramConfig`](#kinds-units-ranges) and every use in `main`, with the refactoring that renames bodies ([`refactor.ts`](../src/cad/src/model/refactor.ts)), and the parameter's values in every [configuration](#configurations-and-named-views-in-the-model-document), in the same change.
 - **Delete:** only when unused, or by inlining its value at every use.
 - **Promote a value:** a context action on a form field (or typing an unknown name, as in Fusion) turns `distance: 20` into `distance: h2` and adds `h2: 20`.
 
 Models that deviate (`main(params)` with `params.w`, a computed `defaultParams`, no destructuring) still build; the panel then lists the values read-only and offers to edit them in code, as the timeline falls back to Custom Script.
 
-### Kinds, units, ranges
-
-A form needs a field kind, and a customizer wants ranges, steps, units, descriptions and groups. Options:
-
-| Option | Example | For | Against |
-|---|---|---|---|
-| **Infer** | `w: 60` flows into `distance` → a length | No syntax; the trace knows which feature parameter each expression feeds ([`ParamSpec`](../src/features/src/schema.ts)) | Only type and unit; a parameter used as both length and count is ambiguous |
-| **Comments**, OpenSCAD-style | `w: 60, // [10:200:5] Width` | Plain JS, ignored when run; known syntax | A grammar inside comments; acorn must keep comments |
-| **A second export** | `export const paramSpecs = { w: { min: 10, max: 200 } }` | Plain data, optional, `defaultParams` unchanged | Two places per parameter, which drift apart |
-| **Library helpers** | `export const params = { w: length(60, { min: 10 }) }` | Typed; reuses the features' schema kinds | `defaultParams` must be derived (`defaultsOf(params)`); replicad's form no longer sees plain values |
-
-Inference plus comments for the rest seems the best fit: a model without annotations still gets a useful panel, and annotations never change what the code does. Booleans become checkboxes and strings text fields; an array, e.g. M3's `ribs: [30]`, a list of number fields.
-
 ### Derived parameters
 
-Fusion's parameters reference each other. An object literal can't (`{ w: 60, d: w * 2 }` is a `ReferenceError`), but a destructuring pattern can:
+Fusion's parameters reference each other. An object literal can't (`{ w: 60, d: w * 2 }` is a `ReferenceError`). Derived parameters are constants at the start of `main`:
 
 ```js
-export default function main({ w = 60, d = w * 2 } = {}) { … }
+export default function main({ w, d, h }) {
+  const r = w / 4;
+  const t = Math.min(h, 3);
+  …
+}
 ```
 
-A derived parameter is then overridable, which Fusion's are not: a customizer sets `d`, or leaves it to follow `w`. The defaults move out of `defaultParams`, though, which replicad's form reads, and a caller spreading `defaultParams` gets no `d`. A middle way keeps independent values in `defaultParams` and derived ones as pattern defaults; the panel shows the derived ones with their expression. Plain `const`s at the top of `main` remain possible but are Custom Script entries, not parameters.
+The editor reads the leading run of `const x = <expression>` statements that call no feature as the derived parameters, instead of a Custom Script entry, and shows them in the parameters entry below the independent ones, with their current values. They are not overridable: a configuration sets independent parameters only, and derived ones follow. Each derived value is one statement with one expression span, so a future expression language replaces only the expression.
+
+- **A `derive` function** (`export const derive = ({ w, h }) => ({ r: w / 4 })`, called by `main` itself because callers pass only `defaultParams`) encapsulates them, but makes the code harder to read and needs machinery to keep `main`'s call to it working.
+- **Destructuring defaults** (`main({ w = 60, d = w * 2 } = {})`) make derived values overridable and tie them to JS's default-value semantics.
+
+### Kinds, units, ranges
+
+A form needs a field kind, and a customizer wants ranges, steps, units, descriptions and groups. They describe which inputs the model accepts, like a function's signature, so they live in the code, where other callers can read them at runtime, e.g. to check values they pass through `body()`. The model exports them as plain data, sparsely, and the editor infers whatever is missing:
+
+```js
+export const defaultParams = { w: 60, d: 40, h: 8 };
+export const paramConfig = { w: { title: "Width", minimum: 10, maximum: 200, multipleOf: 5 }, r: { title: "Corner radius" } };
+```
+
+- **Field names are JSON Schema's** (`title`, `description`, `minimum`, `maximum`, `multipleOf`, `enum`), plus `unit`, so form generators, validators and LLM tooling understand them without our tool.
+- **Absent fields mean no constraint,** as in JSON Schema, so callers read `paramConfig` as it is. Default values stay in `defaultParams` only, not in a `default` field. A kernel-free library function `paramSchema(model)` merges the portable parts into a complete JSON Schema for callers that want one: `type` from each default value, `default` from `defaultParams`, the rest from `paramConfig`.
+- **Inference fills the rest in the editor only:** the trace knows which feature parameter each expression feeds ([`ParamSpec`](../src/features/src/schema.ts)), so `w` in a `distance` is a length, in a `radius` greater than 0. A parameter used as both a length and a count stays a plain number. Inferred values are never written back into the code, where they would go stale when usage changes. A model without `paramConfig` still gets a useful panel.
+- **Units follow from the quantity.** Values are bare numbers: OCCT, replicad and the feature schemas (`kind: "length"`) have no units. The library fixes them, as Fusion's per-design default units do, but for every model: lengths are millimetres and, once features take angles, angles are degrees, which exporters rely on. Values in `defaultParams` and configurations are always in these units. The editor infers a parameter's quantity (length, angle, count) from its use and shows its unit, so `unit` is needed only where that can't work: as a label for quantities that aren't geometry (`"teeth"`, `"%"`), and later for showing a length in another unit (`"in"`), which the panel converts on input and display while the code keeps millimetres. JSON Schema has no unit keyword, and validators ignore unknown keywords, so `unit` costs nothing there.
+- **Derived constants** are described by name, too, for their title and unit; they get no ranges, as they aren't set.
+- **Drift:** a parameter's name is in `defaultParams`, `main`'s pattern and `paramConfig`. The editor's rename changes all three; a rename typed in the code pane leaves a stale key, which the panel flags. A rename in the code editor itself (F2, as in other editors), which the code pane wants anyway, would cover that case, too.
+
+Rejected:
+
+- **Comments**, OpenSCAD-style (`w: 60, // [10:200:5] Width`) or as JSDoc tags on `main`: a grammar inside comments is a DSL ([02](02-model-storage.md#design-goal-portable-models)); JSDoc has no tags for ranges or units, and nothing reads either at runtime.
+- **Library helpers** (`w: length(60, { min: 10 })`, `defaultParams = defaultsOf(params)`): one place per parameter, but every value is wrapped in a call, a replicad-only model needs our library for its parameters, and derived constants would need wrapping too.
+- **A document field** (`cad.params`): lost on export and invisible to other callers, though it describes the model; drifts from the code as `paramConfig` does.
+- **Objects in `defaultParams`** (`w: { value: 60, minimum: 10 }`): breaks every caller and `main`'s arithmetic.
 
 ### The parameters entry
 
-`main`'s signature is the model's input as `return` is its output ([15](15-bodies.md#output)), so the timeline gets a first entry, "Parameters", mirroring the return entry at its end. Its dialog is the panel: name, value expression, inferred kind, uses. Hovering a parameter highlights the features that use it, as dependencies are shown for entries ([07](07-poc-modelling-ui.md#reordering)), and expression fields complete parameter names. A Fusion-style modal is the alternative; a timeline entry keeps the view free while values change.
+`main`'s signature is the model's input as `return` is its output ([15](15-bodies.md#output)), so the timeline gets a first entry, "Parameters", mirroring the return entry at its end. Its dialog is the panel: name, value expression, inferred kind, uses; derived parameters below the independent ones. Hovering a parameter highlights the features that use it, as dependencies are shown for entries ([07](07-poc-modelling-ui.md#reordering)), and expression fields complete parameter names. A Fusion-style modal is the alternative; a timeline entry keeps the view free while values change.
 
 Number fields get scrubbing (drag on the label), which rebuilds on each step. M1 rebuilds in 21 ms in Chromium and 80 ms in Firefox, M3 with three ribs in 41 and 145 ms ([07](07-poc-modelling-ui.md#rebuild-performance)), so scrubbing works for these parts if builds are coalesced to the latest value; large models need the abort button from the [status list](00-status.md#not-started).
 
 ### Trying values without changing the model
 
-A value written to `defaultParams` changes the model for every collaborator. A per-user override, kept in tool storage like the marker ([10](10-view-state.md#storage)), lets one user try `w = 120` while the file keeps 60: the panel shows the override next to the default, the status bar says that the view shows modified parameters, and "Apply" writes it to the code, "Reset" drops it. This is cheap and is also the core of every option below: an override is a set of values that the build passes to `main`.
+A value written to `defaultParams` changes the model for every collaborator. A per-user override, kept in tool storage like the marker ([10](10-view-state.md#storage)), lets one user try `w = 120` while the file keeps 60: the panel shows the override next to the default, the status bar says that the view shows modified parameters, and "Apply" writes it to the code, "Save as configuration" stores it as a [configuration](#configurations-and-named-views-in-the-model-document), "Reset" drops it. A configuration is selected the same way: per user, as UI state, until a proxy document fixes it for an embed.
 
 ### Parameters stress references
 
-Changing a parameter is a fuzzer for topological naming ([03](03-topological-naming.md#recommendation)). Some references carry absolute coordinates, which a changed dimension moves away from: `piece(notch, 1, { near: [49.75, 0, 20] })` in M1, and `faceAt(near)` for adopted bodies, which picks the face "whose centroid was nearest to `near`" ([`refs.ts`](../src/features/src/refs.ts)). A loop parameter (M3's `ribs`) changes which features exist, so `ref.rib0` vanishes when `ribs` is empty. Lenient builds pass a failed feature's input through ([07](07-poc-modelling-ui.md#the-feature-library)), so a variant can look plausible and be wrong. Two consequences: any UI that changes parameters without the editor (a customizer, an embed) must show the build's problems, and a test should sweep M1, M3 and M4 over parameter ranges and classify every broken reference before variants are built on top.
+Changing a parameter is a fuzzer for topological naming ([03](03-topological-naming.md#recommendation)). Some references carry absolute coordinates, which a changed dimension moves away from: `piece(notch, 1, { near: [49.75, 0, 20] })` in M1, and `faceAt(near)` for adopted bodies, which picks the face "whose centroid was nearest to `near`" ([`refs.ts`](../src/features/src/refs.ts)). A loop parameter (M3's `ribs`) changes which features exist, so `ref.rib0` vanishes when `ribs` is empty. Lenient builds pass a failed feature's input through ([07](07-poc-modelling-ui.md#the-feature-library)), so a configuration can look plausible and be wrong. Two consequences: any UI that changes parameters without the editor (a customizer, an embed) must show the build's problems, and a test should sweep M1, M3 and M4 over parameter ranges and classify every broken reference before configurations are built on top.
 
 ## In Patchwork
 
 ### Use cases
 
 1. **Customize:** share a model so others pick values (a box for their drawer) but can't change the geometry.
-2. **Instances:** keep named sets of values, e.g. M3×10 and M4×20 of one bolt, as Onshape configurations do.
-3. **Embed:** show a model with particular values in a note, a canvas or a slide.
-4. **Compose:** use a configured model inside another model, the step towards assemblies.
-5. **Drive:** take values from other documents: a spreadsheet row, a slider card, a shared dimension that several models use (Fusion's global parameters).
-6. **Compare:** see variants side by side.
+2. **Named sets:** keep sets of values, e.g. M3×10 and M4×20 of one bolt, as Onshape configurations do; and named views, as Fusion keeps them in the design.
+3. **Embed:** show a model with a particular set of values, seen from a particular view, in a note, a canvas or a slide.
+4. **Drive:** take values from other documents: a spreadsheet cell, a number in a note, a shared dimension that several models use (Fusion's global parameters).
+5. **Compare:** see configurations side by side.
 
-### A: Variant documents
+Using a configured model inside another model is the step towards assemblies and is out of scope here ([below](#considered)).
 
-A document type like view documents ([10](10-view-state.md#view-documents)): `{ title, model: AutomergeUrl, params: { w: 120 } }`, opened by a customizer tool that shows the parameter panel and the view, nothing else. "Save variant" in the editor or viewer creates one from the current overrides.
+### Building blocks
 
-- **For:** non-destructive; tiny; the model stays one document and the variant follows its changes; the URL can carry heads to pin a version ([02](02-model-storage.md#imports-prior-art)). Covers 1, 3 and 6 directly, and 2 as a set of documents.
-- **Against:** overrides are keyed by name, and renaming a parameter in the model orphans them, because the model doesn't know its variants. The customizer can show orphaned values and offer to map them; the editor could find variants only through a backlink index, which Patchwork doesn't have.
-- **Caveat:** "can't edit anything else" is a UI restriction, not access control: the variant holds the model's URL, and anyone who opens it can open the model in the editor. For read-only sharing, the variant would point at a pinned copy, or Patchwork would need permissions.
+- **Automerge URLs address parts of a document.** A URL carries a path and heads, `automerge:<docId>/<path>#<heads>` ([`AutomergeUrl.ts`](../node_modules/.pnpm/@automerge+automerge-repo@2.6.0-subduction.48/node_modules/@automerge/automerge-repo/src/AutomergeUrl.ts)). Path segments are keys, indices (`@0`), matches (`{"id":"alice"}`) and, last, cursor ranges (`[2@abc-5@def]`) into text ([`parser.ts`](../node_modules/.pnpm/@automerge+automerge-repo@2.6.0-subduction.48/node_modules/@automerge/automerge-repo/src/subdoc-handles/parser.ts)). `repo.find` resolves all of them: "A URL can carry both fixed heads (`#h1|h2`) and a path suffix (`/a/@0/b`). Layer the heads projection first … then scope to the path" ([`Repo.ts`](../node_modules/.pnpm/@automerge+automerge-repo@2.6.0-subduction.48/node_modules/@automerge/automerge-repo/src/Repo.ts)).
+- **Cursors are robust with a fallback.** A cursor range survives edits inside and around it, collapses to `""` when its text is deleted, even if an undo inserts it again, and throws when the whole string is reassigned ([13](13-collaboration.md#anchors-under-edits)). Our own reordering deletes and re-inserts a statement ([`moveEntry`](../src/cad/src/model/splice.ts)), which collapses cursors inside it. A cursor never resolves to the wrong text, though; it resolves or visibly collapses.
+- **Sub-documents have a precedent.** A comment thread lives in the commented document's `@comments`, carries `"@patchwork"?: { type: "comment-thread" }`, and is rendered by its own tool from its sub-document URL: `<patchwork-view doc-url={threadUrl} tool-id="comment-thread">` ([CommentsView.tsx](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/comments-view/src/CommentsView.tsx)). Its datatype exists so that "a thread opened on its own (its `@patchwork.type` is `comment-thread`)" resolves a title and a tool ([index.ts](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/comments-view/src/index.ts)). `<patchwork-view>` passes its `doc-url` to `repo.find` unchanged ([`legacy-impl.ts`](../node_modules/.pnpm/@inkandswitch+patchwork-elements@6.0.3_@automerge+automerge-repo@2.6.0-subduction.48_@i_26a2e581e79e92a2830f32430f224fad/node_modules/@inkandswitch/patchwork-elements/src/legacy-impl.ts)).
+- **No excerpt embedding exists.** Patchwork's `embed` package embeds whole documents with a tool; patchwork-base and patchwork-experiments have no transclusion of a part of a document.
+- **Models can't import documents yet.** [`prepare.ts`](../src/cad/src/kernel/prepare.ts) rejects every static import but replicad and the feature library ("Only … can be imported"), because the model runs from a blob URL and the browser would fetch it. Patchwork's service worker serves any document at `/<encoded automerge URL>/<path>`: a document with `content` as that content with its `mimeType`, e.g. a JS file of Patchwork's `file` datatype, and any other document as JSON ("anything else gets JSON.stringify'd", [`resolve.js`](../node_modules/.pnpm/@inkandswitch+patchwork-filesystem@0.2.13_@automerge+automerge-repo@2.6.0-subduction.48_@automerge+automerge@3.4.1/node_modules/@inkandswitch/patchwork-filesystem/dist/resolve.js)). Paths only walk folder and directory documents, not keys of a document. So a JS file document and a JSON-like data document are both fetchable, but a model document is served as the JSON of `{ title, source, … }`, not as a module, because its code is in `source`. Whether model code reaches the service worker by a dynamic `import()` or `fetch()` is a question for the sandbox ([05](05-sandboxing.md)) and out of scope here: imports are meant to be static and go through our loader.
 
-A variant and a view are both "a model, seen in a particular way", and both open in the viewer. So instead of a second datatype, `cad-model-view` gets an optional `params`, and the viewer a parameter panel that it shows when the view has parameters or the user asks for it. A camera stays optional, too. The customizer can still be its own tool id on the same datatype, built from the viewer and the panel, as the viewer and the editor are two tools of one package ([07](07-poc-modelling-ui.md#two-tools)).
+### Document fields and portability
 
-### B: Named sets in the model
+A model document is a map, and the code is its `source` field ([`CadModelDoc`](../src/cad/src/types.ts)). Data the tool owns can sit next to it in a plain field. Keys starting with `@` are left to metadata that any document can carry, whatever its type: Patchwork's code uses only `@patchwork` (type, title, drafts) and `@comments`, which the comments provider reads on every mounted document. Fields merge per key, while code merges per character: two users changing `w: 60` to 70 and to 80 at once can merge to `7080` in the text, while a field keeps one of the two values.
 
-The model exports its configurations, as OpenSCAD's `parameterSets` or Onshape's configuration table:
+The cost is portability: the model run elsewhere sees only `source`. That is accepted for named sets of values and named views, which serve the tool, as OpenSCAD keeps its `parameterSets` in a JSON file next to the `.scad`. Exporting a model can write them out as such a sidecar file or as `export const configurations = {…}`.
 
-```js
-export const variants = { small: { w: 40, d: 30 }, large: { w: 120, d: 80 } };
+### Configurations and named views in the model document
+
+The model document holds both lists, under one field:
+
+```ts
+cad: {
+  configurations: { id: string; name: string; params: { [name: string]: number | boolean | string | Linked }; outputs?: string[] }[];
+  views: { id: string; name: string; camera: CameraState }[];
+}
 ```
 
-- **For:** portable, curated by the author, versioned with the geometry, and renamed with the parameter by the same refactoring; composition by name in plain JS: `bolt.default({ ...bolt.defaultParams, ...bolt.variants.M4 })`. A variant document (A) can point at a set by name instead of copying values.
-- **Against:** only people who can edit the model can add a set; many sets clutter the code, which a table in the parameters entry would hide.
+- **One mechanism for both.** Configurations and named views are stored, listed, selected per user and embedded the same way. Named views come first, designed in [18](18-named-views.md), which replaces view documents ([10](10-view-state.md#view-documents)); configurations follow their pattern.
+- **Kept in sync.** A rename in the editor renames the parameter in every configuration in the same change. A rename typed in the code pane leaves values under the old name; the editor sees them, as the model and its configurations are one document, and offers to map them. A deleted parameter's values are shown as unused.
+- **Configurations set independent parameters only;** missing ones take `defaultParams`, so a parameter added later gets its default in every configuration.
+- **Outputs:** a configuration may show only some of `return`'s keys ([15](15-bodies.md#output)), e.g. only `lid`. This is a filter over what the model returns, not code: a variant that changes the model's code is an assembly in all but name ([below](#considered)).
+- **Drafts** fork the document copy-on-write (`CloneEntry`: "One COW relationship between an original doc and the per-draft clone", [`draft-types.ts`](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/drafts/src/draft-types.ts)), so a draft carries its configurations with its geometry.
+- **Saving changes the model document,** so a configuration or view is shared with everyone who can open the model. Patchwork has no permissions yet, so read-only access is not considered.
 
-### C: Drafts as variants
+### Embedding: proxy documents
 
-Patchwork's drafts fork a document copy-on-write (`CloneEntry`: "One COW relationship between an original doc and the per-draft clone", [`draft-types.ts`](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/drafts/src/draft-types.ts)). A variant would be a draft that changes only `defaultParams`.
+An embedding document refers to a configuration and a view through a small proxy document, the embed document of [18](18-named-views.md#embeds) (`cad-model-embed`), which gets a `configuration`:
 
-- **For:** no new datatype; history and comparison come with drafts.
-- **Against:** drafts are meant to be merged back; a never-merged draft drifts from main, and I found no operation that brings the original's later changes into a clone. Nothing keeps a draft to parameter changes. Wrong tool for long-lived variants, a good one for "try a redesign".
+```ts
+{ title: string; model: AutomergeUrl; configuration?: string; view?: string }
+```
 
-### D: Values from other documents
+Both are ids into the model's lists, and each is optional: no configuration means `defaultParams`, no view means the viewer's framing. A customizer tool opens the proxy with the parameter panel and the view, nothing else; the viewer shows it without the panel.
 
-A variant's value is a link instead of a number, e.g. `params: { w: { doc: "automerge:…", path: ["rows", 3, "width"] } }`, resolved by the customizer before each build and rebuilt when the source changes. A small `cad-parameters` document of named values ("shared dimensions") is the special case of Fusion's global parameters: several models' variants link to it, and changing it changes them all.
+- **For:** works wherever Patchwork takes a document (sidebar, drag and drop, the default tool by datatype); has its own title; carries its choice separately from the model, so several embeds of one model differ.
+- **Live by default:** the proxy follows the model's latest version, as Patchwork's embeds do. Pinning is the user's choice: a model URL with `#heads`.
+- **A deleted target:** when the configuration or view is gone, the proxy keeps no copy of its values; it shows the model's remaining configurations or views and lets the user pick one, which becomes the proxy's new target.
+- **"Can't edit anything else"** is a UI restriction: the proxy holds the model's URL, which opens in the editor, too.
+- **Orphans:** creating a proxy on a drag that is then cancelled leaves an orphan document ([18](18-named-views.md#embeds)).
 
-- **For:** live, cross-tool composition, which is what Patchwork is about; the model file stays plain.
-- **Against:** the model itself can't use the shared value when run elsewhere, unless it imports the values as code (`import dims from "automerge:…"`), which needs the import story of [02](02-model-storage.md#verdict-imports-in-code) and the sandbox ([05](05-sandboxing.md)). Typing and missing paths need handling.
-- **Ephemeral variant:** the cards' shared context ([spec](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/cards/spec.md), [09](09-patchwork-26-features.md#where-the-features-live)), "named channels of pure JSON state that any component can read (aggregated) or write (scoped)", would let a slider card on a canvas write `cad:params` and an embedded viewer read it, without saving anything. A playground, not storage.
+The alternative, an embed that stores a sub-document URL such as `automerge:<model>/cad/configurations/{"id":"k3"}` and no proxy, would follow the comment threads' pattern and leave no orphans. It needs a `@patchwork.type` on each entry and a tool that loads the model from the sub-handle's `documentId`, and it is unverified whether the sidebar, drag and drop and the default tool lookup accept such URLs. It can't combine a configuration with a view, which a proxy can. An experiment worth running, not the plan.
 
-### E: Configured models inside models
+### Values from other documents
 
-Use case 4 already works in code (`body(() => m.default({...}))`). The UI step: dropping a model or a variant into the editor inserts the import and a `body()` call with the variant's values, as Onshape asks for the configuration on insertion. The inserted call's arguments are then an object literal of parameters, which the editor can show with the same panel, inferred from the imported model's `defaultParams`. This makes the parameter panel a reusable component: for the model's own parameters, for a variant, and for an instance of another model.
+A configuration's value can be a link instead of a literal: `Linked = { link: AutomergeUrl }`, any URL that resolves to a number. That covers a field in a structured document (`automerge:<sheet>/rows/@3/width`) and a number in text (`automerge:<note>/content/[2@abc-4@abc]`), whose range must parse as a number. Fusion's global parameters are then just a document of numbers that several models' configurations link to; no special datatype is needed.
 
-### F: Parameters in the embed itself
+- **Resolving:** the tool loads each linked document, resolves the URL, and rebuilds when it changes. A link that doesn't resolve, a collapsed range, or text that isn't a number is a broken value: the panel shows it, and the build uses the default.
+- **Only in configurations.** `defaultParams` stays literal, so the model stays portable; a model that needs the linked value everywhere imports the document as data, which needs an import loader for models ([building blocks](#building-blocks), [02](02-model-storage.md#verdict-imports-in-code)) and the sandbox ([05](05-sandboxing.md)).
+- **Picking a link:** dragging a value out of another tool needs that tool to offer a URL for it, e.g. a text selection as a cursor range, which Patchwork's text editor already makes for comments (`handle.sub("content", cursor(from, to)).url`, [13](13-collaboration.md#data-model)). Pasting a URL works everywhere.
+- **Units and typing** are the linked document's business: `"12 mm"` is not a number, and the link breaks.
+- **Ephemeral values:** the cards' shared context ([spec](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/cards/spec.md), [09](09-patchwork-26-features.md#where-the-features-live)), "named channels of pure JSON state that any component can read (aggregated) or write (scoped)", would let a slider card on a canvas drive an embedded viewer without saving anything. A playground, not storage.
 
-An embed that carries its values (`<patchwork-view params="…">`) would need no document, but `<patchwork-view>` passes only a document and a tool id ([10](10-view-state.md#instance-identity)). Values must live in a document, so this reduces to A.
+### Considered
 
-### Comparison
-
-| | Customize | Instances | Embed | Compose | Drive | Model stays plain JS |
-|---|---|---|---|---|---|---|
-| Per-user overrides | own view only | – | – | – | – | yes |
-| A: variant document | yes | as documents | yes | via E | via D | yes |
-| B: named sets in code | pick only | yes | via A | yes | – | yes |
-| C: drafts | yes, unrestricted | as drafts | yes | – | – | yes |
-| D: linked values | – | – | via A | – | yes | yes, unless imported |
-| E: instances in a model | – | – | – | yes | – | yes |
+- **Separate variant documents** (`{ model, params }`, one per set of values): the model can't see them, so a parameter renamed in the model orphans their values with no way to find and map them; and views and configurations would be spread over many documents.
+- **Drafts as variants:** drafts are meant to be merged back; a never-merged draft drifts from main, I found no operation that brings the original's later changes into a clone, and nothing keeps a draft to parameter changes. A good tool for "try a redesign", not for configurations.
+- **Variants as code** (a variant that imports the model and calls it): outputs and further features would come for free, but the variant then is an assembly of one part, which blurs the line between configurations and assemblies; and several code texts in one document that import each other need module resolution inside a document, which [02](02-model-storage.md#verdict-imports-in-code)'s imports don't solve.
+- **Values in the embed itself** (`<patchwork-view params="…">`): `<patchwork-view>` passes only a document and a tool id ([10](10-view-state.md#instance-identity)), so values must live in a document.
+- **Configured models inside models** (dropping a configuration into the editor inserts an import and `body(() => m.default({ ...m.defaultParams, ...values }))`, as Onshape picks a configuration on insertion): belongs to assemblies.
 
 ### Costs
 
-Every embedded or open variant builds the model in its own kernel worker, and each worker holds an OCCT instance (warm load 100–200 ms, 0.9 s in Firefox, [08](08-module-evaluation.md#conclusions)). A canvas of ten variants is ten workers. Sharing one worker between views of the same page, or caching meshes per model heads and parameter values, would bound it. Opening a variant runs the model's code, as opening the model does ([05](05-sandboxing.md)).
+Every open proxy builds the model in its own kernel worker, and each worker holds an OCCT instance (warm load 100–200 ms, 0.9 s in Firefox, [08](08-module-evaluation.md#conclusions)). A canvas of ten configurations is ten workers. Sharing one worker between views of the same page, or caching meshes per model heads and parameter values, would bound it. Opening a proxy runs the model's code, as opening the model does ([05](05-sandboxing.md)).
 
 ## Recommendation
 
-1. **Editor:** the parameters entry at the start of the timeline, editing `defaultParams` and `main`'s pattern by splices; kinds inferred, comments for ranges; promote-to-parameter in forms; per-user overrides with Apply and Reset.
-2. **The reference sweep** over M1, M3 and M4 before variants, to know how often a changed value breaks a reference.
-3. **Variants as view documents** with optional `params` (A), opened in a customizer tool composed of the viewer and the panel, showing build problems.
-4. Later: named sets in code (B), configured instances in models (E), linked values (D).
-
-## Open
-
-- Whether derived parameters live in `main`'s pattern, and whether the panel may write them there.
-- Whether a variant pins the model's heads by default. Pinned is stable but misses fixes; following can break the variant silently, which argues for following plus showing problems.
-- How orphaned overrides are shown and re-mapped after a rename.
-- Whether a variant should also hide bodies or pick outputs (`return` keys), e.g. only `lid`.
-- Read-only sharing: whether Patchwork will have permissions, or variants point at pinned copies.
+1. **Editor:** the parameters entry at the start of the timeline, editing `defaultParams` and `main`'s pattern by splices; derived parameters as constants at the start of `main`; `paramConfig` with inference for the rest; promote-to-parameter in forms; per-user overrides with Apply and Reset.
+2. **The reference sweep** over M1, M3 and M4 before configurations, to know how often a changed value breaks a reference.
+3. **Configurations and named views** in the model document's `cad`, embedded through `cad-model-embed` documents `{ model, configuration?, view? }` ([18](18-named-views.md)), with a customizer tool for them.
+4. **Linked values** in configurations.

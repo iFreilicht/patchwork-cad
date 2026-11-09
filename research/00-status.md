@@ -17,7 +17,8 @@
 | [14-edge-contrast.md](14-edge-contrast.md) | Rendering bodies and edges so that edges, hovered and selected ones, read in every theme | Done (grey bodies lit from the camera, wide edges, haloed highlights; hover a thin line, selection a thick one, both together on a hovered selection). Open: the grey per mode |
 | [15-bodies.md](15-bodies.md) | Bodies as lineages of versions; visibility per user, output as the return's named keys, availability derived; a timeline with lanes, a browser, a return entry; combine | Done (`combine`, lanes, browser with eyes and ports, return entry, picking bodies, join or branch, named outputs `return { plate: notched, lid }` and `body()` by key; M4). Open: which fork keeps a lineage's name, lanes of large models, picking sketches in the view |
 | [16-undo-redo.md](16-undo-redo.md) | Undo as the document's history, per tab, for every tool; undo runs as steps; inverting Automerge changes | Prototype done ([src/undo](../src/undo/), used by the CAD editor; CodeMirror and tldraw compared); proposed for Patchwork in [patchwork-system#469](https://github.com/inkandswitch/patchwork-system/pull/469). Open: restoring selections, showing undos that don't change the geometry, steps across documents, conflict policy, upstreaming |
-| [17-parameters.md](17-parameters.md) | Parameters in the editor (a parameters entry, kinds, derived values, per-user overrides); parametrized models in Patchwork: variants as view documents, named sets, drafts, linked values, instances | Ideation. Next: parameters entry, reference sweep over parameter ranges, variants |
+| [17-parameters.md](17-parameters.md) | Parameters in the editor (a parameters entry, derived parameters as constants, kinds, per-user overrides); configurations in the model document, proxy documents for embedding, values linked from other documents; importing documents | Ideation, decided. Next: parameters entry, reference sweep over parameter ranges, configurations |
+| [18-named-views.md](18-named-views.md) | Named views in the model document: a "Views" section in the browser, embeds (`cad-model-embed`) dragged out of it, the ViewCube orbits when dragged; view documents removed | Designed; to implement |
 
 ## Not started
 
@@ -28,6 +29,8 @@
 - Embedding: decal, reference in a sketch, annotation (item 7)
 - Sketches: constraints, e.g. with PlaneGCS (stable segment ids: [07](07-poc-modelling-ui.md#the-feature-library))
 - Assemblies and joints
+- Code editor niceties, e.g. renaming a variable with F2 ([17](17-parameters.md#kinds-units-ranges))
+- Store the model as `content` with a `mimeType`, as Patchwork's file documents are, so that the service worker serves it as a module ([17](17-parameters.md#building-blocks)), while the CAD Editor stays its default tool
 
 ## Known bugs
 

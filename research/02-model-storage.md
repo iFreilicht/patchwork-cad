@@ -70,7 +70,7 @@ Use imports directly in the code, e.g. `import { gear } from "automerge:<id>#<he
 - Onshape's FeatureScript also imports in code, with the version as part of the import.
 - It keeps the code self-contained, which fits "the model is code".
 
-The openscad-style drag-and-drop can remain as UX that inserts an import line. Still to verify: whether the sandbox (e.g. a worker) can resolve these service-worker URLs, and whether the service worker accepts URLs with heads.
+The openscad-style drag-and-drop can remain as UX that inserts an import line. The service worker accepts URLs with heads, and redirects one without heads to the document's current heads (`Response.redirect(location, 307)`, [`automerge-protocol-handler-worker.js`](../node_modules/.pnpm/@inkandswitch+patchwork-bootloader@0.8.4_@automerge+automerge-repo-keyhive@0.6.0-alpha._3df521e76561f6a9ee47cd61d96bee70/node_modules/@inkandswitch/patchwork-bootloader/dist/automerge-protocol-handler-worker.js)); it serves a document's `content` as a file and any other document as JSON ([17](17-parameters.md#building-blocks)). Still to verify: whether the sandbox (e.g. a worker) can resolve these service-worker URLs.
 
 ## Open
 
