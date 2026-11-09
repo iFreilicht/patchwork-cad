@@ -1,4 +1,9 @@
-import { createSignal, Index, Show } from "solid-js";
+import { createSignal, For, Index, Show } from "solid-js";
+import type { AutomergeUrl } from "@automerge/automerge-repo";
+import { dragDocument } from "../embed.ts";
+import type { NamedViews } from "../namedViews.ts";
+import { sameCamera } from "../Viewer.tsx";
+import type { CameraState, NamedView } from "../../types.ts";
 import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
@@ -25,11 +30,23 @@ export const EyeIcon = (props: { open: boolean }) => (
   </svg>
 );
 
-/** What the browser's rows share: the row being renamed and the one whose menu is open, by their keys. */
+/** What the browser's rows share: the row being renamed, by its key, and opening a row's menu. */
 interface RowState {
   renaming: () => string | undefined;
   setRenaming(key: string | undefined): void;
   openMenu(row: BodyRow, x: number, y: number): void;
+}
+
+/** The named views the browser lists (research/18-named-views.md, "In the editor"), and the camera they come from and go to. */
+export interface ViewsSection {
+  views: NamedViews;
+  /** The camera the view shows now, for making or updating a view. */
+  camera(): CameraState | undefined;
+  /** The camera as the view last settled, reactively, to mark the view it is at. */
+  current(): CameraState | undefined;
+  goTo(view: NamedView): void;
+  /** Creates an embed of the model seen from `view`, for dragging it out. */
+  embed(view: NamedView): { url: AutomergeUrl; title: string } | undefined;
 }
 
 /**
@@ -141,17 +158,18 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * its features; clicking it opens its last feature, or picks it. Its context menu renames it, and
  * hides or shows it.
  */
-export function Browser(props: { editor: Editor; bodies: Bodies }) {
+export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection }) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
-  const [menu, setMenu] = createSignal<{ row: BodyRow; x: number; y: number }>();
-  const state: RowState = { renaming, setRenaming, openMenu: (row, x, y) => setMenu({ row, x, y }) };
+  /** The open context menu: its items, and the key of the row it is for. */
+  const [menu, setMenu] = createSignal<{ key: string; label: string; items: MenuItem[]; x: number; y: number }>();
+  const state: RowState = { renaming, setRenaming, openMenu: (row, x, y) => setMenu({ key: row.key, label: `Actions for ${row.name}`, items: menuItems(row), x, y }) };
   const nameOf = (key: string) => aside.querySelector<HTMLElement>(`.cad-editor__browser-row[data-key="${CSS.escape(key)}"] .cad-editor__browser-name`);
   /** Closes the menu, and gives the focus back to its row if it was operated with the keyboard. */
   const closeMenu = (refocus: boolean) => {
     const m = menu();
     setMenu(undefined);
-    if (refocus && m) nameOf(m.row.key)?.focus();
+    if (refocus && m) nameOf(m.key)?.focus();
   };
   // What main returns is the return entry's to edit, not the browser's (research/15, "Output").
   const menuItems = (row: BodyRow): MenuItem[] => [
@@ -174,9 +192,118 @@ export function Browser(props: { editor: Editor; bodies: Bodies }) {
           <h3 class="cad-editor__browser-heading">Sketches</h3>
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
+        <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
       </aside>
       {/* In the editor, not the browser, which would clip it. */}
-      <Show when={menu()}>{(m) => <Menu items={menuItems(m().row)} label={`Actions for ${m().row.name}`} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
+      <Show when={menu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
+    </>
+  );
+}
+
+/** The key of a view's row, apart from the bodies' keys. */
+const viewKey = (view: NamedView) => `view:${view.id}`;
+
+/**
+ * The named views (research/18-named-views.md, "In the editor"): "+" adds one from the current
+ * camera, a click goes to one, and its context menu renames it (also F2 or a double click), updates
+ * it to the current camera or deletes it. The grip drags it out as an embed.
+ */
+function ViewList(props: {
+  section: ViewsSection;
+  editor: Editor;
+  renaming: () => string | undefined;
+  setRenaming(key: string | undefined): void;
+  openMenu(menu: { key: string; label: string; items: MenuItem[]; x: number; y: number }): void;
+  dragFrom: () => HTMLElement;
+}) {
+  const views = () => props.section.views.views();
+  const add = () => {
+    const camera = props.section.camera();
+    if (!camera) return props.editor.setNotice("The view hasn't shown the model yet");
+    const view = props.section.views.add(camera);
+    queueMicrotask(() => props.setRenaming(viewKey(view)));
+  };
+  const items = (view: NamedView): MenuItem[] => [
+    { label: "Rename", run: () => void queueMicrotask(() => props.setRenaming(viewKey(view))) },
+    {
+      label: "Update to current view",
+      run: () => {
+        const camera = props.section.camera();
+        if (camera) props.section.views.update(view.id, camera);
+      },
+    },
+    { label: "Delete", danger: true, run: () => props.section.views.remove(view.id) },
+  ];
+  const open = (view: NamedView, x: number, y: number) => props.openMenu({ key: viewKey(view), label: `Actions for view ${view.name}`, items: items(view), x, y });
+  return (
+    <>
+      <h3 class="cad-editor__browser-heading cad-editor__browser-heading--views">
+        Views
+        <button class="cad-editor__icon-button" aria-label="New view from the current camera" title="New view from the current camera" onClick={add}>
+          +
+        </button>
+      </h3>
+      <ul class="cad-editor__browser-list" aria-label="Views">
+        <For each={views()} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
+          {(view) => {
+            const key = viewKey(view);
+            const renaming = () => props.renaming() === key;
+            let li!: HTMLLIElement;
+            const done = () => {
+              props.setRenaming(undefined);
+              queueMicrotask(() => li.querySelector<HTMLElement>(".cad-editor__browser-name")?.focus());
+            };
+            return (
+              <li
+                ref={li}
+                class="cad-editor__browser-row cad-editor__view-row"
+                data-key={key}
+                data-name={view.name}
+                data-current={sameCamera(props.section.current(), view.camera) ? "true" : undefined}
+                onContextMenu={(event) => {
+                  if (renaming()) return;
+                  event.preventDefault();
+                  open(view, event.clientX, event.clientY);
+                }}
+              >
+                <span
+                  class="cad-editor__grip"
+                  draggable="true"
+                  aria-hidden="true"
+                  title={`Drag ${view.name} into Patchwork to embed the model seen from it`}
+                  onDragStart={(event) => {
+                    const embed = props.section.embed(view);
+                    if (!embed) return event.preventDefault();
+                    dragDocument(event, { ...embed, type: "cad-model-embed" }, props.dragFrom());
+                  }}
+                >
+                  ⠿
+                </span>
+                <Show when={!renaming()} fallback={<NameField from={view.name} rename={async (to) => props.section.views.rename(view.id, to)} onNotice={props.editor.setNotice} onDone={done} />}>
+                  <button
+                    class="cad-editor__browser-name"
+                    title={`Look from ${view.name}`}
+                    onClick={() => props.section.goTo(view)}
+                    onDblClick={() => props.setRenaming(key)}
+                    onKeyDown={(event) => {
+                      if (event.key === "F2") {
+                        event.preventDefault();
+                        props.setRenaming(key);
+                      } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                        event.preventDefault();
+                        const r = event.currentTarget.getBoundingClientRect();
+                        open(view, r.left, r.bottom);
+                      }
+                    }}
+                  >
+                    <span>{view.name}</span>
+                  </button>
+                </Show>
+              </li>
+            );
+          }}
+        </For>
+      </ul>
     </>
   );
 }

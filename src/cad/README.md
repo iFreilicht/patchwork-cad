@@ -3,12 +3,12 @@
 > [!CAUTION]
 > Model code runs **unsandboxed**, with the full authority of the Patchwork page. Use this tool only on the local stack (`pnpm dev`) and only with your own models. Never open shared documents with it and never install it on the public Patchwork instance. Sandboxing is [research/05](../../research/05-sandboxing.md).
 
-A Patchwork datatype `cad-model` and two tools for it. The document holds a model as code; every tool that shows it re-runs it on every change. Design and measurements: [research/06](../../research/06-poc-replicad-in-patchwork.md) (PoC 1) and [research/07](../../research/07-poc-modelling-ui.md) (PoC 2).
+A Patchwork datatype `cad-model`, an unlisted `cad-model-embed` (a model seen from one of its named views, [research/18](../../research/18-named-views.md)), and two tools for them. The document holds a model as code; every tool that shows it re-runs it on every change. Design and measurements: [research/06](../../research/06-poc-replicad-in-patchwork.md) (PoC 1) and [research/07](../../research/07-poc-modelling-ui.md) (PoC 2).
 
 | Tool id | |
 |---|---|
 | `cad-model` | Fusion-like editor: toolbar, timeline, feature forms, picking faces and edges, and a code pane (the default) |
-| `cad-model-viewer` | the 3D view alone, for embedding |
+| `cad-model-viewer` | the 3D view alone, for embedding, and the tool of embeds |
 
 ## Usage
 
@@ -40,7 +40,7 @@ export default function main({ size }) {
 ## Layout
 
 - `src/index.ts`: plugin metadata only (it is parsed in a worker by the host)
-- `src/datatype.ts`: `{ title, source }` and the seed model
+- `src/datatype.ts`: `{ title, source, cad }` and the seed model; `src/embedDatatype.ts`: embeds
 - `src/tools/`: one mount function per tool
 - `src/kernel/`: the OCCT worker (`worker.ts`), its main-thread facade (`engine.ts`) and the source preparation (`prepare.ts`), which also names features in memory
 - `src/model/`: reading the source (`analyze.ts`, `timeline.ts`) and editing it with minimal splices (`splice.ts`)

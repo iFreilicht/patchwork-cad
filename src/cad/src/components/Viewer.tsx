@@ -7,10 +7,9 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape, ShownSketch } from "../kernel/protocol.ts";
-import type { AutomergeUrl } from "@automerge/automerge-repo";
 import type { CameraState } from "../types.ts";
 import { contactToken } from "./presence.ts";
-import { regionDirection, regionName, ViewCube, type Region } from "./ViewCube.ts";
+import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 
 export type EntityKind = "face" | "edge";
 
@@ -95,8 +94,8 @@ export interface ViewerProps {
   view?: CameraState | undefined;
   /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
   onViewChange?: (view: CameraState) => void;
-  /** Makes ViewCube regions draggable: a drag creates a view document from the region (e.g. "Front") with this and drags it. */
-  createView?: (view: CameraState, name: string) => { url: AutomergeUrl; title: string } | undefined;
+  /** Hands over what the view can tell its owner at any time, once it is mounted. */
+  onApi?: (api: ViewerApi) => void;
   /** Starts with the ViewCube collapsed to its toggle. The state is local to this mount. */
   collapseViewCube?: boolean;
   /** Comment pins, and what clicking one does, with the pin's position on the screen. */
@@ -104,6 +103,11 @@ export interface ViewerProps {
   onPin?: (key: string, at: { x: number; y: number }) => void;
   /** A button at the selected face or edge, e.g. to comment on it. */
   selectionAction?: { label: string; run: (at: { x: number; y: number }) => void } | undefined;
+}
+
+export interface ViewerApi {
+  /** The camera the view shows now, as onViewChange reports it. */
+  camera(): CameraState;
 }
 
 /** Two cameras are the same; storage may reorder an object's keys. */
@@ -867,46 +871,61 @@ export function Viewer(props: ViewerProps) {
       const rect = cubeElement.getBoundingClientRect();
       return new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     };
-    let cubeDown: { x: number; y: number } | undefined;
-    const onCubeMove = (event: PointerEvent) => cube.hover(cube.regionAt(cubeNdc(event.clientX, event.clientY)));
-    const onCubeDown = (event: PointerEvent) => (cubeDown = { x: event.clientX, y: event.clientY });
-    const onCubeUp = (event: PointerEvent) => {
-      const start = cubeDown;
+    /**
+     * A press on the cube: a click turns the view to the region under it, a drag orbits as a drag
+     * on the canvas does (research/18-named-views.md, "In the editor").
+     */
+    let cubeDown: { x: number; y: number; last: { x: number; y: number }; orbiting: boolean; pointer: number } | undefined;
+    const up = new THREE.Vector3(0, 0, 1);
+    const toYUp = new THREE.Quaternion().setFromUnitVectors(up, new THREE.Vector3(0, 1, 0));
+    const fromYUp = toYUp.clone().invert();
+    /** Orbits by a pointer movement in CSS pixels, at OrbitControls' speed: a full turn per canvas height. */
+    const orbitBy = (dx: number, dy: number) => {
+      const k = (2 * Math.PI) / (canvas.clientHeight || 1);
+      const offset = direction().applyQuaternion(toYUp);
+      const spherical = new THREE.Spherical().setFromVector3(offset);
+      spherical.theta -= dx * k;
+      spherical.phi = THREE.MathUtils.clamp(spherical.phi - dy * k, 1e-6, Math.PI - 1e-6);
+      place({ ...pose(), direction: new THREE.Vector3().setFromSpherical(spherical).applyQuaternion(fromYUp).normalize() });
+    };
+    const onCubeMove = (event: PointerEvent) => {
+      const down = cubeDown;
+      if (!down || down.pointer !== event.pointerId) return cube.hover(cube.regionAt(cubeNdc(event.clientX, event.clientY)));
+      if (!down.orbiting && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) {
+        down.orbiting = true;
+        setTurn(undefined);
+        cube.hover(undefined);
+        container.dataset["orbiting"] = "true";
+      }
+      if (down.orbiting) orbitBy(event.clientX - down.last.x, event.clientY - down.last.y);
+      down.last = { x: event.clientX, y: event.clientY };
+    };
+    const onCubeDown = (event: PointerEvent) => {
+      if (event.button !== 0 || cubeDown) return;
+      cubeDown = { x: event.clientX, y: event.clientY, last: { x: event.clientX, y: event.clientY }, orbiting: false, pointer: event.pointerId };
+      cubeElement.setPointerCapture(event.pointerId);
+    };
+    /** Ends a press: a click turns to its region unless `cancelled`, an orbit reports the camera. */
+    const endCubePress = (event: PointerEvent, cancelled: boolean) => {
+      const down = cubeDown;
+      if (!down || down.pointer !== event.pointerId) return;
       cubeDown = undefined;
-      if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
-      const region = cube.regionAt(cubeNdc(event.clientX, event.clientY));
+      if (cubeElement.hasPointerCapture(event.pointerId)) cubeElement.releasePointerCapture(event.pointerId);
+      delete container.dataset["orbiting"];
+      if (down.orbiting) return report();
+      const region = cancelled ? undefined : cube.regionAt(cubeNdc(event.clientX, event.clientY));
       if (region) turnTo(regionDirection(region));
     };
-    const onCubeLeave = () => cube.hover(undefined);
+    const onCubeUp = (event: PointerEvent) => endCubePress(event, false);
+    const onCubeCancel = (event: PointerEvent) => endCubePress(event, true);
+    const onCubeLeave = () => !cubeDown && cube.hover(undefined);
     createEffect(() => {
       if (collapsed()) cube.hover(undefined);
     });
-    const onCubeDragStart = (event: DragEvent) => {
-      const start = cubeDown ?? { x: event.clientX, y: event.clientY };
-      cubeDown = undefined;
-      const region = cube.regionAt(cubeNdc(start.x, start.y));
-      const name = region && regionName(region);
-      const created = region && name ? props.createView?.({ ...cameraState(), direction: vector(regionDirection(region)) }, name) : undefined;
-      if (!created || !event.dataTransfer) return event.preventDefault();
-      const { url, title } = created;
-      // The payload Patchwork's drop targets read, as in the pandoc tool. "all", as the sideboard's
-      // own drags: its list asks for "move", and a drop effect the drag doesn't allow cancels the drop.
-      event.dataTransfer.effectAllowed = "all";
-      event.dataTransfer.setData("text/x-patchwork-urls", JSON.stringify([url]));
-      event.dataTransfer.setData("text/x-patchwork-dnd", JSON.stringify({ source: "patchwork-cad", items: [{ url, name: title, type: "cad-model-view" }] }));
-      event.dataTransfer.setData("text/plain", url);
-      // The cube's element is transparent; drag the region's name instead.
-      const image = document.createElement("div");
-      image.className = "cad-viewcube__drag";
-      image.textContent = title;
-      container.append(image);
-      event.dataTransfer.setDragImage(image, 0, 0);
-      setTimeout(() => image.remove());
-    };
-    cubeElement.addEventListener("dragstart", onCubeDragStart);
     cubeElement.addEventListener("pointermove", onCubeMove);
     cubeElement.addEventListener("pointerdown", onCubeDown);
     cubeElement.addEventListener("pointerup", onCubeUp);
+    cubeElement.addEventListener("pointercancel", onCubeCancel);
     cubeElement.addEventListener("pointerleave", onCubeLeave);
 
     canvas.addEventListener("pointermove", onPointerMove);
@@ -989,6 +1008,7 @@ export function Viewer(props: ViewerProps) {
       },
     };
     (container as HTMLDivElement & { cadViewer?: ViewerTestHook }).cadViewer = hook;
+    props.onApi?.({ camera: cameraState });
 
     onCleanup(() => {
       cancelAnimationFrame(frameId);
@@ -1001,8 +1021,8 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointermove", onCubeMove);
       cubeElement.removeEventListener("pointerdown", onCubeDown);
       cubeElement.removeEventListener("pointerup", onCubeUp);
+      cubeElement.removeEventListener("pointercancel", onCubeCancel);
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
-      cubeElement.removeEventListener("dragstart", onCubeDragStart);
       cube.dispose();
       dispose([...group.children, ...sketchGroup.children, ...overlayGroup.children, ...highlightGroup.children]);
       for (const m of markers.values()) m.label.remove();
@@ -1034,7 +1054,7 @@ export function Viewer(props: ViewerProps) {
             <circle cx="8" cy="9" r="2.5" />
           </svg>
         </button>
-        <div class="cad-viewcube__cube" ref={cubeElement} draggable={props.createView ? "true" : undefined} />
+        <div class="cad-viewcube__cube" ref={cubeElement} />
       </div>
     </div>
   );

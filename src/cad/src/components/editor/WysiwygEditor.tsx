@@ -4,11 +4,11 @@ import { bindUndo } from "@patchwork-cad/undo";
 import type { MeshedShape, ShownSketch } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import { ownersOf, type Entry, type FeatureEntry } from "../../model/timeline.ts";
-import type { CadModelDoc } from "../../types.ts";
+import type { CadModelDoc, CameraState, NamedView } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
-import { Viewer, type Entity, type Highlight } from "../Viewer.tsx";
+import { Viewer, type Entity, type Highlight, type ViewerApi } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
 import { FeatureDialog } from "./FeatureDialog.tsx";
 import { createEditor } from "./state.ts";
@@ -17,13 +17,14 @@ import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
 import { createPeerHighlights, joinPresence, peerMarkers } from "../presence.ts";
 import type { TimelinePeer } from "./Timeline.tsx";
-import { viewsOf } from "../viewDoc.ts";
+import { createEmbed } from "../embed.ts";
+import { createNamedViews } from "../namedViews.ts";
 import { createComments } from "../comments.ts";
 import { CommentsPopover } from "../CommentsPopover.tsx";
 import { createEntityComments, DetachedButton } from "../entityComments.tsx";
 import { createFeatureHighlights } from "../featureHighlights.ts";
 import { createBodies } from "./bodies.ts";
-import { Browser, ResultDialog } from "./Browser.tsx";
+import { Browser, ResultDialog, type ViewsSection } from "./Browser.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -53,6 +54,32 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   onCleanup(undo.unbind);
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
+
+  // The camera: the one this user last left, a named view gone to, and the one shown now (research/18-named-views.md).
+  let viewer: ViewerApi | undefined;
+  /** A named view gone to, as a new object each time, which the view applies even if it showed it before. */
+  const [goTo, setGoTo] = createSignal<CameraState>();
+  /** The camera as the view last reported it, or as this editor moved it to a named view. */
+  const [camera, setCamera] = createSignal<CameraState>();
+  const saveCamera = (view: CameraState) => {
+    setCamera(view);
+    ui.setView(EDITOR_TOOL_ID, view);
+  };
+  const views: ViewsSection = {
+    views: createNamedViews(props.handle),
+    camera() {
+      // Read for making or updating a view, which is then where the camera is.
+      const now = viewer?.camera();
+      if (now) setCamera(now);
+      return now;
+    },
+    current: () => camera() ?? ui.view(EDITOR_TOOL_ID),
+    goTo(view: NamedView) {
+      setGoTo({ ...view.camera });
+      saveCamera(view.camera);
+    },
+    embed: (view) => createEmbed(props.handle, view),
+  };
   const [codeFocus, setCodeFocus] = createSignal<Span>();
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {
@@ -322,7 +349,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} />
+        <Browser editor={editor} bodies={bodies} views={views} />
       </Show>
       <div class="cad-editor__stage" ref={stage}>
         <Viewer
@@ -341,9 +368,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           peers={peerMarkers(peers())}
           overlays={overlays()}
           sketches={shownSketches()}
-          view={ui.view(EDITOR_TOOL_ID)}
-          onViewChange={(view) => ui.setView(EDITOR_TOOL_ID, view)}
-          createView={viewsOf(props.handle)}
+          view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
+          onViewChange={saveCamera}
+          onApi={(api) => (viewer = api)}
         />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} />}</Show>
         <Show when={resultOpen() && !editor.open()}>

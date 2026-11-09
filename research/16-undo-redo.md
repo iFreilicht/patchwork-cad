@@ -84,6 +84,6 @@ In the CAD editor, a step can change the code without changing the geometry, e.g
 ## Open
 
 - Restoring selections after an undo: range selections in CodeMirror, selected shapes in tldraw.
-- Steps that span documents, e.g. a tool that edits a model and its view document.
+- Steps that span documents, e.g. a tool that edits a model and an embed of it.
 - Which conflict policy feels right.
 - List cursors upstream, and reporting the two AM bugs.

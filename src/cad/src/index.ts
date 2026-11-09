@@ -1,6 +1,6 @@
 // Parsed in a worker by the host: metadata and lazy load()s only (see the
-// writing-patchwork-tools skill, section 2). Two datatypes, a model and a
-// view of one, and two tools that share components. Patchwork opens a
+// writing-patchwork-tools skill, section 2). Two datatypes, a model and an
+// embed of one, and two tools that share components. Patchwork opens a
 // datatype's first listed tool by id (getFallbackTool), so the WYSIWYG
 // editor has the shortest id.
 export const plugins = [
@@ -15,12 +15,12 @@ export const plugins = [
   },
   {
     type: "patchwork:datatype",
-    id: "cad-model-view",
-    name: "CAD View",
+    id: "cad-model-embed",
+    name: "CAD Embed",
     icon: "Camera",
     unlisted: true,
     async load() {
-      return (await import("./viewDatatype.ts")).CadModelViewDatatype;
+      return (await import("./embedDatatype.ts")).CadModelEmbedDatatype;
     },
   },
   {
@@ -38,7 +38,7 @@ export const plugins = [
     id: "cad-model-viewer",
     name: "CAD Viewer",
     icon: "Rotate3d",
-    supportedDatatypes: ["cad-model", "cad-model-view"],
+    supportedDatatypes: ["cad-model", "cad-model-embed"],
     async load() {
       return (await import("./tools/viewer.tsx")).default;
     },

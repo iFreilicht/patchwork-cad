@@ -83,13 +83,20 @@
   display: none;
 }
 
+/* A click turns the view, a drag orbits. */
 .cad-model .cad-viewcube__cube {
   width: 100%;
   height: 100%;
   cursor: pointer;
+  touch-action: none;
 }
 
-.cad-model .cad-viewcube__drag {
+.cad-model .cad-model__viewer[data-orbiting="true"] .cad-viewcube__cube {
+  cursor: grabbing;
+}
+
+/* What a dragged document shows under the pointer; drawn off-screen, and only for the drag image. */
+.cad-model .cad-drag-image {
   position: absolute;
   top: -100px;
   padding: 2px 6px;
@@ -280,7 +287,7 @@
   --cad-model-related: var(--cad-model-warning);
 }
 
-.cad-view-doc__stage {
+.cad-embed__stage {
   position: relative;
   min-height: 0;
   display: grid;
@@ -288,13 +295,13 @@
 }
 
 /* As translucent as the ViewCube (ViewCube.ts, OPACITY), so they hide less of the model. */
-.cad-view-doc__edit,
-.cad-view-doc__open {
+.cad-embed__edit,
+.cad-embed__open {
   position: absolute;
   left: var(--studio-space-sm, 0.5rem);
 }
 
-.cad-view-doc__edit {
+.cad-embed__edit {
   top: var(--studio-space-sm, 0.5rem);
   display: flex;
   flex-direction: column;
@@ -302,16 +309,16 @@
   gap: var(--studio-space-2xs, 4px);
 }
 
-.cad-view-doc__stage .cad-editor__button {
+.cad-embed__stage .cad-editor__button {
   opacity: 0.7;
 }
 
-.cad-view-doc__stage .cad-editor__button:hover,
-.cad-view-doc__stage .cad-editor__button:focus-visible {
+.cad-embed__stage .cad-editor__button:hover,
+.cad-embed__stage .cad-editor__button:focus-visible {
   opacity: 1;
 }
 
-.cad-view-doc__open {
+.cad-embed__open {
   bottom: var(--studio-space-sm, 0.5rem);
 }
 
@@ -576,6 +583,31 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--cad-model-muted);
+}
+
+/* The views' heading holds the button that adds one. */
+.cad-editor__browser-heading--views {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cad-editor__browser-heading--views .cad-editor__icon-button {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* The handle a named view is dragged out by, as the pandoc tool's. */
+.cad-editor__grip {
+  padding: 0 2px;
+  color: var(--cad-model-muted);
+  cursor: grab;
+  user-select: none;
+}
+
+/* The view the camera is at, as Onshape selects it. */
+.cad-editor__view-row[data-current="true"] .cad-editor__browser-name {
+  font-weight: 600;
 }
 
 .cad-editor__browser-note {

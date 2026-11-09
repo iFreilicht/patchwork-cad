@@ -1,6 +1,6 @@
 # Named Views
 
-Named cameras that belong to a model, as Fusion keeps them in the design: listed in the editor, created from the current view, and dragged into other documents to embed the model seen that way. They replace view documents and dragging the ViewCube ([10](10-view-state.md#view-documents)). Not implemented yet.
+Named cameras that belong to a model, as Fusion keeps them in the design: listed in the editor, created from the current view, and dragged into other documents to embed the model seen that way. Implementation: [`model/views.ts`](../src/cad/src/model/views.ts), [`namedViews.ts`](../src/cad/src/components/namedViews.ts), the browser's views ([`Browser.tsx`](../src/cad/src/components/editor/Browser.tsx)), embeds ([`embed.ts`](../src/cad/src/components/embed.ts), [`viewer.tsx`](../src/cad/src/tools/viewer.tsx)); tests: [`views.test.ts`](../src/cad/test/views.test.ts), [`cad-named-views.spec.ts`](../src/harness/e2e/tests/cad-named-views.spec.ts), [`cad-viewcube.spec.ts`](../src/harness/e2e/tests/cad-viewcube.spec.ts).
 
 ## Prior art
 
@@ -18,33 +18,31 @@ The model document holds the views next to `source`, in the `cad` field that con
 cad: { views: { id: string; name: string; camera: CameraState }[] }
 ```
 
-A view is a camera only. Configurations and visible bodies may join it later. Cameras are rounded to 9 decimals, as stored cameras are ([10](10-view-state.md#camera)). Restoring a view moves only the user's own camera, which stays per user ([10](10-view-state.md#camera)).
+A view is a camera only; configurations and visible bodies may join it later. Names are unique and not empty. Cameras are rounded to 9 decimals, as stored cameras are ([10](10-view-state.md#camera)). Going to a view moves only the user's own camera, which stays per user ([10](10-view-state.md#camera)). The views are part of the model's history, so undo restores a deleted one ([16](16-undo-redo.md)). Concurrent edits merge per view: two users' new views both stay, and a deletion wins over a concurrent rename.
 
 ## In the editor
 
-A "Views" section in the [browser](15-bodies.md#the-browser), below the bodies, as Fusion's Named Views folder:
+A "Views" section in the [browser](15-bodies.md#the-browser), below the bodies and sketches, as Fusion's Named Views folder:
 
-- **A "+" in the section's header** makes a view from the current camera, named after the nearest ViewCube region ("Front Right Top", numbered if taken), and starts renaming it.
-- **Clicking a row** moves the camera to the view, as a click on the ViewCube does. The row whose camera is the current one is marked, as Onshape selects it.
-- **Its context menu,** opened as a body's, renames it (also F2 or a double click), updates it to the current camera, which Fusion and Onshape don't offer, and deletes it. Undo restores a deleted view ([16](16-undo-redo.md)).
-- **A grip (`⠿`) on each row drags it out** with Patchwork's document payload (`text/x-patchwork-dnd`, `text/x-patchwork-urls`, `text/plain`), which existing drop targets accept, as dragging the ViewCube does today. Patchwork has no shared icon for "drag this document"; the pandoc context tool draws the same grip with the file name, titled "Drag … into Patchwork" ([PandocContextTool.tsx](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/pandoc/src/components/PandocContextTool.tsx)), and the `universal-dnd` experiment proposes "drag handles on every `<patchwork-view>`" for Patchwork itself ([NOTES.md](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/universal-dnd/NOTES.md)).
+- **"+" in the section's heading** makes a view from the current camera, named after the nearest ViewCube region ("Front Right Top", numbered if taken), and starts renaming it.
+- **Clicking a row** moves the camera to the view, animated, as a click on the ViewCube does. The row whose camera is the current one is set in bold, as Onshape selects it: after going to it, making it or updating it, until the camera moves.
+- **Its context menu,** opened as a body's, renames it (also F2 or a double click), updates it to the current camera, which Fusion and Onshape don't offer, and deletes it.
+- **A grip (`⠿`) on each row drags it out** as an embed, with Patchwork's document payload (`text/x-patchwork-urls`, `text/x-patchwork-dnd`, `text/plain`). It must allow every drop effect: the sideboard's list sets `dropEffect = "move"` ("all" keeps move/copy dropEffects … valid so the drop event actually fires). Patchwork has no shared icon for "drag this document"; the pandoc context tool draws the same grip with the file name, titled "Drag … into Patchwork" ([PandocContextTool.tsx](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/pandoc/src/components/PandocContextTool.tsx)), and the `universal-dnd` experiment proposes "drag handles on every `<patchwork-view>`" for Patchwork itself ([NOTES.md](../.claude/skills/writing-patchwork-tools/reference/patchwork-experiments/universal-dnd/NOTES.md)). The spec drops into the sidebar's document list; other drop targets are untested. In WebKit, a drop only happens where a `dragover` accepted the drag, which Playwright's last move onto a new element hasn't sent yet, so the spec moves a pixel more before releasing.
 
-**The ViewCube orbits when dragged.** Today "a click on the cube turns the view, a drag creates a view; the cube can't be dragged to orbit" ([10](10-view-state.md#view-documents)), which is hard to discover, and users expect a drag to orbit. A click still turns the view to a region.
+**The ViewCube orbits when dragged,** at the speed of a drag on the view (OrbitControls' full turn per canvas height), and reports the camera when released; a click still turns the view to a region. A press counts as a drag after 4 pixels.
 
 ## Embeds
 
-Dragging a view out creates an embed document, the proxy of [17](17-parameters.md#embedding-proxy-documents), with the datatype `cad-model-embed`:
+Dragging a view out creates an embed document, the proxy of [17](17-parameters.md#embedding-proxy-documents), with the unlisted datatype `cad-model-embed` ([`CadModelEmbedDoc`](../src/cad/src/types.ts)):
 
 ```ts
 { title: string; model: AutomergeUrl; view?: string }
 ```
 
-`view` is a view's id; `configuration` joins it with configurations. The title is "‹model› – ‹view›" when it is made, and is the document's own afterwards. The datatype is unlisted, as an embed can't be made without a model.
+`view` is a view's id; `configuration` will join it. The title is "‹model› – ‹view›" when it is made, and is the document's own afterwards.
 
-The viewer tool shows it, repurposing what shows view documents today: the model, from the view's camera, following the model's latest version. Orbiting is local, and "Reset" returns to the view. A picker lists the model's views, and choosing one changes the embed's `view`; when the view is deleted, the picker says so and offers the remaining ones. "Open model" opens the model. Views are created, renamed and updated in the editor only.
+The viewer tool shows it: the model, from the view's camera, following the model's latest version and the view as it is updated. Orbiting is local, and "Reset" returns to the view. A picker lists the model's views, and choosing one changes the embed's `view`; when the view is deleted, the picker says "Deleted view" and offers the remaining ones. "Open model" opens the model. Views are created, renamed and updated in the editor only.
 
-The embed is created when the drag starts, because the payload must carry its URL, so a cancelled drag leaves an orphan, as with view documents today.
+## Open
 
-## What goes
-
-View documents are removed without migration: the `cad-model-view` datatype ([`viewDatatype.ts`](../src/cad/src/viewDatatype.ts)), `CadModelViewDoc`, [`viewDoc.ts`](../src/cad/src/components/viewDoc.ts), the viewer's view-document mode with "Save view" ([`viewer.tsx`](../src/cad/src/tools/viewer.tsx)), dragging out of the ViewCube ([`Viewer.tsx`](../src/cad/src/components/Viewer.tsx)) and [`cad-view-doc.spec.ts`](../src/harness/e2e/tests/cad-view-doc.spec.ts). Existing view documents no longer open. [10](10-view-state.md#view-documents) then describes named views and embeds by reference to this document.
+- The embed is created when the drag starts, because the payload must carry its URL, so a cancelled drag leaves an orphan.

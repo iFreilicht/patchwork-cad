@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { render } from "solid-js/web";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { createModel, modelAttributes } from "../components/createModel.ts";
@@ -6,9 +6,9 @@ import { StatusBar } from "../components/StatusBar.tsx";
 import { createEntityName } from "../components/entityName.ts";
 import { createPeerHighlights, joinPresence, peerMarkers } from "../components/presence.ts";
 import { createUiState } from "../components/uiState.ts";
-import { viewsOf } from "../components/viewDoc.ts";
+import { createNamedViews } from "../components/namedViews.ts";
 import { sameCamera, Viewer, type ViewerProps } from "../components/Viewer.tsx";
-import type { CadModelDoc, CadModelViewDoc, CameraState } from "../types.ts";
+import type { CadModelDoc, CadModelEmbedDoc, CameraState } from "../types.ts";
 import type { Model } from "../components/createModel.ts";
 import { createComments } from "../components/comments.ts";
 import { CommentsPopover } from "../components/CommentsPopover.tsx";
@@ -22,12 +22,12 @@ const VIEWER_TOOL_ID = "cad-model-viewer";
 
 /**
  * The model's 3D view alone, read-only: for embedding a model in other documents and as a building
- * block. It also shows view documents (`cad-model-view`), a model with a saved camera.
+ * block. It also shows embeds (`cad-model-embed`), a model seen from one of its named views.
  */
-export default function mount(handle: DocHandle<CadModelDoc | CadModelViewDoc>, element: HTMLElement): () => void {
+export default function mount(handle: DocHandle<CadModelDoc | CadModelEmbedDoc>, element: HTMLElement): () => void {
   return render(() => {
     const doc = handle.doc();
-    return doc && "model" in doc ? <ViewDocViewer handle={handle as DocHandle<CadModelViewDoc>} element={element} /> : <ModelViewer handle={handle as DocHandle<CadModelDoc>} element={element} />;
+    return doc && "model" in doc ? <EmbedViewer handle={handle as DocHandle<CadModelEmbedDoc>} element={element} /> : <ModelViewer handle={handle as DocHandle<CadModelDoc>} element={element} />;
   }, element);
 }
 
@@ -110,15 +110,18 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} createView={viewsOf(props.handle)} collapseViewCube {...presence} />
+      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} collapseViewCube {...presence} />
       {popover(() => root)}
       <StatusBar model={model} />
     </div>
   );
 }
 
-/** A view document: its model with its camera. Orbiting is local until "Save view" stores the camera for everyone. */
-function ViewDocViewer(props: { handle: DocHandle<CadModelViewDoc>; element: HTMLElement }) {
+/**
+ * An embed (research/18-named-views.md, "Embeds"): its model, seen from its named view, following
+ * the model as it changes. Orbiting is local; "Reset" returns to the view.
+ */
+function EmbedViewer(props: { handle: DocHandle<CadModelEmbedDoc>; element: HTMLElement }) {
   const [doc, setDoc] = createSignal(props.handle.doc());
   const onChange = () => setDoc(props.handle.doc());
   props.handle.on("change", onChange);
@@ -128,48 +131,64 @@ function ViewDocViewer(props: { handle: DocHandle<CadModelViewDoc>; element: HTM
     (url: AutomergeUrl) => globalThis.repo?.find<CadModelDoc>(url),
   );
   return (
-    <Show when={modelHandle()} fallback={<div class="cad-model cad-model--viewer" data-state="loading" />}>
-      {(model) => <SavedView handle={props.handle} doc={doc} model={model()} element={props.element} />}
+    <Show when={modelHandle()} fallback={<div class="cad-model cad-model--viewer cad-model--embed" data-state="loading" />}>
+      {(model) => <Embed handle={props.handle} doc={doc} model={model()} element={props.element} />}
     </Show>
   );
 }
 
-function SavedView(props: { handle: DocHandle<CadModelViewDoc>; doc: () => CadModelViewDoc | undefined; model: DocHandle<CadModelDoc>; element: HTMLElement }) {
+function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModelEmbedDoc | undefined; model: DocHandle<CadModelDoc>; element: HTMLElement }) {
   const model = createModel(props.model);
+  const views = createNamedViews(props.model);
   const { props: presence, popover } = viewerPresence(props.element, props.model, model);
   let stage!: HTMLDivElement;
-  const [current, setCurrent] = createSignal<CameraState>();
-  const changed = () => !!current() && !sameCamera(current(), props.doc()?.camera);
-  const save = () => {
-    const camera = current();
-    if (camera) props.handle.change((d) => (d.camera = camera));
-  };
-  // The camera the viewer shows: the document's, again as a new object on Reset, which the viewer applies even if the document's didn't change.
+  const view = createMemo(() => views.views().find((v) => v.id === props.doc()?.view));
+  /** Its view was deleted from the model. */
+  const deleted = () => !!props.doc()?.view && !view();
+  // The camera the viewer shows: the view's, again as a new object on Reset, which the viewer applies even if the view's didn't change.
   const [shown, setShown] = createSignal<CameraState>();
-  createEffect(() => setShown(props.doc()?.camera));
+  const [current, setCurrent] = createSignal<CameraState>();
+  createEffect(() => {
+    const camera = view()?.camera;
+    setShown(camera);
+    setCurrent(camera);
+  });
+  const changed = () => !!view() && !!current() && !sameCamera(current(), view()?.camera);
   const reset = () => {
-    const camera = props.doc()?.camera;
+    const camera = view()?.camera;
     if (!camera) return;
     setShown({ ...camera });
     setCurrent(camera);
   };
+  const choose = (id: string) => props.handle.change((d) => (d.view = id));
   let root!: HTMLDivElement;
   const openModel = () => root.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url: props.model.url }, bubbles: true, composed: true }));
   return (
-    <div class="cad-model cad-model--viewer cad-model--view-doc" ref={root} {...modelAttributes(model)}>
-      <div class="cad-view-doc__stage" ref={stage}>
-        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={setCurrent} createView={viewsOf(props.model)} collapseViewCube {...presence} />
-        <Show when={changed()}>
-          <div class="cad-view-doc__edit">
-            <button class="cad-editor__button" onClick={save}>
-              Save view
-            </button>
+    <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"}>
+      <div class="cad-embed__stage" ref={stage}>
+        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={setCurrent} collapseViewCube {...presence} />
+        <div class="cad-embed__edit">
+          <select class="cad-editor__button" aria-label="View" title={deleted() ? "This view was deleted from the model; choose another" : "The model's view this embed shows"} onChange={(event) => choose(event.currentTarget.value)}>
+            <Show when={!view()}>
+              <option value="" disabled selected>
+                {deleted() ? "Deleted view" : "No view"}
+              </option>
+            </Show>
+            <For each={views.views()}>
+              {(v) => (
+                <option value={v.id} selected={v.id === props.doc()?.view}>
+                  {v.name}
+                </option>
+              )}
+            </For>
+          </select>
+          <Show when={changed()}>
             <button class="cad-editor__button" onClick={reset}>
               Reset
             </button>
-          </div>
-        </Show>
-        <button class="cad-editor__button cad-view-doc__open" onClick={openModel}>
+          </Show>
+        </div>
+        <button class="cad-editor__button cad-embed__open" onClick={openModel}>
           Open model
         </button>
         {popover(() => stage)}

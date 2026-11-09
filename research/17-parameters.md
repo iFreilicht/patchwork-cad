@@ -125,7 +125,7 @@ cad: {
 }
 ```
 
-- **One mechanism for both.** Configurations and named views are stored, listed, selected per user and embedded the same way. Named views come first, designed in [18](18-named-views.md), which replaces view documents ([10](10-view-state.md#view-documents)); configurations follow their pattern.
+- **One mechanism for both.** Configurations and named views are stored, listed, selected per user and embedded the same way; named views are built ([18](18-named-views.md)), and configurations follow their pattern.
 - **Kept in sync.** A rename in the editor renames the parameter in every configuration in the same change. A rename typed in the code pane leaves values under the old name; the editor sees them, as the model and its configurations are one document, and offers to map them. A deleted parameter's values are shown as unused.
 - **Configurations set independent parameters only;** missing ones take `defaultParams`, so a parameter added later gets its default in every configuration.
 - **Outputs:** a configuration may show only some of `return`'s keys ([15](15-bodies.md#output)), e.g. only `lid`. This is a filter over what the model returns, not code: a variant that changes the model's code is an assembly in all but name ([below](#considered)).

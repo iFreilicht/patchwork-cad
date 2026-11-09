@@ -42,6 +42,14 @@ export function regionDirection(r: Region): THREE.Vector3 {
   return v.normalize();
 }
 
+/** The region whose direction is nearest to `direction`, e.g. to name a camera that looks from it. */
+export function nearestRegion(direction: readonly [number, number, number]): Region {
+  const d = new THREE.Vector3(...direction).normalize();
+  let best = REGIONS[0]!;
+  for (const r of REGIONS) if (regionDirection(r).dot(d) > regionDirection(best).dot(d)) best = r;
+  return best;
+}
+
 /** A quad centred at `center`, spanning ±`u` and ±`v`, facing u × v, with UVs along u and v. */
 function quad(center: THREE.Vector3, u: THREE.Vector3, v: THREE.Vector3): THREE.BufferGeometry {
   const corners = [

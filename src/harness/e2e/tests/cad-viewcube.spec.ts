@@ -1,7 +1,7 @@
 /**
- * The ViewCube (research/07, "The ViewCube"): clicking a face, edge or corner looks from it, Home
- * returns to the first view, the projection toggles, and an edit that reframes the model keeps the
- * direction.
+ * The ViewCube (research/07, "The ViewCube"): clicking a face, edge or corner looks from it,
+ * dragging it orbits (research/18-named-views.md), Home returns to the first view, the projection
+ * toggles, and an edit that reframes the model keeps the direction.
  */
 import { CAD_MODULES, cameraDirection, clickHome, clickViewCube, createModel, editorView, openWithTool, reloadStored, setModelSource, type Region } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
@@ -111,4 +111,44 @@ test("the ViewCube starts expanded in the editor and collapsed in the viewer, ev
   await openWithTool(page, "cad-model");
   await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   await expect(toggle(editor)).toHaveAttribute("aria-expanded", "true");
+});
+
+test("dragging the ViewCube orbits, as dragging the view does", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await clickViewCube(page, [0, -1, 0]);
+  const viewer = page.locator(".cad-model__viewer");
+  const point = await viewer.evaluate((el) => (el as unknown as { cadViewer: { viewCubePoint(r: Region): { x: number; y: number } | undefined } }).cadViewer.viewCubePoint([0, -1, 0]));
+  if (!point) throw new Error("the front of the ViewCube isn't visible");
+
+  // Sideways: the camera turns about the vertical axis, and doesn't turn to the region it started on.
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 40, point.y, { steps: 8 });
+  await expect(viewer).toHaveAttribute("data-orbiting", "true");
+  await page.mouse.up();
+  await expect(viewer).not.toHaveAttribute("data-orbiting", "true");
+  const turned = await cameraDirection(page);
+  expect(turned[2]).toBeCloseTo(0, 3);
+  expect(Math.abs(turned[0])).toBeGreaterThan(0.1);
+  // It stays there: a release doesn't turn to a region.
+  await page.waitForTimeout(400);
+  const after = await cameraDirection(page);
+  turned.forEach((c, i) => expect(after[i]).toBeCloseTo(c, 6));
+
+  // Upwards: it looks from higher up; the camera is stored as after any orbit.
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x, point.y + 40, { steps: 8 });
+  await page.mouse.up();
+  const raised = await cameraDirection(page);
+  expect(raised[2]).toBeGreaterThan(0.1);
+  await reloadStored(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  const stored = await cameraDirection(page);
+  raised.forEach((c, i) => expect(stored[i]).toBeCloseTo(c, 3));
 });

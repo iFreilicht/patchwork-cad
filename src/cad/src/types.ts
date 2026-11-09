@@ -63,6 +63,20 @@ export interface CadModelDoc {
   source: string;
   /** Patchwork's comment threads (research/13-collaboration.md, "Comments"). */
   "@comments"?: { threads: CommentThread[] };
+  /** What the tools keep about the model besides its code (research/18-named-views.md, "Storage"). */
+  cad?: CadData;
+}
+
+/** The tools' data in a model document, next to its code. */
+export interface CadData {
+  views?: NamedView[];
+}
+
+/** A camera that belongs to the model, by name (research/18-named-views.md). */
+export interface NamedView {
+  id: string;
+  name: string;
+  camera: CameraState;
 }
 
 /** A comment thread in Patchwork's format (patchwork-base codemirror-base/src/lib/extensions/comments.ts), with our anchor. */
@@ -96,9 +110,10 @@ export interface CadAnchor {
   entityName?: string;
 }
 
-/** A view of a model: which model, seen with which camera (research/10-view-state.md). */
-export interface CadModelViewDoc {
+/** An embed of a model, seen from one of its named views (research/18-named-views.md, "Embeds"). */
+export interface CadModelEmbedDoc {
   title: string;
   model: AutomergeUrl;
-  camera: CameraState;
+  /** A named view's id; without one, the viewer frames the model. */
+  view?: string;
 }
