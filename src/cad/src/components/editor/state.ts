@@ -632,7 +632,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const breaks = async (doing: string, text: string, edits: Edit[]): Promise<string | undefined> => {
     let changed = text;
     for (const e of [...edits].sort((x, y) => y.start - x.start)) changed = changed.slice(0, e.start) + e.text + changed.slice(e.end);
-    const result = await model.engine.check(changed);
+    const result = await model.engine.check(changed, model.params());
     if (result.error && !model.error()) return `${doing} breaks the model: ${result.error.message}`;
     const problems = model.trace().filter((t) => t.status !== "ok").length;
     const broken = result.problems - problems;

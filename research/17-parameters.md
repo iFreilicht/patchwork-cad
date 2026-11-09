@@ -1,8 +1,8 @@
 # Parameters
 
-How a model's parameters are managed in the editor, and how a parametrized model is used elsewhere in Patchwork: customized without editing it, kept as named sets of values, embedded, or driven by values from other documents. This is ideation; nothing here is built yet.
+How a model's parameters are managed in the editor, and how a parametrized model is used elsewhere in Patchwork: customized without editing it, kept as named sets of values, embedded, or driven by values from other documents. Implementation: [`model/params.ts`](../src/cad/src/model/params.ts), [`model/configurations.ts`](../src/cad/src/model/configurations.ts), [`configurations.ts`](../src/cad/src/components/configurations.ts), [`parameters.ts`](../src/cad/src/components/editor/parameters.ts), [`ParamsDialog.tsx`](../src/cad/src/components/editor/ParamsDialog.tsx), `paramSchema` in the feature library ([`params.ts`](../src/features/src/params.ts)); tests: [`params.test.ts`](../src/cad/test/params.test.ts), [`configurations.test.ts`](../src/cad/test/configurations.test.ts), [`sweep.test.ts`](../src/features/test/sweep.test.ts), [`cad-parameters.spec.ts`](../src/harness/e2e/tests/cad-parameters.spec.ts).
 
-## What exists
+## Building with values
 
 A model declares parameters as plain JS, as replicad does:
 
@@ -12,7 +12,7 @@ export const defaultParams = { w: 60, d: 40, h: 8 };
 export default function main({ w, d, h }) { … }
 ```
 
-The tool never passes parameters: the worker calls `builder.buildShapesFromCode(source)`, and replicad-evaluator falls back to the module's own (`module.default(params || module.defaultParams)`, `builder-DzkdSG9v.js`). Its signature already takes overrides (`buildShapesFromCode: (code: string, params?: GenericRecord)`, `builder.d.ts`), so building with other values is a one-argument change. Another model can already call a model with its own values: `body(() => m4.default({ ...m4.defaultParams, w: 80 }))` ([11](11-adopting-shapes.md#body)). Feature forms accept expressions over the parameters (`distance: h`, [02](02-model-storage.md#consequences)), but nothing in the UI lists, adds, renames or changes them.
+replicad-evaluator calls `main` with the module's own defaults when it gets no values (`module.default(params || module.defaultParams)`, `builder-DzkdSG9v.js`). A build request carries the values to show over them ([`protocol.ts`](../src/cad/src/kernel/protocol.ts)), and the worker's wrapper of `main`, which already records what it returns, merges them over the module's `defaultParams` (`withParams` in [`worker.ts`](../src/cad/src/kernel/worker.ts)), so replicad's call stays as it is. A trial build before moving a Custom Script uses the same values. Another model calls a model with its own values in plain JS: `body(() => m4.default({ ...m4.defaultParams, w: 80 }))` ([11](11-adopting-shapes.md#body)).
 
 ## Prior art
 
@@ -27,12 +27,12 @@ The tool never passes parameters: the worker calls `builder.buildShapesFromCode(
 
 `defaultParams` stays the source of truth, for portability ([02](02-model-storage.md#design-goal-portable-models)) and because replicad's own tools read it. A parameter is two spans: a property of the `defaultParams` literal and a name in `main`'s destructuring. The editor edits both with minimal splices, as forms edit feature arguments:
 
-- **Add:** append `k: v` to the literal and `k` to the pattern.
-- **Rename:** both spans, its key in [`paramConfig`](#kinds-units-ranges) and every use in `main`, with the refactoring that renames bodies ([`refactor.ts`](../src/cad/src/model/refactor.ts)), and the parameter's values in every [configuration](#configurations-and-named-views-in-the-model-document), in the same change.
-- **Delete:** only when unused, or by inlining its value at every use.
-- **Promote a value:** a context action on a form field (or typing an unknown name, as in Fusion) turns `distance: 20` into `distance: h2` and adds `h2: 20`.
+- **Add:** append `k: v` to the literal and `k` to the pattern, on a line of its own if the literal has its properties on lines of their own; a model without them gets `export const defaultParams = { k: v };` before `main` and `main({ k })`.
+- **Rename:** both spans, its key in [`paramConfig`](#kinds-units-ranges) and every use in `main` (a shorthand property that reads it keeps its key: `{ w }` becomes `{ w: width }`), the parameter's values in every [configuration](#configurations-and-named-views-in-the-model-document) in the same change, and the values the user tries. A parameter `main` reads under another name, `{ w: wide }`, changes only its key.
+- **Remove:** only when `main` doesn't use it; the dialog disables the button and says why.
+- **Promote a value:** "ƒ" next to a feature's number field turns `radius: 1.5` into `radius: radius` and adds `radius: 1.5` to the parameters, under the argument's name or a numbered one if it is taken.
 
-Models that deviate (`main(params)` with `params.w`, a computed `defaultParams`, no destructuring) still build; the panel then lists the values read-only and offers to edit them in code, as the timeline falls back to Custom Script.
+New names must be valid and unused in the model ([`clashes`](../src/cad/src/model/refactor.ts)). Models that deviate (`main(params)` with `params.w`, a computed `defaultParams`, defaults in the pattern) still build; the dialog then shows the parameters and says why it can't edit them.
 
 ### Derived parameters
 
@@ -46,7 +46,7 @@ export default function main({ w, d, h }) {
 }
 ```
 
-The editor reads the leading run of `const x = <expression>` statements that call no feature as the derived parameters, instead of a Custom Script entry, and shows them in the parameters entry below the independent ones, with their current values. They are not overridable: a configuration sets independent parameters only, and derived ones follow. Each derived value is one statement with one expression span, so a future expression language replaces only the expression.
+The editor reads the leading run of `const x = <expression>` statements as the derived parameters, instead of a Custom Script entry ([`derivedStatements`](../src/cad/src/model/analyze.ts)): expressions that call nothing but `Math.…`, define no function, assign nothing and make no object or array, which later code could change (a Custom Script that sets `hole.r` stays one). They show in the parameters entry below the independent ones, where they are added (after the others), renamed with their uses, removed when unused, and their expressions edited. They are not overridable: a configuration sets independent parameters only, and derived ones follow. Each derived value is one statement with one expression span, so a future expression language replaces only the expression.
 
 - **A `derive` function** (`export const derive = ({ w, h }) => ({ r: w / 4 })`, called by `main` itself because callers pass only `defaultParams`) encapsulates them, but makes the code harder to read and needs machinery to keep `main`'s call to it working.
 - **Destructuring defaults** (`main({ w = 60, d = w * 2 } = {})`) make derived values overridable and tie them to JS's default-value semantics.
@@ -62,10 +62,11 @@ export const paramConfig = { w: { title: "Width", minimum: 10, maximum: 200, mul
 
 - **Field names are JSON Schema's** (`title`, `description`, `minimum`, `maximum`, `multipleOf`, `enum`), plus `unit`, so form generators, validators and LLM tooling understand them without our tool.
 - **Absent fields mean no constraint,** as in JSON Schema, so callers read `paramConfig` as it is. Default values stay in `defaultParams` only, not in a `default` field. A kernel-free library function `paramSchema(model)` merges the portable parts into a complete JSON Schema for callers that want one: `type` from each default value, `default` from `defaultParams`, the rest from `paramConfig`.
-- **Inference fills the rest in the editor only:** the trace knows which feature parameter each expression feeds ([`ParamSpec`](../src/features/src/schema.ts)), so `w` in a `distance` is a length, in a `radius` greater than 0. A parameter used as both a length and a count stays a plain number. Inferred values are never written back into the code, where they would go stale when usage changes. A model without `paramConfig` still gets a useful panel.
+- **Inference fills the rest in the editor only** ([`quantities`](../src/cad/src/model/params.ts)): a name used in a feature argument of kind `length`, `profile` or `plane` ([`ParamSpec`](../src/features/src/schema.ts)) is a length, in one of kind `number` a number, and a derived parameter passes its quantity on to the names its expression uses. A parameter used as both stays a plain number. Inferred values are never written back into the code, where they would go stale when usage changes. A model without `paramConfig` still gets a useful panel.
 - **Units follow from the quantity.** Values are bare numbers: OCCT, replicad and the feature schemas (`kind: "length"`) have no units. The library fixes them, as Fusion's per-design default units do, but for every model: lengths are millimetres and, once features take angles, angles are degrees, which exporters rely on. Values in `defaultParams` and configurations are always in these units. The editor infers a parameter's quantity (length, angle, count) from its use and shows its unit, so `unit` is needed only where that can't work: as a label for quantities that aren't geometry (`"teeth"`, `"%"`), and later for showing a length in another unit (`"in"`), which the panel converts on input and display while the code keeps millimetres. JSON Schema has no unit keyword, and validators ignore unknown keywords, so `unit` costs nothing there.
 - **Derived constants** are described by name, too, for their title and unit; they get no ranges, as they aren't set.
-- **Drift:** a parameter's name is in `defaultParams`, `main`'s pattern and `paramConfig`. The editor's rename changes all three; a rename typed in the code pane leaves a stale key, which the panel flags. A rename in the code editor itself (F2, as in other editors), which the code pane wants anyway, would cover that case, too.
+- **The dialog uses** `title` next to the name, `description` as its tooltip, `unit` over the inferred one, and `minimum`, `maximum` and `multipleOf` to mark a shown value outside them.
+- **Drift:** a parameter's name is in `defaultParams`, `main`'s pattern and `paramConfig`. The editor's rename changes all three; a rename typed in the code pane leaves a stale key. A rename in the code editor itself (F2, as in other editors), which the code pane wants anyway, would cover that case.
 
 Rejected:
 
@@ -76,17 +77,25 @@ Rejected:
 
 ### The parameters entry
 
-`main`'s signature is the model's input as `return` is its output ([15](15-bodies.md#output)), so the timeline gets a first entry, "Parameters", mirroring the return entry at its end. Its dialog is the panel: name, value expression, inferred kind, uses; derived parameters below the independent ones. Hovering a parameter highlights the features that use it, as dependencies are shown for entries ([07](07-poc-modelling-ui.md#reordering)), and expression fields complete parameter names. A Fusion-style modal is the alternative; a timeline entry keeps the view free while values change.
-
-Number fields get scrubbing (drag on the label), which rebuilds on each step. M1 rebuilds in 21 ms in Chromium and 80 ms in Firefox, M3 with three ribs in 41 and 145 ms ([07](07-poc-modelling-ui.md#rebuild-performance)), so scrubbing works for these parts if builds are coalesced to the latest value; large models need the abort button from the [status list](00-status.md#not-started).
+`main`'s signature is the model's input as `return` is its output ([15](15-bodies.md#output)), so the timeline has a first entry, "params", mirroring the return entry at its end; neither is one of the code's entries, and neither can be dragged. Its dialog takes the place of a feature's and the return's: a row per parameter with its name (F2 or a double click renames it), its default as an expression field that writes the code, the value the model is shown with, its unit, and a remove button; below, a row per derived parameter with its expression. A Fusion-style modal is the alternative; a dialog in the view keeps the view free while values change.
 
 ### Trying values without changing the model
 
-A value written to `defaultParams` changes the model for every collaborator. A per-user override, kept in tool storage like the marker ([10](10-view-state.md#storage)), lets one user try `w = 120` while the file keeps 60: the panel shows the override next to the default, the status bar says that the view shows modified parameters, and "Apply" writes it to the code, "Save as configuration" stores it as a [configuration](#configurations-and-named-views-in-the-model-document), "Reset" drops it. A configuration is selected the same way: per user, as UI state, until a proxy document fixes it for an embed.
+A value written to `defaultParams` changes the model for every collaborator. Values a user tries, and the configuration they show the model with, are theirs alone, kept in tool storage like the marker (`params` in [`DocUiState`](../src/cad/src/types.ts), [10](10-view-state.md#storage)): one user tries `width = 100` while the file keeps 60. The dialog's "Shown" column takes JSON, or an automerge URL for a [linked value](#values-from-other-documents), and shows the configuration's or the default's value as its placeholder; the status bar says "Shown with Wide and 1 value you try". "Apply to defaults" writes the tried values into `defaultParams` (a link can't go there), "Update ‹configuration›" into the configuration shown, "Save as configuration" keeps everything shown as a new [configuration](#configurations-and-named-views-in-the-model-document), and "Reset" drops them. The viewer tool, which embeds a model, shows its defaults; an embed shows its own configuration.
 
 ### Parameters stress references
 
-Changing a parameter is a fuzzer for topological naming ([03](03-topological-naming.md#recommendation)). Some references carry absolute coordinates, which a changed dimension moves away from: `piece(notch, 1, { near: [49.75, 0, 20] })` in M1, and `faceAt(near)` for adopted bodies, which picks the face "whose centroid was nearest to `near`" ([`refs.ts`](../src/features/src/refs.ts)). A loop parameter (M3's `ribs`) changes which features exist, so `ref.rib0` vanishes when `ribs` is empty. Lenient builds pass a failed feature's input through ([07](07-poc-modelling-ui.md#the-feature-library)), so a configuration can look plausible and be wrong. Two consequences: any UI that changes parameters without the editor (a customizer, an embed) must show the build's problems, and a test should sweep M1, M3 and M4 over parameter ranges and classify every broken reference before configurations are built on top.
+Changing a parameter is a fuzzer for topological naming ([03](03-topological-naming.md#recommendation)). Some references carry absolute coordinates, which a changed dimension moves away from: `piece(notch, 1, { near: [49.75, 0, 20] })` in M1, and `faceAt(near)` for adopted bodies, which picks the face "whose centroid was nearest to `near`" ([`refs.ts`](../src/features/src/refs.ts)). A loop parameter (M3's `ribs`) changes which features exist. Lenient builds pass a failed feature's input through ([07](07-poc-modelling-ui.md#the-feature-library)), so a configuration can look plausible and be wrong; the editor, the viewer and embeds therefore show the build's problems in the status bar.
+
+The sweep ([`sweep.test.ts`](../src/features/test/sweep.test.ts)) builds M1, M3 and M4 with each numeric parameter scaled by 0.25, 0.5, 0.75, 0.9, 1.1, 1.25, 1.5, 2 and 3, and M3 with five other rib lists: 125 builds, 11 of which break, each for one of three reasons:
+
+| Reason | Builds | What happens |
+|---|---|---|
+| The geometry the reference names is gone | 8 | M1's notch leaves the plate or sits on its edge (`w` × 0.25 and × 0.5, `a` × 0.25, × 2 and × 3), so the edge or the face pieces it splits don't exist; M3's rib leaves the bracket (`w` × 0.25 and × 0.5); `ribs = []` makes no `rib0`. The reference reports "nothing matches", correctly: the design changed. |
+| A `near` hint vetoes the right piece | 2 | `w` × 3 in M1 and M3: the piece index still names the right piece, but the hint's absolute point is now nearer another piece's centroid. Without the hints, M1 with `w` = 180 resolves the chamfer's edge to the same entity as with 60 (index 15); with them, it is "ambiguous". |
+| OCCT fails | 1 | M3's fillet with `d` × 0.25: the rib reaches past the base ([04](04-kernel-robustness.md)). |
+
+No reference resolved to a visibly wrong entity, but the sweep can't tell a wrong entity from a right one; the hints are what would. They fail safe, and too early: hints relative to the part's size, or ones that only decide between candidates instead of vetoing, would survive scaling.
 
 ## In Patchwork
 
@@ -120,15 +129,14 @@ The model document holds both lists, under one field:
 
 ```ts
 cad: {
-  configurations: { id: string; name: string; params: { [name: string]: number | boolean | string | Linked }; outputs?: string[] }[];
+  configurations: { id: string; name: string; params: { [name: string]: ParamValue | { link: AutomergeUrl } } }[];
   views: { id: string; name: string; camera: CameraState }[];
 }
 ```
 
-- **One mechanism for both.** Configurations and named views are stored, listed, selected per user and embedded the same way; named views are built ([18](18-named-views.md)), and configurations follow their pattern.
-- **Kept in sync.** A rename in the editor renames the parameter in every configuration in the same change. A rename typed in the code pane leaves values under the old name; the editor sees them, as the model and its configurations are one document, and offers to map them. A deleted parameter's values are shown as unused.
+- **One mechanism for both.** Configurations and named views are stored, listed in the browser, picked per user and embedded the same way ([18](18-named-views.md)). The browser's Configurations section has "+" (keep the values shown as a configuration), a click to show the model with one, only for this user, or with the defaults again, a context menu that renames it, updates it to the values the user tries, and deletes it, and a grip that drags it out as an embed.
+- **Kept in sync.** A rename in the editor renames the parameter in every configuration in the same change. A rename typed in the code pane leaves values under the old name, which then have no effect.
 - **Configurations set independent parameters only;** missing ones take `defaultParams`, so a parameter added later gets its default in every configuration.
-- **Outputs:** a configuration may show only some of `return`'s keys ([15](15-bodies.md#output)), e.g. only `lid`. This is a filter over what the model returns, not code: a variant that changes the model's code is an assembly in all but name ([below](#considered)).
 - **Drafts** fork the document copy-on-write (`CloneEntry`: "One COW relationship between an original doc and the per-draft clone", [`draft-types.ts`](../.claude/skills/writing-patchwork-tools/reference/patchwork-base/drafts/src/draft-types.ts)), so a draft carries its configurations with its geometry.
 - **Saving changes the model document,** so a configuration or view is shared with everyone who can open the model. Patchwork has no permissions yet, so read-only access is not considered.
 
@@ -140,11 +148,11 @@ An embedding document refers to a configuration and a view through a small proxy
 { title: string; model: AutomergeUrl; configuration?: string; view?: string }
 ```
 
-Both are ids into the model's lists, and each is optional: no configuration means `defaultParams`, no view means the viewer's framing. A customizer tool opens the proxy with the parameter panel and the view, nothing else; the viewer shows it without the panel.
+Both are ids into the model's lists, and each is optional: no configuration means `defaultParams`, no view means the viewer's framing. Dragged out of the Views section, an embed has a view; out of the Configurations section, a configuration. The viewer shows it with a picker for each, which changes the embed, and builds with the configuration's values.
 
 - **For:** works wherever Patchwork takes a document (sidebar, drag and drop, the default tool by datatype); has its own title; carries its choice separately from the model, so several embeds of one model differ.
 - **Live by default:** the proxy follows the model's latest version, as Patchwork's embeds do. Pinning is the user's choice: a model URL with `#heads`.
-- **A deleted target:** when the configuration or view is gone, the proxy keeps no copy of its values; it shows the model's remaining configurations or views and lets the user pick one, which becomes the proxy's new target.
+- **A deleted target:** when the configuration or view is gone, the proxy keeps no copy of its values; its picker says "Deleted configuration" or "Deleted view" and offers the model's others, and the model shows with its defaults meanwhile.
 - **"Can't edit anything else"** is a UI restriction: the proxy holds the model's URL, which opens in the editor, too.
 - **Orphans:** creating a proxy on a drag that is then cancelled leaves an orphan document ([18](18-named-views.md#embeds)).
 
@@ -152,9 +160,10 @@ The alternative, an embed that stores a sub-document URL such as `automerge:<mod
 
 ### Values from other documents
 
-A configuration's value can be a link instead of a literal: `Linked = { link: AutomergeUrl }`, any URL that resolves to a number. That covers a field in a structured document (`automerge:<sheet>/rows/@3/width`) and a number in text (`automerge:<note>/content/[2@abc-4@abc]`), whose range must parse as a number. Fusion's global parameters are then just a document of numbers that several models' configurations link to; no special datatype is needed.
+A configuration's value, or one a user tries, can be a link instead of a literal: `{ link: AutomergeUrl }`, any URL that resolves to a number, pasted into the "Shown" field. That covers a field in a structured document (`automerge:<sheet>/rows/@3/width`) and a number in text (`automerge:<note>/content/[2@abc-4@abc]`), whose range must parse as a number. Fusion's global parameters are then just a document of numbers that several models' configurations link to; no special datatype is needed.
 
-- **Resolving:** the tool loads each linked document, resolves the URL, and rebuilds when it changes. A link that doesn't resolve, a collapsed range, or text that isn't a number is a broken value: the panel shows it, and the build uses the default.
+- **Resolving:** the tool finds each linked URL with `repo.find`, which resolves the path to the value, and rebuilds when the sub-handle reports a change ([`configurations.ts`](../src/cad/src/components/configurations.ts)). A link that doesn't resolve, a collapsed range, or text that isn't a number is a broken value: the status bar says why, the field is marked, and the build uses the default.
+- **A link into text breaks when its number is typed anew.** Replacing "42" by "45" deletes the range's characters, so its cursors collapse ([13](13-collaboration.md#anchors-under-edits)) and the link reads `""`, while a link into a field follows every change ([`configurations.test.ts`](../src/cad/test/configurations.test.ts)). Links into text suit numbers that are edited in place, not retyped.
 - **Only in configurations.** `defaultParams` stays literal, so the model stays portable; a model that needs the linked value everywhere imports the document as data, which needs an import loader for models ([building blocks](#building-blocks), [02](02-model-storage.md#verdict-imports-in-code)) and the sandbox ([05](05-sandboxing.md)).
 - **Picking a link:** dragging a value out of another tool needs that tool to offer a URL for it, e.g. a text selection as a cursor range, which Patchwork's text editor already makes for comments (`handle.sub("content", cursor(from, to)).url`, [13](13-collaboration.md#data-model)). Pasting a URL works everywhere.
 - **Units and typing** are the linked document's business: `"12 mm"` is not a number, and the link breaks.
@@ -172,9 +181,11 @@ A configuration's value can be a link instead of a literal: `Linked = { link: Au
 
 Every open proxy builds the model in its own kernel worker, and each worker holds an OCCT instance (warm load 100–200 ms, 0.9 s in Firefox, [08](08-module-evaluation.md#conclusions)). A canvas of ten configurations is ten workers. Sharing one worker between views of the same page, or caching meshes per model heads and parameter values, would bound it. Opening a proxy runs the model's code, as opening the model does ([05](05-sandboxing.md)).
 
-## Recommendation
+## Open
 
-1. **Editor:** the parameters entry at the start of the timeline, editing `defaultParams` and `main`'s pattern by splices; derived parameters as constants at the start of `main`; `paramConfig` with inference for the rest; promote-to-parameter in forms; per-user overrides with Apply and Reset.
-2. **The reference sweep** over M1, M3 and M4 before configurations, to know how often a changed value breaks a reference.
-3. **Configurations and named views** in the model document's `cad`, embedded through `cad-model-embed` documents `{ model, configuration?, view? }` ([18](18-named-views.md)), with a customizer tool for them.
-4. **Linked values** in configurations.
+- Scrubbing number fields, which rebuilds on each step: M1 rebuilds in 21 ms in Chromium and 80 ms in Firefox, M3 with three ribs in 41 and 145 ms ([07](07-poc-modelling-ui.md#rebuild-performance)), enough if builds are coalesced to the latest value; large models need the abort button from the [status list](00-status.md#not-started).
+- Hovering a parameter to highlight the features that use it, completing parameter names in expression fields, and creating a parameter by typing an unknown name, as Fusion does.
+- `enum` as a choice in the dialog; units other than millimetres for display.
+- Values of a renamed parameter that a rename in the code pane leaves behind in configurations, and stale `paramConfig` keys.
+- A customizer: an embed's view of the parameters, to try values without opening the editor; and showing only some of `return`'s outputs in a configuration ([15](15-bodies.md#output)).
+- `near` hints that survive scaling ([above](#parameters-stress-references)).

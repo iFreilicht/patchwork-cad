@@ -82,8 +82,12 @@ export interface ModelError {
   kind: "import" | "syntax" | "runtime" | "kernel" | "mesh";
 }
 
+/** Values of a model's parameters, by key, that replace those of its `defaultParams`. */
+export type BuildParams = Record<string, unknown>;
+
 export type WorkerRequest =
-  | { type: "build"; id: number; source: string }
+  /** `params`: values of parameters that replace the model's defaults (research/17-parameters.md). */
+  | { type: "build"; id: number; source: string; params?: BuildParams }
   /** The bodies visible before feature `feature` of the last build (or after it), for picking while it is edited and for the timeline marker. */
   | { type: "rollback"; id: number; feature: string; after?: boolean }
   /** The reference code for entity `index` of body `body` of the last build. */
@@ -95,7 +99,7 @@ export type WorkerRequest =
   /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
   | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
-  | { type: "check"; id: number; source: string };
+  | { type: "check"; id: number; source: string; params?: BuildParams };
 
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }

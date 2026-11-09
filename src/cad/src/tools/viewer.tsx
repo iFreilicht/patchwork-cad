@@ -7,6 +7,7 @@ import { createEntityName } from "../components/entityName.ts";
 import { createPeerHighlights, joinPresence, peerMarkers } from "../components/presence.ts";
 import { createUiState } from "../components/uiState.ts";
 import { createNamedViews } from "../components/namedViews.ts";
+import { createConfigurations } from "../components/configurations.ts";
 import { sameCamera, Viewer, type ViewerProps } from "../components/Viewer.tsx";
 import type { CadModelDoc, CadModelEmbedDoc, CameraState } from "../types.ts";
 import type { Model } from "../components/createModel.ts";
@@ -138,7 +139,20 @@ function EmbedViewer(props: { handle: DocHandle<CadModelEmbedDoc>; element: HTML
 }
 
 function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModelEmbedDoc | undefined; model: DocHandle<CadModelDoc>; element: HTMLElement }) {
-  const model = createModel(props.model);
+  const configurations = createConfigurations(props.model);
+  const configuration = createMemo(() => configurations.list().find((c) => c.id === props.doc()?.configuration));
+  /** Its configuration was deleted from the model. */
+  const configurationDeleted = () => !!props.doc()?.configuration && !configuration();
+  const configured = createMemo(() => configurations.values(configuration()?.id));
+  const params = createMemo(
+    () => {
+      const values = configured().values;
+      return Object.keys(values).length ? values : undefined;
+    },
+    undefined,
+    { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) },
+  );
+  const model = createModel(props.model, params);
   const views = createNamedViews(props.model);
   const { props: presence, popover } = viewerPresence(props.element, props.model, model);
   let stage!: HTMLDivElement;
@@ -161,10 +175,15 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
     setCurrent(camera);
   };
   const choose = (id: string) => props.handle.change((d) => (d.view = id));
+  const chooseConfiguration = (id: string) =>
+    props.handle.change((d) => {
+      if (id) d.configuration = id;
+      else delete d.configuration;
+    });
   let root!: HTMLDivElement;
   const openModel = () => root.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url: props.model.url }, bubbles: true, composed: true }));
   return (
-    <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"}>
+    <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"} data-configuration={configuration()?.name ?? ""} data-configuration-deleted={configurationDeleted() ? "true" : "false"}>
       <div class="cad-embed__stage" ref={stage}>
         <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={setCurrent} collapseViewCube {...presence} />
         <div class="cad-embed__edit">
@@ -182,6 +201,25 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
               )}
             </For>
           </select>
+          <Show when={configurations.list().length > 0 || props.doc()?.configuration}>
+            <select class="cad-editor__button" aria-label="Configuration" title={configurationDeleted() ? "This configuration was deleted from the model; choose another" : "The model's configuration this embed shows"} onChange={(event) => chooseConfiguration(event.currentTarget.value)}>
+              <Show when={configurationDeleted()}>
+                <option value={props.doc()?.configuration ?? ""} disabled selected>
+                  Deleted configuration
+                </option>
+              </Show>
+              <option value="" selected={!props.doc()?.configuration}>
+                Defaults
+              </option>
+              <For each={configurations.list()}>
+                {(c) => (
+                  <option value={c.id} selected={c.id === props.doc()?.configuration}>
+                    {c.name}
+                  </option>
+                )}
+              </For>
+            </select>
+          </Show>
           <Show when={changed()}>
             <button class="cad-editor__button" onClick={reset}>
               Reset
@@ -193,7 +231,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
         </button>
         {popover(() => stage)}
       </div>
-      <StatusBar model={model} />
+      <StatusBar model={model} problems={configured().problems} />
     </div>
   );
 }

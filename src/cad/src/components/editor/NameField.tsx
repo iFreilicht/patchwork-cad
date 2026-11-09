@@ -21,7 +21,10 @@ export function NameField(props: { from: string; rename: (to: string) => Promise
       }
       onKeyDown={(event) => {
         if (event.key === "Escape") return props.onDone();
-        if (event.key !== "Enter" || busy) return;
+        if (event.key !== "Enter") return;
+        // Else Enter's keypress activates the button that gets the focus back when the field closes.
+        event.preventDefault();
+        if (busy) return;
         busy = true;
         const to = event.currentTarget.value.trim();
         void props.rename(to).then((why) => {

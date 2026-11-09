@@ -18,8 +18,8 @@ async function expectDirection(page: Page, region: Region | [number, number, num
 }
 
 const views = (page: Page) => page.locator(".cad-editor__browser").getByRole("list", { name: "Views" });
-const viewRow = (page: Page, name: string) => views(page).locator(`.cad-editor__view-row[data-name="${name}"]`);
-const viewNames = (page: Page) => views(page).locator(".cad-editor__view-row").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-name")));
+const viewRow = (page: Page, name: string) => views(page).locator(`.cad-editor__named-row[data-name="${name}"]`);
+const viewNames = (page: Page) => views(page).locator(".cad-editor__named-row").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-name")));
 
 /** Adds a view from the current camera and names it `name`. */
 async function addView(page: Page, name: string): Promise<void> {

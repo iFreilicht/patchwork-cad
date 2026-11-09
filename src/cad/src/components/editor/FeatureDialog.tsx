@@ -26,7 +26,7 @@ function isExpression(text: string): boolean {
  * and Escape restores the value from before the edit. An empty field, only allowed with
  * `allowEmpty`, commits on Enter or blur.
  */
-function ExpressionInput(props: { value: string; placeholder?: string; label: string; onCommit: (text: string) => boolean; disabled?: boolean; allowEmpty?: boolean }) {
+export function ExpressionInput(props: { value: string; placeholder?: string; label: string; onCommit: (text: string) => boolean; disabled?: boolean; allowEmpty?: boolean }) {
   let input!: HTMLInputElement;
   const [invalid, setInvalid] = createSignal(false);
   /** The value when the field got the focus. */
@@ -83,6 +83,8 @@ interface FieldProps {
   spec: ParamSpec;
   source: string;
   disabled: boolean;
+  /** Makes a parameter of argument `key` (research/17-parameters.md); says why not, if not. */
+  promote?: ((call: FeatureCall, key: string) => string | undefined) | undefined;
 }
 
 function propNode(call: FeatureCall, key: string): Expression | undefined {
@@ -104,10 +106,22 @@ function setParam(editor: Editor, key: string, text: string, optional: boolean):
   return editor.editOpen((call, analysis) => (text === "" && optional ? removeProp(call, key) : [...setProp(call, key, text), ...ensureImports(analysis, usedFunctions(text))]));
 }
 
+/** A number as code, e.g. `20` or `-1.5`, which can become a parameter's default. */
+const NUMBER = /^-?(\d+\.?\d*|\.\d+)$/;
+
 function ScalarField(props: FieldProps) {
   const value = () => textOf(props.source, propNode(props.entry.call, props.name));
   const def = props.spec.kind === "length" || props.spec.kind === "number" ? props.spec.default : undefined;
-  return <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />;
+  return (
+    <div class="cad-editor__scalar">
+      <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />
+      <Show when={props.promote && NUMBER.test(value())}>
+        <button class="cad-editor__link" title="Make a parameter of this value, with it as the default" aria-label="Make a parameter of this value" disabled={props.disabled} onClick={() => props.editor.setNotice(props.promote?.(props.entry.call, props.name))}>
+          ƒ
+        </button>
+      </Show>
+    </div>
+  );
 }
 
 /**
@@ -423,7 +437,7 @@ function OnBody(props: { editor: Editor; entry: FeatureEntry }) {
 }
 
 /** The form of the open feature, generated from its schema (research/02, "Feature types"). */
-export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEditCode: () => void }) {
+export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEditCode: () => void; promote?: FieldProps["promote"] }) {
   const schema = () => schemaOf(props.entry.type);
   const disabled = () => props.editor.syntaxError() !== undefined;
   const [confirmDelete, setConfirmDelete] = createSignal(false);
@@ -506,7 +520,7 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
         {([name, spec]) => (
           <div class="cad-editor__field" data-param={name}>
             <span>{spec.label}</span>
-            <Field editor={props.editor} entry={props.entry} name={name} spec={spec} source={props.editor.source()} disabled={disabled()} />
+            <Field editor={props.editor} entry={props.entry} name={name} spec={spec} source={props.editor.source()} disabled={disabled()} promote={props.promote} />
           </div>
         )}
       </For>

@@ -20,6 +20,8 @@ export interface DocUiState {
   marker?: TimelineMarker;
   /** Whether the browser pane is open; it is by default. */
   browserOpen?: boolean;
+  /** The configuration this user shows the model with, and values they try over it (research/17, "Trying values"). */
+  params?: { configuration?: string; values?: Record<string, ParamValue | LinkedValue> };
   /**
    * What this user shows or hides, against the default (research/15, "Visibility"): `body:<name>`
    * for a body by its name, `version:<name>` for a returned version that isn't a body's head.
@@ -70,6 +72,22 @@ export interface CadModelDoc {
 /** The tools' data in a model document, next to its code. */
 export interface CadData {
   views?: NamedView[];
+  configurations?: Configuration[];
+}
+
+/** A value of a parameter, as JSON. */
+export type ParamValue = number | boolean | string | null | ParamValue[] | { [key: string]: ParamValue };
+
+/** A value taken from another document: any automerge URL that resolves to a number (research/17, "Values from other documents"). */
+export interface LinkedValue {
+  link: AutomergeUrl;
+}
+
+/** A named set of values of the model's parameters, over its defaults (research/17-parameters.md, "Configurations"). */
+export interface Configuration {
+  id: string;
+  name: string;
+  params: Record<string, ParamValue | LinkedValue>;
 }
 
 /** A camera that belongs to the model, by name (research/18-named-views.md). */
@@ -116,4 +134,6 @@ export interface CadModelEmbedDoc {
   model: AutomergeUrl;
   /** A named view's id; without one, the viewer frames the model. */
   view?: string;
+  /** A configuration's id; without one, the model's defaults. */
+  configuration?: string;
 }

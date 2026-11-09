@@ -145,10 +145,11 @@ test("renaming a body updates its uses, shorthand properties and ref lookups", (
 });
 
 test("deleting a body() takes it out of the result; a script is deleted only if nothing uses it", () => {
+  // `let r`: a `const` at the start of main would be a derived parameter, not a Custom Script (research/17).
   const source = `import { body } from "@patchwork-cad/features";
 import { drawCircle } from "replicad";
 export default function main() {
-  const r = 5;
+  let r = 5;
   const { a, b } = body(() => ({ a: drawCircle(r).sketchOnPlane().extrude(1), b: drawCircle(r).sketchOnPlane().extrude(2) }));
   const c = body(drawCircle(1).sketchOnPlane().extrude(3));
   return { a, c, b };
@@ -165,7 +166,7 @@ export default function main() {
   const withoutC = applied(used, { edits: deleteFeature(used, analyze(used), tlOf(used).entries[2] as FeatureEntry) });
   expect(withoutC).toContain("fillet({ body: ref.c, edges: [], radius: 1 })");
   const unused = source.replace("drawCircle(r)", "drawCircle(5)").replace("drawCircle(r)", "drawCircle(5)");
-  expect(applied(unused, deleteScript(unused, analyze(unused), tlOf(unused), 0))).not.toContain("const r = 5;");
+  expect(applied(unused, deleteScript(unused, analyze(unused), tlOf(unused), 0))).not.toContain("let r = 5;");
 });
 
 const copies = `import { sketch, plane, rect, extrude, move, chamfer, edge } from "@patchwork-cad/features";

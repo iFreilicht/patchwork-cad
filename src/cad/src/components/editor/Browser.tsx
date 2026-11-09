@@ -3,7 +3,8 @@ import type { AutomergeUrl } from "@automerge/automerge-repo";
 import { dragDocument } from "../embed.ts";
 import type { NamedViews } from "../namedViews.ts";
 import { sameCamera } from "../Viewer.tsx";
-import type { CameraState, NamedView } from "../../types.ts";
+import type { CameraState, Configuration, NamedView } from "../../types.ts";
+import type { ParamsController } from "./parameters.ts";
 import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
@@ -158,7 +159,7 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * its features; clicking it opens its last feature, or picks it. Its context menu renames it, and
  * hides or shows it.
  */
-export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection }) {
+export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection; params: ParamsController; embedConfiguration: (configuration: Configuration) => { url: AutomergeUrl; title: string } | undefined }) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
   /** The open context menu: its items, and the key of the row it is for. */
@@ -193,6 +194,7 @@ export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSec
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
         <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
+        <ConfigurationList params={props.params} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
       </aside>
       {/* In the editor, not the browser, which would clip it. */}
       <Show when={menu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
@@ -200,53 +202,54 @@ export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSec
   );
 }
 
-/** The key of a view's row, apart from the bodies' keys. */
-const viewKey = (view: NamedView) => `view:${view.id}`;
+/** A row's menu, as the browser opens it. */
+type OpenMenu = (menu: { key: string; label: string; items: MenuItem[]; x: number; y: number }) => void;
 
 /**
- * The named views (research/18-named-views.md, "In the editor"): "+" adds one from the current
- * camera, a click goes to one, and its context menu renames it (also F2 or a double click), updates
- * it to the current camera or deletes it. The grip drags it out as an embed.
+ * Named things of the model in the browser, named views and configurations (research/18-named-views.md,
+ * "In the editor"): "+" adds one, a click picks it, and its context menu renames it (also F2 or a
+ * double click) and has the given actions. The grip drags it out as an embed.
  */
-function ViewList(props: {
-  section: ViewsSection;
+function NamedList<T extends { id: string; name: string }>(props: {
+  /** The heading, also the list's label. */
+  heading: string;
+  /** The kind, in labels: "view" or "configuration". */
+  noun: string;
+  items: T[];
+  addLabel: string;
+  onAdd(): T | string | undefined;
+  current(item: T): boolean;
+  select(item: T): void;
+  selectTitle(item: T): string;
+  rename(item: T, to: string): string | undefined;
+  actions(item: T): MenuItem[];
+  embed(item: T): { url: AutomergeUrl; title: string } | undefined;
   editor: Editor;
   renaming: () => string | undefined;
   setRenaming(key: string | undefined): void;
-  openMenu(menu: { key: string; label: string; items: MenuItem[]; x: number; y: number }): void;
+  openMenu: OpenMenu;
   dragFrom: () => HTMLElement;
 }) {
-  const views = () => props.section.views.views();
+  const keyOf = (item: T) => `${props.noun}:${item.id}`;
   const add = () => {
-    const camera = props.section.camera();
-    if (!camera) return props.editor.setNotice("The view hasn't shown the model yet");
-    const view = props.section.views.add(camera);
-    queueMicrotask(() => props.setRenaming(viewKey(view)));
+    const added = props.onAdd();
+    if (typeof added === "string") return props.editor.setNotice(added);
+    if (added) queueMicrotask(() => props.setRenaming(keyOf(added)));
   };
-  const items = (view: NamedView): MenuItem[] => [
-    { label: "Rename", run: () => void queueMicrotask(() => props.setRenaming(viewKey(view))) },
-    {
-      label: "Update to current view",
-      run: () => {
-        const camera = props.section.camera();
-        if (camera) props.section.views.update(view.id, camera);
-      },
-    },
-    { label: "Delete", danger: true, run: () => props.section.views.remove(view.id) },
-  ];
-  const open = (view: NamedView, x: number, y: number) => props.openMenu({ key: viewKey(view), label: `Actions for view ${view.name}`, items: items(view), x, y });
+  const open = (item: T, x: number, y: number) =>
+    props.openMenu({ key: keyOf(item), label: `Actions for ${props.noun} ${item.name}`, items: [{ label: "Rename", run: () => void queueMicrotask(() => props.setRenaming(keyOf(item))) }, ...props.actions(item)], x, y });
   return (
     <>
-      <h3 class="cad-editor__browser-heading cad-editor__browser-heading--views">
-        Views
-        <button class="cad-editor__icon-button" aria-label="New view from the current camera" title="New view from the current camera" onClick={add}>
+      <h3 class="cad-editor__browser-heading cad-editor__browser-heading--named">
+        {props.heading}
+        <button class="cad-editor__icon-button" aria-label={props.addLabel} title={props.addLabel} onClick={add}>
           +
         </button>
       </h3>
-      <ul class="cad-editor__browser-list" aria-label="Views">
-        <For each={views()} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
-          {(view) => {
-            const key = viewKey(view);
+      <ul class="cad-editor__browser-list" aria-label={props.heading}>
+        <For each={props.items} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
+          {(item) => {
+            const key = keyOf(item);
             const renaming = () => props.renaming() === key;
             let li!: HTMLLIElement;
             const done = () => {
@@ -256,34 +259,35 @@ function ViewList(props: {
             return (
               <li
                 ref={li}
-                class="cad-editor__browser-row cad-editor__view-row"
+                class="cad-editor__browser-row cad-editor__named-row"
+                data-kind={props.noun}
                 data-key={key}
-                data-name={view.name}
-                data-current={sameCamera(props.section.current(), view.camera) ? "true" : undefined}
+                data-name={item.name}
+                data-current={props.current(item) ? "true" : undefined}
                 onContextMenu={(event) => {
                   if (renaming()) return;
                   event.preventDefault();
-                  open(view, event.clientX, event.clientY);
+                  open(item, event.clientX, event.clientY);
                 }}
               >
                 <span
                   class="cad-editor__grip"
                   draggable="true"
                   aria-hidden="true"
-                  title={`Drag ${view.name} into Patchwork to embed the model seen from it`}
+                  title={`Drag ${item.name} into Patchwork to embed the model with it`}
                   onDragStart={(event) => {
-                    const embed = props.section.embed(view);
+                    const embed = props.embed(item);
                     if (!embed) return event.preventDefault();
                     dragDocument(event, { ...embed, type: "cad-model-embed" }, props.dragFrom());
                   }}
                 >
                   ⠿
                 </span>
-                <Show when={!renaming()} fallback={<NameField from={view.name} rename={async (to) => props.section.views.rename(view.id, to)} onNotice={props.editor.setNotice} onDone={done} />}>
+                <Show when={!renaming()} fallback={<NameField from={item.name} rename={async (to) => props.rename(item, to)} onNotice={props.editor.setNotice} onDone={done} />}>
                   <button
                     class="cad-editor__browser-name"
-                    title={`Look from ${view.name}`}
-                    onClick={() => props.section.goTo(view)}
+                    title={props.selectTitle(item)}
+                    onClick={() => props.select(item)}
                     onDblClick={() => props.setRenaming(key)}
                     onKeyDown={(event) => {
                       if (event.key === "F2") {
@@ -292,11 +296,11 @@ function ViewList(props: {
                       } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
                         event.preventDefault();
                         const r = event.currentTarget.getBoundingClientRect();
-                        open(view, r.left, r.bottom);
+                        open(item, r.left, r.bottom);
                       }
                     }}
                   >
-                    <span>{view.name}</span>
+                    <span>{item.name}</span>
                   </button>
                 </Show>
               </li>
@@ -305,6 +309,74 @@ function ViewList(props: {
         </For>
       </ul>
     </>
+  );
+}
+
+/** The named views: "+" adds one from the current camera; a click goes to one; one can be updated to the current camera. */
+function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
+  const views = props.section.views;
+  return (
+    <NamedList<NamedView>
+      heading="Views"
+      noun="view"
+      items={views.views()}
+      addLabel="New view from the current camera"
+      onAdd={() => {
+        const camera = props.section.camera();
+        return camera ? views.add(camera) : "The view hasn't shown the model yet";
+      }}
+      current={(view) => sameCamera(props.section.current(), view.camera)}
+      select={(view) => props.section.goTo(view)}
+      selectTitle={(view) => `Look from ${view.name}`}
+      rename={(view, to) => views.rename(view.id, to)}
+      actions={(view) => [
+        {
+          label: "Update to current view",
+          run: () => {
+            const camera = props.section.camera();
+            if (camera) views.update(view.id, camera);
+          },
+        },
+        { label: "Delete", danger: true, run: () => views.remove(view.id) },
+      ]}
+      embed={(view) => props.section.embed(view)}
+      editor={props.editor}
+      renaming={props.renaming}
+      setRenaming={props.setRenaming}
+      openMenu={props.openMenu}
+      dragFrom={props.dragFrom}
+    />
+  );
+}
+
+/** The configurations (research/17-parameters.md): "+" keeps the shown values as one; a click shows the model with one, only for this user. */
+function ConfigurationList(props: { params: ParamsController; embed: (configuration: Configuration) => { url: AutomergeUrl; title: string } | undefined; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
+  const configurations = props.params.configurations;
+  return (
+    <NamedList<Configuration>
+      heading="Configurations"
+      noun="configuration"
+      items={configurations.list()}
+      addLabel="New configuration from the values the model is shown with"
+      onAdd={() => props.params.saveAs()}
+      current={(c) => props.params.selected()?.id === c.id}
+      select={(c) => props.params.select(props.params.selected()?.id === c.id ? undefined : c.id)}
+      selectTitle={(c) => (props.params.selected()?.id === c.id ? `Show the defaults again, not ${c.name}` : `Show the model with ${c.name}, only for you`)}
+      rename={(c, to) => configurations.rename(c.id, to)}
+      actions={(c) => [
+        {
+          label: "Update to the values you try",
+          run: async () => props.params.apply(c.id),
+        },
+        { label: "Delete", danger: true, run: () => configurations.remove(c.id) },
+      ]}
+      embed={props.embed}
+      editor={props.editor}
+      renaming={props.renaming}
+      setRenaming={props.setRenaming}
+      openMenu={props.openMenu}
+      dragFrom={props.dragFrom}
+    />
   );
 }
 

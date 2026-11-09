@@ -5,3 +5,5 @@ export type { Feature, FeatureDefinition, FeatureMeta, Frame, Profile } from "./
 export type { ParamSpec } from "./schema.ts";
 export { plane, rect, circle, polygon, sketch, extrude, fillet, chamfer, combine, move, body } from "./features.ts";
 export type { BodySource } from "./features.ts";
+export { paramSchema } from "./params.ts";
+export type { ParamSchema, ParamsSchema, ParametrizedModel } from "./params.ts";

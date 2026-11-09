@@ -7,21 +7,24 @@ import type { CadModelDoc, CameraState, NamedView } from "../types.ts";
 
 export const namedViews = (doc: CadModelDoc | undefined): NamedView[] => doc?.cad?.views ?? [];
 
-/** `base`, or the first of `base 2`, `base 3`, … that no view is called. */
-export function freeName(base: string, views: readonly NamedView[]): string {
-  const taken = new Set(views.map((v) => v.name));
+/** Named things in the model document: views and configurations. */
+type Named = { id: string; name: string };
+
+/** `base`, or the first of `base 2`, `base 3`, … that none of `items` is called. */
+export function freeName(base: string, items: readonly Named[]): string {
+  const taken = new Set(items.map((v) => v.name));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
 }
 
-/** Why view `id` can't be called `name`, if it can't. */
-export function nameProblem(views: readonly NamedView[], id: string, name: string): string | undefined {
-  if (!name) return "A view needs a name";
-  if (views.some((v) => v.id !== id && v.name === name)) return `There already is a view called ${name}`;
+/** Why item `id` can't be called `name`, if it can't. */
+export function nameProblem(items: readonly Named[], id: string, name: string, noun = "view"): string | undefined {
+  if (!name) return `A ${noun} needs a name`;
+  if (items.some((v) => v.id !== id && v.name === name)) return `There already is a ${noun} called ${name}`;
   return undefined;
 }
 
-export const newViewId = () => crypto.randomUUID().slice(0, 8);
+export const newId = () => crypto.randomUUID().slice(0, 8);
 
 /** A copy that shares no arrays with `camera`, which may be another document's. */
 const copy = (camera: CameraState): CameraState => ({ ...camera, direction: [...camera.direction], target: [...camera.target] });

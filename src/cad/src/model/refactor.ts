@@ -15,7 +15,7 @@ export type Refactoring = { edits: Edit[] } | { error: string };
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 /** Whether `name` can be declared with `const`: an identifier that is not a reserved word. */
-function declarable(name: string): boolean {
+export function declarable(name: string): boolean {
   if (!IDENTIFIER.test(name)) return false;
   try {
     parse(`const ${name} = 0;`, { ecmaVersion: "latest", sourceType: "module" });
@@ -50,7 +50,7 @@ function namesIn(analysis: Analysis): Set<string> {
  * that uses `from` declares a `to` of its own, which would capture it. A name that only a function
  * inside declares for itself, e.g. a `body()` closure's, is free.
  */
-function clashes(analysis: Analysis, from: string, to: string): boolean {
+export function clashes(analysis: Analysis, from: string, to: string): boolean {
   const program = analysis.program;
   const moduleNames = program.body.flatMap((s): string[] => {
     if (s.type === "ImportDeclaration") return s.specifiers.map((sp) => sp.local.name);
@@ -155,7 +155,7 @@ export function renameOutput(analysis: Analysis, from: string, to: string): Refa
  * Renames the variable that is property `p`'s value, keeping its key in the shortest form: `{ key }`
  * if the new name is the key, else `{ key: to }`.
  */
-function renameProperty(p: Property | AssignmentProperty, to: string): Edit {
+export function renameProperty(p: Property | AssignmentProperty, to: string): Edit {
   const key = propertyKey(p);
   if (key === to) return { start: p.start, end: p.end, text: to };
   return p.shorthand ? { start: p.start, end: p.end, text: `${key}: ${to}` } : { start: p.value.start, end: p.value.end, text: to };

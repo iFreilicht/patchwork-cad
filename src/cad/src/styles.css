@@ -445,6 +445,18 @@
   gap: var(--studio-space-2xs, 4px);
 }
 
+/* A number field, and its button that makes a parameter of the value. */
+.cad-editor__scalar {
+  display: flex;
+  gap: var(--studio-space-2xs, 4px);
+  align-items: center;
+}
+
+.cad-editor__scalar .cad-editor__input {
+  flex: 1;
+  min-width: 0;
+}
+
 .cad-editor__field > span {
   padding-top: 3px;
   color: var(--cad-model-muted);
@@ -585,14 +597,14 @@
   color: var(--cad-model-muted);
 }
 
-/* The views' heading holds the button that adds one. */
-.cad-editor__browser-heading--views {
+/* The headings of views and configurations hold the button that adds one. */
+.cad-editor__browser-heading--named {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.cad-editor__browser-heading--views .cad-editor__icon-button {
+.cad-editor__browser-heading--named .cad-editor__icon-button {
   font-size: 14px;
   line-height: 1;
 }
@@ -605,8 +617,8 @@
   user-select: none;
 }
 
-/* The view the camera is at, as Onshape selects it. */
-.cad-editor__view-row[data-current="true"] .cad-editor__browser-name {
+/* The view the camera is at, as Onshape selects it, and the configuration the model is shown with. */
+.cad-editor__named-row[data-current="true"] .cad-editor__browser-name {
   font-weight: 600;
 }
 
@@ -902,8 +914,9 @@
   stroke-width: 3;
 }
 
-/* The return entry: where the lanes of what main returns end. Not one of the code's entries: it can't be dragged. */
-.cad-editor__return {
+/* The return entry: where the lanes of what main returns end. Not one of the code's entries: it can't be dragged. Nor can the parameters entry, main's input. */
+.cad-editor__return,
+.cad-editor__params-entry {
   background: var(--cad-model-bg);
 }
 
@@ -944,7 +957,8 @@
 }
 
 .cad-editor__entry,
-.cad-editor__return {
+.cad-editor__return,
+.cad-editor__params-entry {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -1022,13 +1036,15 @@
  * the scrolling timeline would clip it. What the focused entry relates to gets a coloured border.
  */
 .cad-editor__entry[data-hovered="true"],
-.cad-editor__return[data-hovered="true"] {
+.cad-editor__return[data-hovered="true"],
+.cad-editor__params-entry:hover {
   outline: 1px solid var(--cad-model-fg);
   outline-offset: 2px;
 }
 
 .cad-editor__entry[aria-pressed="true"],
-.cad-editor__return[aria-pressed="true"] {
+.cad-editor__return[aria-pressed="true"],
+.cad-editor__params-entry[aria-pressed="true"] {
   outline: 3px solid var(--cad-model-fg);
   outline-offset: 1px;
 }
@@ -1424,4 +1440,71 @@
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+
+/* ---------- Parameters (research/17-parameters.md) ---------- */
+
+/* Wider than a feature's dialog, and as clear of the ViewCube. */
+.cad-editor__params {
+  width: min(30rem, calc(100% - var(--cad-viewcube-size) - 3 * var(--studio-space-sm, 0.5rem)));
+}
+
+.cad-editor__params-shown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-editor__params-shown select {
+  width: auto;
+}
+
+/* Values are short: their fields have a fixed width, and the names take the rest; a narrow view scrolls the dialog. */
+.cad-editor__params-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.cad-editor__params-table .cad-editor__input {
+  box-sizing: border-box;
+  width: 5.5rem;
+}
+
+/* A derived parameter's expression spans the default and shown columns. */
+.cad-editor__params-table td[colspan] .cad-editor__input {
+  width: 100%;
+}
+
+.cad-editor__params-table th {
+  padding: 2px 4px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__params-table td {
+  padding: 1px 4px;
+  vertical-align: middle;
+}
+
+.cad-editor__params-table tr[data-tried="true"] td:nth-child(3) .cad-editor__input {
+  border-color: var(--cad-model-accent);
+}
+
+.cad-editor__param-name {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.cad-model__context {
+  color: var(--cad-model-accent-text);
 }

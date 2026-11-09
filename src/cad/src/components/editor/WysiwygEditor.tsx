@@ -25,6 +25,9 @@ import { createEntityComments, DetachedButton } from "../entityComments.tsx";
 import { createFeatureHighlights } from "../featureHighlights.ts";
 import { createBodies } from "./bodies.ts";
 import { Browser, ResultDialog, type ViewsSection } from "./Browser.tsx";
+import { createConfigurations } from "../configurations.ts";
+import { createParams } from "./parameters.ts";
+import { ParamsDialog } from "./ParamsDialog.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -39,13 +42,24 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
  * dialogs on one kernel worker; the shared code editor opens next to it on demand.
  */
 export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
-  const model = createModel(props.handle);
   const ui = createUiState(props.element, props.handle.url);
+  // The parameters this user shows the model with: a configuration and values they try (research/17).
+  const [code, setCode] = createSignal(props.handle.doc()?.source ?? "");
+  const onCode = () => setCode(props.handle.doc()?.source ?? "");
+  props.handle.on("change", onCode);
+  onCleanup(() => props.handle.off("change", onCode));
+  const params = createParams(props.handle, code, createConfigurations(props.handle), ui);
+  const model = createModel(props.handle, params.shown);
   const editor = createEditor(props.handle, model, ui);
   const bodies = createBodies(editor, ui);
-  /** Whether the return entry's dialog is open; it and a feature's dialog take turns. */
+  /** Whether the return entry's dialog is open; it, the parameters' and a feature's dialog take turns. */
   const [resultOpen, setResultOpen] = createSignal(false);
-  createEffect(() => editor.open() && setResultOpen(false));
+  const [paramsOpen, setParamsOpen] = createSignal(false);
+  createEffect(() => {
+    if (!editor.open()) return;
+    setResultOpen(false);
+    setParamsOpen(false);
+  });
   const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
@@ -78,7 +92,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       setGoTo({ ...view.camera });
       saveCamera(view.camera);
     },
-    embed: (view) => createEmbed(props.handle, view),
+    embed: (view) => createEmbed(props.handle, { view }),
   };
   const [codeFocus, setCodeFocus] = createSignal<Span>();
   const [pickError, setPickError] = createSignal<string>();
@@ -329,6 +343,20 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setCodeFocus({ ...span });
     setCodeOpen(true);
   };
+  /** Opens the code pane at main's parameters. */
+  const editParams = () => {
+    const at = params.info()?.defaults?.statement ?? params.info()?.mainStatement;
+    if (at) setCodeFocus({ ...at });
+    setCodeOpen(true);
+  };
+  /** What the view shows the model with, if not its defaults. */
+  const shownWith = () => {
+    const configuration = params.selected()?.name;
+    const tried = Object.keys(params.tried()).length;
+    if (!configuration && !tried) return undefined;
+    const values = tried ? `${tried} value${tried === 1 ? "" : "s"} you try` : "";
+    return `Shown with ${[configuration, values].filter(Boolean).join(" and ")}`;
+  };
   /** Opens the code pane at the return. */
   const editReturn = () => {
     const returned = editor.timeline().returned;
@@ -349,7 +377,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} />
+        <Browser editor={editor} bodies={bodies} views={views} params={params} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
       </Show>
       <div class="cad-editor__stage" ref={stage}>
         <Viewer
@@ -372,7 +400,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onViewChange={saveCamera}
           onApi={(api) => (viewer = api)}
         />
-        <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} />}</Show>
+        <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} promote={params.promote} />}</Show>
+        <Show when={paramsOpen() && !editor.open()}>
+          <ParamsDialog params={params} editor={editor} onClose={() => setParamsOpen(false)} onEditCode={editParams} />
+        </Show>
         <Show when={resultOpen() && !editor.open()}>
           <ResultDialog
             editor={editor}
@@ -426,11 +457,26 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onOpen: () => {
             const open = !resultOpen() || !!editor.open();
             editor.openFeature(undefined);
+            setParamsOpen(false);
             setResultOpen(open);
           },
         }}
+        parameters={{
+          get open() {
+            return paramsOpen() && !editor.open();
+          },
+          get count() {
+            return (params.info()?.params.length ?? 0) + (params.info()?.derived.length ?? 0);
+          },
+          onOpen: () => {
+            const open = !paramsOpen() || !!editor.open();
+            editor.openFeature(undefined);
+            setResultOpen(false);
+            setParamsOpen(open);
+          },
+        }}
       />
-      <StatusBar model={model} notice={editor.notice()} problems={undialogued()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} problems={[...undialogued(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }

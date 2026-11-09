@@ -1,10 +1,14 @@
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
-import type { CadModelDoc, CadModelEmbedDoc, NamedView } from "../types.ts";
+import type { CadModelDoc, CadModelEmbedDoc, Configuration, NamedView } from "../types.ts";
 
-/** Creates an embed of `model` seen from `view` (research/18-named-views.md, "Embeds"); it opens in the viewer. */
-export function createEmbed(model: DocHandle<CadModelDoc>, view: NamedView): { url: AutomergeUrl; title: string } | undefined {
-  const title = `${model.doc()?.title || "CAD Model"} – ${view.name}`;
-  const doc: CadModelEmbedDoc & { "@patchwork": { type: string } } = { "@patchwork": { type: "cad-model-embed" }, title, model: model.url, view: view.id };
+/**
+ * Creates an embed of `model` seen from a named view, or with a configuration (research/18-named-views.md,
+ * "Embeds"), titled after it; it opens in the viewer.
+ */
+export function createEmbed(model: DocHandle<CadModelDoc>, of: { view: NamedView } | { configuration: Configuration }): { url: AutomergeUrl; title: string } | undefined {
+  const named = "view" in of ? of.view : of.configuration;
+  const title = `${model.doc()?.title || "CAD Model"} – ${named.name}`;
+  const doc: CadModelEmbedDoc & { "@patchwork": { type: string } } = { "@patchwork": { type: "cad-model-embed" }, title, model: model.url, ...("view" in of ? { view: of.view.id } : { configuration: of.configuration.id }) };
   const url = globalThis.repo?.create(doc).url;
   return url && { url, title };
 }

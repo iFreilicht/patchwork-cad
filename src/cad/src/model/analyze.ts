@@ -188,3 +188,29 @@ function describeCall(call: CallExpression, type: FeatureType, ancestors: AnyNod
     statement,
   };
 }
+
+/**
+ * Whether evaluating `node` can do nothing but compute a value: no calls but `Math.…(…)`, no
+ * functions, no assignments, and no objects or arrays, which later code could change.
+ */
+function pure(node: AnyNode): boolean {
+  if (node.type === "CallExpression") {
+    const callee = node.callee;
+    const math = callee.type === "MemberExpression" && !callee.computed && callee.object.type === "Identifier" && callee.object.name === "Math";
+    if (!math) return false;
+  }
+  if (["ObjectExpression", "ArrayExpression", "NewExpression", "FunctionExpression", "ArrowFunctionExpression", "ClassExpression", "AssignmentExpression", "UpdateExpression", "AwaitExpression", "YieldExpression", "TaggedTemplateExpression", "ImportExpression"].includes(node.type)) return false;
+  for (const value of Object.values(node)) for (const v of Array.isArray(value) ? value : [value]) if (v && typeof v === "object" && typeof (v as AnyNode).type === "string" && !pure(v as AnyNode)) return false;
+  return true;
+}
+
+/** The leading `const x = <pure expression>;` statements of `main`: its derived parameters (research/17, "Derived parameters"). */
+export function derivedStatements(analysis: Analysis): Statement[] {
+  const out: Statement[] = [];
+  for (const s of analysis.main?.statements ?? []) {
+    const d = s.type === "VariableDeclaration" && s.kind === "const" && s.declarations.length === 1 ? s.declarations[0] : undefined;
+    if (!d || d.id.type !== "Identifier" || !d.init || !pure(d.init)) break;
+    out.push(s);
+  }
+  return out;
+}

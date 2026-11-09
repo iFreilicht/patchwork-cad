@@ -7,7 +7,7 @@ import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser"
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
-import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildParams, BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -57,6 +57,11 @@ async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
 
 const browserEvaluator = createBrowserCodeEvaluator();
 
+/** The running build's values of parameters, over the model's `defaultParams` (research/17-parameters.md). */
+let params: BuildParams | undefined;
+/** `main`'s argument: the module's defaults, with the build's values over them. */
+const withParams = (defaults: unknown): unknown => (params ? { ...(typeof defaults === "object" && defaults ? defaults : {}), ...params } : defaults);
+
 /** What `main` returned in the running build, to find the bodies behind the meshed shapes. */
 let returned: unknown;
 /** The last successful build's trace, with its bodies, for rollback and picking. */
@@ -79,7 +84,8 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
   return {
     ...module,
     default: (...args: unknown[]) => {
-      const value = (main as (...a: unknown[]) => unknown)(...args);
+      // The builder passes the module's defaults, as it gets no values of its own.
+      const value = (main as (...a: unknown[]) => unknown)(params ? withParams(module["defaultParams"]) : args[0], ...args.slice(1));
       if (isOutputs(value)) {
         const entries = Object.entries(value).filter(([, v]) => !isEmptyBody(v));
         returned = entries.map(([, v]) => v);
@@ -198,7 +204,8 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
   };
 }
 
-async function build(id: number, source: string): Promise<void> {
+async function build(id: number, source: string, buildParams: BuildParams | undefined): Promise<void> {
+  params = buildParams;
   const t0 = performance.now();
   const fail = (error: ModelError) => {
     const t = performance.now() - t0;
@@ -249,7 +256,8 @@ async function build(id: number, source: string): Promise<void> {
  * Runs a model on trial without meshing, keeping the last build's trace for rollback and picking.
  * Its bodies are left to the heap limit (research/08).
  */
-async function check(id: number, source: string): Promise<void> {
+async function check(id: number, source: string, buildParams: BuildParams | undefined): Promise<void> {
+  params = buildParams;
   const problems = () => currentTrace().filter((t) => t.status !== "ok").length;
   try {
     const code = prepare(source);
@@ -258,7 +266,7 @@ async function check(id: number, source: string): Promise<void> {
     // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
     const module = await browserEvaluator.evaluateModule<Record<string, unknown>>(code, { filename: "__entry__.ts", globals: { replicad, replicadShapeFns: undefined, oc: (await kernel).oc } });
     const main = module["default"];
-    if (typeof main === "function") (main as (p: unknown) => unknown)(module["defaultParams"] ?? {});
+    if (typeof main === "function") (main as (p: unknown) => unknown)(withParams(module["defaultParams"] ?? {}));
     post({ type: "checked", id, error: undefined, problems: problems() });
   } catch (error) {
     const kind = error instanceof PrepareError ? error.kind : "runtime";
@@ -314,7 +322,7 @@ const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   if (request.type === "check") {
-    enqueue(() => check(request.id, request.source));
+    enqueue(() => check(request.id, request.source, request.params));
     return;
   }
   if (request.type !== "build") {
@@ -325,7 +333,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     }
     return;
   }
-  enqueue(() => build(request.id, request.source).catch((error: unknown) =>
+  enqueue(() => build(request.id, request.source, request.params).catch((error: unknown) =>
     post({
       type: "failed",
       id: request.id,

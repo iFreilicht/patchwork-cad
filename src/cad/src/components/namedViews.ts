@@ -1,6 +1,6 @@
 import { createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
-import { addView, freeName, nameProblem, namedViews, newViewId, removeView, renameView, updateView } from "../model/views.ts";
+import { addView, freeName, nameProblem, namedViews, newId, removeView, renameView, updateView } from "../model/views.ts";
 import type { CadModelDoc, CameraState, NamedView } from "../types.ts";
 import { nearestRegion, regionName } from "./ViewCube.ts";
 
@@ -25,7 +25,7 @@ export function createNamedViews(handle: DocHandle<CadModelDoc>): NamedViews {
   return {
     views,
     add(camera) {
-      const view = { id: newViewId(), name: freeName(regionName(nearestRegion(camera.direction)), namedViews(handle.doc())), camera };
+      const view = { id: newId(), name: freeName(regionName(nearestRegion(camera.direction)), namedViews(handle.doc())), camera };
       handle.change((d) => addView(d, view));
       return view;
     },

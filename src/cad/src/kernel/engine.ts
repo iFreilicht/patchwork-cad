@@ -1,8 +1,8 @@
-import type { BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildParams, BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
-  | { ok: true; source: string; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
-  | { ok: false; source: string; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
+  | { ok: true; source: string; params: BuildParams | undefined; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: false; source: string; params: BuildParams | undefined; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
 type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" }>;
@@ -54,8 +54,8 @@ export class Engine {
   /** Whether the worker has loaded OCCT; the watchdog doesn't count the load. */
   #loaded = false;
   #watchdog: ReturnType<typeof setTimeout> | undefined;
-  #running: { id: number; source: string; started: number } | undefined;
-  #waiting: string | undefined;
+  #running: { id: number; source: string; params: BuildParams | undefined; started: number } | undefined;
+  #waiting: { source: string; params: BuildParams | undefined } | undefined;
   #nextId = 1;
   readonly #pending = new Map<number, { resolve: (answer: Answer) => void; reject: (error: Error) => void }>();
 
@@ -66,10 +66,11 @@ export class Engine {
     this.#worker = this.#spawn();
   }
 
-  build(source: string): void {
+  /** Builds `source`, with `params` over its `defaultParams` (research/17-parameters.md). */
+  build(source: string, params?: BuildParams): void {
     this.stats.requested++;
-    if (this.#running) this.#waiting = source;
-    else this.#start(source);
+    if (this.#running) this.#waiting = { source, params };
+    else this.#start(source, params);
   }
 
   /** The bodies visible before `feature` (or after it) in the last build, meshed for picking, and the sketches no feature used yet. */
@@ -103,8 +104,8 @@ export class Engine {
   }
 
   /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
-  async check(source: string): Promise<{ error: ModelError | undefined; problems: number }> {
-    const answer = await this.#request({ type: "check", id: this.#nextId++, source });
+  async check(source: string, params?: BuildParams): Promise<{ error: ModelError | undefined; problems: number }> {
+    const answer = await this.#request({ type: "check", id: this.#nextId++, source, ...(params ? { params } : {}) });
     return answer.type === "checked" ? { error: answer.error, problems: answer.problems } : { error: undefined, problems: 0 };
   }
 
@@ -171,22 +172,22 @@ export class Engine {
     if (this.#waiting !== undefined) {
       const next = this.#waiting;
       this.#waiting = undefined;
-      this.#start(next);
+      this.#start(next.source, next.params);
     }
     if (!running) return;
     const ms = performance.now() - running.started;
     const error: ModelError = { kind: "kernel", line: undefined, message: `the build didn't finish within ${this.#timeoutMs / 1000} s, so the kernel was restarted` };
-    this.#callbacks.onResult({ ok: false, source: running.source, error, trace: [], timings: { build: ms, total: ms } });
+    this.#callbacks.onResult({ ok: false, source: running.source, params: running.params, error, trace: [], timings: { build: ms, total: ms } });
   }
 
-  #start(source: string): void {
+  #start(source: string, params: BuildParams | undefined): void {
     // Restarting before a build, not after one, keeps the worker that holds the
     // shown shapes alive until a new build replaces them.
     if (this.#heapBytes > this.#heapLimit) this.#restart();
     this.stats.executed++;
-    this.#running = { id: this.#nextId++, source, started: performance.now() };
+    this.#running = { id: this.#nextId++, source, params, started: performance.now() };
     // A new worker runs it as soon as OCCT has loaded.
-    this.#worker.postMessage({ type: "build", id: this.#running.id, source });
+    this.#worker.postMessage({ type: "build", id: this.#running.id, source, ...(params ? { params } : {}) });
     this.#watch();
   }
 
@@ -198,10 +199,10 @@ export class Engine {
     if (this.#waiting !== undefined) {
       const next = this.#waiting;
       this.#waiting = undefined;
-      this.#start(next);
+      this.#start(next.source, next.params);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
-    else onResult({ ok: false, source: running.source, error: message.error, trace: message.trace, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
+    else onResult({ ok: false, source: running.source, params: running.params, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

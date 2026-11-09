@@ -1,12 +1,13 @@
 /**
  * The timeline is a view of the code (research/02, "The timeline is a view"): every `const x =
  * feature({…})` statement of `main` is a feature entry, and every run of other statements up to
- * the next one is a Custom Script entry. Each entry is matched with the feature calls the last
+ * the next one is a Custom Script entry, except the derived parameters at the start of `main`,
+ * which belong to the parameters entry (research/17, "Derived parameters"). Each entry is matched with the feature calls the last
  * build actually ran (the trace), which also shows features that run inside Custom Script code.
  */
 import type { FeatureType } from "@patchwork-cad/features/schema";
 import type { FeatureTrace } from "../kernel/protocol.ts";
-import type { Analysis, FeatureCall, Span } from "./analyze.ts";
+import { derivedStatements, type Analysis, type FeatureCall, type Span } from "./analyze.ts";
 
 export interface FeatureEntry {
   kind: "feature";
@@ -41,7 +42,8 @@ export interface Timeline {
 const lineAt = (source: string, offset: number) => source.slice(0, offset).split("\n").length;
 
 export function timeline(source: string, analysis: Analysis, trace: readonly FeatureTrace[]): Timeline {
-  const statements = analysis.main?.statements ?? [];
+  const derived = derivedStatements(analysis).length;
+  const statements = analysis.main?.statements.slice(derived) ?? [];
   const entries: Entry[] = [];
   let script: ScriptEntry | undefined;
   let returned: Span | undefined;

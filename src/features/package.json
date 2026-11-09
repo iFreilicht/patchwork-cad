@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./names": "./src/names.ts",
+    "./params": "./src/params.ts",
     "./runtime": "./src/runtime.ts",
     "./schema": "./src/schema.ts"
   },

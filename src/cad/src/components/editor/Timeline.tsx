@@ -136,7 +136,15 @@ export interface ResultEntry {
   count: number | undefined;
 }
 
-export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined; result?: ResultEntry }) {
+/** The parameters entry: main's input, as the return entry is its output (research/17-parameters.md). */
+export interface ParametersEntry {
+  open: boolean;
+  onOpen(): void;
+  /** How many parameters and derived ones the model has. */
+  count: number;
+}
+
+export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined; result?: ResultEntry; parameters?: ParametersEntry }) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -635,6 +643,23 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
               title={d().blocked}
               style={{ order: ORDER.drop(d().position, d().pastMarker && d().position === editor.marker()) }}
             />
+          )}
+        </Show>
+        <Show when={props.parameters}>
+          {(parameters) => (
+            <button
+              class="cad-editor__params-entry"
+              data-kind="parameters"
+              aria-pressed={parameters().open}
+              style={{ order: 0 }}
+              title={`The model's parameters: ${parameters().count}`}
+              onClick={() => parameters().onOpen()}
+            >
+              <span class="cad-editor__glyph" aria-hidden="true">
+                ƒ
+              </span>
+              <span>params</span>
+            </button>
           )}
         </Show>
         <Show when={props.result}>
