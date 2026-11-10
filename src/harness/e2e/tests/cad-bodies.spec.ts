@@ -313,6 +313,8 @@ test("named outputs: a returned body is named by its key, which the browser and 
   await page.keyboard.press("F2");
   await page.getByRole("textbox", { name: "New name for notched" }).fill("cut");
   await page.keyboard.press("Enter");
+  // The field closes once it renamed, for the next one to be the only one.
+  await expect(page.locator(".cad-editor__rename")).toHaveCount(0);
   await expect.poll(() => returned(page)).toBe("{ bracket: cut, top: lid }");
   await expect.poll(() => rows(page)).toEqual(["bracket:cut", "top:lid shown"]);
   // A key renamed to its variable's name is shorthand again.

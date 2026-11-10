@@ -603,7 +603,10 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
         <Index each={editor.timeline().entries}>
           {(entry: () => Entry, index) => (
             <Switch>
-              <Match when={renaming()?.index === index && renaming()}>{(r) => <RenameField editor={editor} index={index} from={r().from} onDone={() => endRename(index)} />}</Match>
+              {/* Keyed: the field reads the name it renames once, so ending the rename can't read it after the Match has switched (Solid's "Stale read from <Match>"). */}
+              <Match when={renaming()?.index === index && renaming()} keyed>
+                {(r) => <RenameField editor={editor} index={index} from={r.from} onDone={() => endRename(index)} />}
+              </Match>
               <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
               <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
             </Switch>

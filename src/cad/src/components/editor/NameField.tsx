@@ -1,8 +1,10 @@
-import type { JSX } from "solid-js";
+import { untrack, type JSX } from "solid-js";
 
 /**
  * Renames something in place: Enter renames, Escape or leaving the field doesn't. `rename` resolves
- * to why not, which `onNotice` shows; the field stays open then.
+ * to why not, which `onNotice` shows; the field stays open then. It starts with `from` and keeps
+ * what is typed: `from` is read anew whenever what it comes from is, e.g. the browser's rows after
+ * a build, and a bound value would put it back over the typed name.
  */
 export function NameField(props: { from: string; rename: (to: string) => Promise<string | undefined>; onNotice: (why: string | undefined) => void; onDone: () => void; style?: JSX.CSSProperties }) {
   let busy = false;
@@ -10,15 +12,15 @@ export function NameField(props: { from: string; rename: (to: string) => Promise
     <input
       class="cad-editor__rename"
       aria-label={`New name for ${props.from}`}
-      value={props.from}
       spellcheck={false}
       style={props.style}
-      ref={(el) =>
+      ref={(el) => {
+        el.value = untrack(() => props.from);
         queueMicrotask(() => {
           el.focus();
           el.select();
-        })
-      }
+        });
+      }}
       onKeyDown={(event) => {
         if (event.key === "Escape") return props.onDone();
         if (event.key !== "Enter") return;

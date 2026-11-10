@@ -213,12 +213,11 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
                       <ExpressionInput label={`Default of ${param().key}`} value={param().value ?? ""} onCommit={(text) => props.params.setDefault(param().key, text)} />
                     </td>
                   </Show>
+                  {/* Read directly, not through an accessor of the Show, which throws when read after switching back to the defaults. */}
                   <Show when={selected()}>
-                    {(c) => (
-                      <td>
-                        <OverrideInput label={`${param().key} in ${c().name}`} value={shown(value())} problem={linked()?.problem ? `Its linked value ${linked()!.problem}` : undefined} onCommit={(v) => props.params.setValue(param().key, v)} />
-                      </td>
-                    )}
+                    <td>
+                      <OverrideInput label={`${param().key} in ${selected()?.name ?? ""}`} value={shown(value())} problem={linked()?.problem ? `Its linked value ${linked()!.problem}` : undefined} onCommit={(v) => props.params.setValue(param().key, v)} />
+                    </td>
                   </Show>
                   <FinalValue value={final()} problem={rangeProblem(final(), config())} />
                   <td class="cad-editor__muted cad-editor__param-unit">{unit(param().local, param().key) ?? ""}</td>
