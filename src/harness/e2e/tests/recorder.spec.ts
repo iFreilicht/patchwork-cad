@@ -4,6 +4,8 @@ import { PROBES, probeHost, startProbeServer, type Probe } from "../probe-server
 // The egress sink must see traffic from every kind of context; the Playwright
 // log's coverage is browser-specific and only recorded, not required.
 test.use({ egressAllowed: true });
+// The probe page's requests fail at the egress proxy, and browsers log each failure.
+test.use({ pageErrorsAllowed: ["egress.test", "Access-Control-Allow-Origin"] });
 
 test("the egress sink sees off-machine traffic from every context", async ({ users, egress }, testInfo) => {
   const probeServer = await startProbeServer();

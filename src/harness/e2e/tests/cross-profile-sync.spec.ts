@@ -1,6 +1,10 @@
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu, docPath, editor, typeAtEnd } from "../ui.ts";
 
+// codemirror-base's presence() defines a new state field per call; after its compartment is reconfigured, a layer
+// measure still reads the old field and throws (@inkandswitch/patchwork-pkg-base 0.0.72, upstream bug).
+test.use({ pageErrorsAllowed: ["RangeError: Field is not present in this state"] });
+
 // The full product loop: two browser profiles (contexts) whose only path to
 // each other is the local Subduction server. Adapted from patchwork-e2e's
 // cross-profile-sync.spec.

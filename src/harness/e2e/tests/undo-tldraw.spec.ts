@@ -13,6 +13,8 @@ import { bootToFrame, createViaMenu, docPath, pressMod } from "../ui.ts";
 test.use({ siteModules: { "undo-tldraw": join(HARNESS_DIR, "..", "..", "research", "16-undo-redo", "tldraw") } });
 // tldraw loads its fonts and icons from its CDN; the egress proxy refuses them, the canvas works without.
 test.use({ egressAllowed: true });
+// Browsers log the refused loads, and tldraw logs each font that didn't load.
+test.use({ pageErrorsAllowed: ["cdn.tldraw.com", "A network error occurred."] });
 
 type Shape = { type: string; x: number; y: number; w?: number; h?: number };
 

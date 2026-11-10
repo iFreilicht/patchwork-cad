@@ -2,6 +2,7 @@ import { test as base, expect, type BrowserContext, type Page } from "@playwrigh
 import { startEgressSink, type EgressSink } from "./egress.ts";
 import { publishModule, registerModule, type AutomergeUrl } from "./modules.ts";
 import { NetworkLog } from "./network-log.ts";
+import { PageErrors } from "./page-errors.ts";
 import { startStack, type Stack } from "./stack.ts";
 
 export interface User {
@@ -22,6 +23,13 @@ interface TestFixtures {
   /** Set to true in tests that deliberately send traffic off the machine. */
   egressAllowed: boolean;
   egress: EgressSink;
+  /**
+   * Page errors a test deliberately causes: substrings or patterns of their message or location.
+   * Playwright reads a value [x, object] as a fixture with options, so a RegExp can't come second.
+   */
+  pageErrorsAllowed: (string | RegExp)[];
+  /** Uncaught errors and console errors from every page of the test's contexts. */
+  pageErrors: PageErrors;
   /** The default context's network log. */
   networkLog: NetworkLog;
   /** Creates n independent browser profiles (contexts), each with its own network log. */
@@ -80,6 +88,27 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     { auto: true },
   ],
 
+  pageErrorsAllowed: [[], { option: true }],
+
+  pageErrors: [
+    async ({ pageErrorsAllowed }, use, testInfo) => {
+      const errors = new PageErrors();
+      await use(errors);
+      await errors.settled();
+      if (errors.uncaught.length || errors.console.length) {
+        await testInfo.attach("page-errors.json", { body: JSON.stringify({ uncaught: errors.uncaught, console: errors.console }, null, 2), contentType: "application/json" });
+      }
+      expect(errors.unexpected(pageErrorsAllowed), "uncaught errors in the page").toEqual([]);
+    },
+    { auto: true },
+  ],
+
+  context: async ({ context, pageErrors }, use) => {
+    pageErrors.watch(context, "default");
+    await use(context);
+    await pageErrors.settled();
+  },
+
   proxy: async ({ egress }, use) => use({ server: egress.proxyUrl, bypass: LOOPBACK }),
 
   networkLog: async ({ context, egressAllowed }, use, testInfo) => {
@@ -89,7 +118,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
     if (!egressAllowed) expect(log.nonLocal(), "non-local traffic seen by Playwright").toEqual([]);
   },
 
-  users: async ({ browser, egress, egressAllowed, localStack, contextOptions }, use, testInfo) => {
+  users: async ({ browser, egress, egressAllowed, localStack, contextOptions, pageErrors }, use, testInfo) => {
     const created: User[] = [];
     await use(async (n) => {
       const batch: User[] = [];
@@ -101,11 +130,13 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
           proxy: { server: egress.proxyUrl, bypass: LOOPBACK },
         });
         const networkLog = new NetworkLog(context);
+        pageErrors.watch(context, `user-${created.length + i}`);
         batch.push({ context, page: await context.newPage(), networkLog });
       }
       created.push(...batch);
       return batch;
     });
+    await pageErrors.settled();
     await Promise.all(created.map((user) => user.context.close()));
     for (const [i, user] of created.entries()) await attachLog(testInfo, `user-${i}`, user.networkLog);
     if (!egressAllowed) {

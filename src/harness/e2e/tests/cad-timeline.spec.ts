@@ -426,9 +426,6 @@ test("typing in the code pane keeps the timeline, the marker and the highlights 
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
   const { page } = a;
-  const errors: string[] = [];
-  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-  page.on("pageerror", (e) => errors.push(e.message));
   await openM1(page);
   await openCode(page);
   await setMarker(page, 5);
@@ -463,8 +460,6 @@ test("typing in the code pane keeps the timeline, the marker and the highlights 
   await timelineEntry(page, "fillet1").hover();
   await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-relation", "dependent");
   await expect(page.locator(".cad-model__code .cad-model__related--self")).toContainText("const fillet1");
-  // A dispatch during CodeMirror's update throws this, and the exception stops Solid's updates of the timeline.
-  expect(errors.filter((e) => e.includes("EditorView.update"))).toEqual([]);
 });
 
 /** A Custom Script that changes a value a sketch reads: whether it can move depends on what the code does. */

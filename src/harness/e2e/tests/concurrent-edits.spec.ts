@@ -1,6 +1,10 @@
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu, docPath, editor, typeAtEnd, typeAtStart } from "../ui.ts";
 
+// codemirror-base's presence() defines a new state field per call; after its compartment is reconfigured, a layer
+// measure still reads the old field and throws (@inkandswitch/patchwork-pkg-base 0.0.72, upstream bug).
+test.use({ pageErrorsAllowed: ["RangeError: Field is not present in this state"] });
+
 // Two profiles type into the same markdown doc at the same time, at different
 // positions: at the same position, CodeMirror maps a cursor past a remote
 // insert, so keystrokes legitimately interleave. Both must converge to the
