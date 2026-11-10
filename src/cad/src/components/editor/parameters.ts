@@ -80,14 +80,14 @@ export function createParams(handle: DocHandle<CadModelDoc>, source: Accessor<st
 
   /** Applies the edits `make` computes against the current code, in one change with `also`, if the code still parses with them. */
   const edit = (make: (text: string, a: Analysis, p: Parameters) => ParamEdit, also?: (d: CadModelDoc) => void): string | undefined => {
-    const text = handle.doc()?.source ?? "";
+    const text = handle.doc()?.content ?? "";
     const c = read(text);
     if (!c) return "The code doesn't parse";
     const result = make(text, c.analysis, c.p);
     if ("error" in result) return result.error;
     if (!parses(applyToText(text, result.edits))) return "That would break the code";
     handle.change((d) => {
-      for (const e of [...result.edits].sort((a, b) => b.start - a.start)) splice(d, ["source"], e.start, e.end - e.start, e.text);
+      for (const e of [...result.edits].sort((a, b) => b.start - a.start)) splice(d, ["content"], e.start, e.end - e.start, e.text);
       also?.(d);
     });
     return undefined;

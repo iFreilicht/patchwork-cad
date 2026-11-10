@@ -1,6 +1,6 @@
 /**
  * Comment threads on the model (research/13-collaboration.md, "Comments"), without the DOM: where
- * each thread is in `source`, which timeline entry it belongs to, and where a thread whose text was
+ * each thread is in `content`, which timeline entry it belongs to, and where a thread whose text was
  * deleted goes again.
  */
 import { getCursorPosition, type Doc } from "@automerge/automerge";
@@ -11,11 +11,11 @@ import type { Entry } from "./timeline.ts";
 
 export const COMMENT_THREAD_TYPE = "comment-thread";
 
-/** A thread, with where it is in `source` now. */
+/** A thread, with where it is in `content` now. */
 export interface PlacedThread {
   id: string;
   thread: CommentThread;
-  /** Its range in `source`; undefined if the text was deleted (the range collapsed) or its ref doesn't resolve. */
+  /** Its range in `content`; undefined if the text was deleted (the range collapsed) or its ref doesn't resolve. */
   range: Span | undefined;
   /** It is on the whole document, as the Comments panel's "Add comment" makes it, not on a range. */
   document: boolean;
@@ -23,8 +23,8 @@ export interface PlacedThread {
 }
 
 /**
- * The range of `source` a ref names: a sub-handle URL of `docUrl` with the path `source` and a
- * cursor range, as `handle.sub("source", cursor(from, to)).url` makes it. Undefined for any other
+ * The range of `content` a ref names: a sub-handle URL of `docUrl` with the path `content` and a
+ * cursor range, as `handle.sub("content", cursor(from, to)).url` makes it. Undefined for any other
  * ref, a cursor that doesn't resolve, or a collapsed range.
  */
 export function sourceRange(doc: Doc<CadModelDoc>, docUrl: AutomergeUrl, ref: AutomergeUrl): Span | undefined {
@@ -36,10 +36,10 @@ export function sourceRange(doc: Doc<CadModelDoc>, docUrl: AutomergeUrl, ref: Au
   }
   if (parsed.documentId !== parseAutomergeUrl(docUrl).documentId || parsed.segments?.length !== 2) return undefined;
   const [key, range] = parsed.segments as unknown as [{ key?: string }, { start?: string; end?: string }];
-  if (key.key !== "source" || typeof range.start !== "string" || typeof range.end !== "string") return undefined;
+  if (key.key !== "content" || typeof range.start !== "string" || typeof range.end !== "string") return undefined;
   try {
-    const start = getCursorPosition(doc, ["source"], range.start);
-    const end = getCursorPosition(doc, ["source"], range.end);
+    const start = getCursorPosition(doc, ["content"], range.start);
+    const end = getCursorPosition(doc, ["content"], range.end);
     return end > start ? { start, end } : undefined;
   } catch {
     return undefined;

@@ -42,7 +42,7 @@ export default function main({ size }) {
 ## Layout
 
 - `src/index.ts`: plugin metadata only (it is parsed in a worker by the host)
-- `src/datatype.ts`: `{ title, source, cad }` and the seed model; `src/embedDatatype.ts`: embeds
+- `src/datatype.ts`: `{ title, content, mimeType, cad }` and the seed model; `src/embedDatatype.ts`: embeds
 - `src/tools/`: one mount function per tool
 - `src/kernel/`: the OCCT worker (`worker.ts`), its main-thread facade (`engine.ts`) and the source preparation (`prepare.ts`), which also names features in memory
 - `src/model/`: reading the source (`analyze.ts`, `timeline.ts`) and editing it with minimal splices (`splice.ts`)

@@ -14,10 +14,14 @@ export default function main({ width, depth, height, hole }) {
 }
 `;
 
+/** What Patchwork's `file` datatype gives a `.js` file. */
+export const MODEL_MIME_TYPE = "application/javascript";
+
 export const CadModelDatatype = {
   init(doc: CadModelDoc) {
     doc.title = "CAD Model";
-    doc.source = DEFAULT_SOURCE;
+    doc.content = DEFAULT_SOURCE;
+    doc.mimeType = MODEL_MIME_TYPE;
   },
   getTitle(doc: CadModelDoc) {
     return doc.title || "CAD Model";

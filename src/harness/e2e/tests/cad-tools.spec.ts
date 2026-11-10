@@ -1,7 +1,8 @@
 /**
  * The two tools on one model document (research/07, "Two tools"): the viewer only shows and can be
  * embedded with <patchwork-view>, and an open feature dialog in the editor keeps its feature while
- * another user renames it or edits above it.
+ * another user renames it or edits above it. The model document is also its module, served by
+ * Patchwork's service worker (research/17, "Building blocks").
  */
 import { CAD_MODULES, cadView, dialog, docPathWith, docUrl, editorView, modelSource, openCode, openWithTool, setModelSource, timelineEntry, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
@@ -46,6 +47,33 @@ test("the viewer and an embedded viewer show one document", async ({ users }) =>
   await page.keyboard.insertText(" // from the code pane");
   await expect.poll(() => modelSource(page)).toContain("// from the code pane");
   await expect.poll(async () => Number(await embedded.getAttribute("data-builds-executed"))).toBeGreaterThan(before);
+});
+
+test("the service worker serves a model as its module, and the CAD Editor opens it", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createViaMenu(page, "CAD Model");
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+
+  const served = (url: string) =>
+    page.evaluate(async (u) => {
+      const response = await fetch(`/${encodeURIComponent(u)}`);
+      return { type: response.headers.get("content-type"), text: await response.text() };
+    }, url);
+  expect(await served(docUrl(page))).toEqual({ type: "application/javascript", text: await modelSource(page) });
+
+  // Without imports, which the page can't resolve, the browser runs it as a module.
+  const module = "export const defaultParams = { w: 3 };\nexport default ({ w }) => w * 2;\n";
+  await setModelSource(page, module, "replace");
+  // The service worker's repo, in a shared worker, gets the change by sync.
+  await expect.poll(async () => (await served(docUrl(page))).text).toBe(module);
+  const result = await page.evaluate(async (u) => {
+    const model = (await import(`/${encodeURIComponent(u)}`)) as { default(p: { w: number }): number; defaultParams: { w: number } };
+    return model.default(model.defaultParams);
+  }, docUrl(page));
+  expect(result).toBe(6);
 });
 
 test("an open dialog keeps its feature while another user renames it, edits above it or replaces the text", async ({ users }) => {

@@ -111,7 +111,7 @@ The "done when" scenario is the spec [`cad-collab`](../src/harness/e2e/tests/cad
 
 ### Feature identity across re-parses
 
-**An automerge cursor, with the variable name as a fallback.** The open dialog is anchored with `getCursor` at its call. `cad-tools` checks that it stays open on its feature while another user renames the variable everywhere or inserts a feature above it; a name-based identity would close on the rename. A cursor is lost when the whole text is replaced (assigning `source` instead of splicing, e.g. a tool rewriting the file; checked in `merge.test.ts`), so the dialog then falls back to the variable name, which `cad-tools` also checks.
+**An automerge cursor, with the variable name as a fallback.** The open dialog is anchored with `getCursor` at its call. `cad-tools` checks that it stays open on its feature while another user renames the variable everywhere or inserts a feature above it; a name-based identity would close on the rename. A cursor is lost when the whole text is replaced (assigning `content` instead of splicing, e.g. a tool rewriting the file; checked in `merge.test.ts`), so the dialog then falls back to the variable name, which `cad-tools` also checks.
 
 The same spec found that identity is not only about the dialog. The form re-rendered its inputs after every build, because each re-parse creates new entry objects. Firefox dropped what the user was typing when a build finished; Chromium commits a removed input on blur. Inputs are now keyed by the feature type's parameters, and the spec checks that the input survives a build.
 

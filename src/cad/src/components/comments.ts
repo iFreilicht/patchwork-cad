@@ -24,7 +24,7 @@ export interface CommentStore {
   focused: Accessor<Set<string>>;
   /** The thread's sub-handle URL, which the `comment-thread` tool renders. */
   urlOf(id: string): AutomergeUrl;
-  /** Starts a thread on a range of `source`, with one empty comment for its author to fill in; undefined without a contact. */
+  /** Starts a thread on a range of `content`, with one empty comment for its author to fill in; undefined without a contact. */
   create(range: Span, anchor?: CadAnchor): AutomergeUrl | undefined;
   /** Calls `close` once the author's draft is submitted or cancelled, or the thread is gone. */
   watchClose(threadUrl: AutomergeUrl, close: () => void): () => void;
@@ -93,14 +93,14 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
     threads,
     source: () => {
       version();
-      return handle.doc()?.source ?? "";
+      return handle.doc()?.content ?? "";
     },
     focused,
     urlOf,
     create(range, anchor) {
       const author = contact();
       if (!author) return undefined;
-      const ref = handle.sub("source", cursor(range.start, range.end)).url;
+      const ref = handle.sub("content", cursor(range.start, range.end)).url;
       const id = crypto.randomUUID();
       handle.change((doc) => {
         doc["@comments"] ??= { threads: [] };
@@ -145,7 +145,7 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
     select(range) {
       const focus = focusHandle();
       if (!focus) return;
-      const url = range ? handle.sub("source", cursor(range.start, range.end)).url : undefined;
+      const url = range ? handle.sub("content", cursor(range.start, range.end)).url : undefined;
       if (url === selected) return;
       selected = url;
       focus.change((doc) => {
@@ -153,7 +153,7 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
       });
     },
     reanchor(id, range) {
-      const ref = handle.sub("source", cursor(range.start, range.end)).url;
+      const ref = handle.sub("content", cursor(range.start, range.end)).url;
       handle.change((doc) => {
         const thread = doc["@comments"]?.threads.find((t) => t.id === id);
         const current = thread?.refs[0];
@@ -165,7 +165,7 @@ export function createComments(element: HTMLElement, handle: DocHandle<CadModelD
       });
     },
     retag(id, range, anchor) {
-      const ref = handle.sub("source", cursor(range.start, range.end)).url;
+      const ref = handle.sub("content", cursor(range.start, range.end)).url;
       handle.change((doc) => {
         const thread = doc["@comments"]?.threads.find((t) => t.id === id);
         if (!thread) return;

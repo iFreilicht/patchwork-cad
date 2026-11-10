@@ -44,7 +44,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
   const [last, setLast] = createSignal<BuildResult>();
   const [building, setBuilding] = createSignal(false);
 
-  let latest = handle.doc()?.source ?? "";
+  let latest = handle.doc()?.content ?? "";
   let latestParams = paramsKey(params?.());
   const engine = new Engine({
     onResult(result) {
@@ -62,7 +62,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
   });
 
   const rebuild = () => {
-    const source = handle.doc()?.source ?? "";
+    const source = handle.doc()?.content ?? "";
     const values = params?.();
     if (source === latest && paramsKey(values) === latestParams && last()) return;
     latest = source;

@@ -1,5 +1,5 @@
 // Comment threads on the model (research/13-collaboration.md, "Comments"): where a thread's range is
-// in `source` after edits, which timeline entry it belongs to, and where it goes after its text was
+// in `content` after edits, which timeline entry it belongs to, and where it goes after its text was
 // deleted and came back.
 import { readFileSync } from "node:fs";
 import { cursor, initSubduction, Repo, type DocHandle } from "@automerge/automerge-repo";
@@ -8,6 +8,7 @@ import { beforeAll, expect, test } from "vitest";
 import { analyze } from "../src/model/analyze.ts";
 import { entryOf, isDetached, placeThreads, reanchorTarget, sourceRange } from "../src/model/comments.ts";
 import { timeline } from "../src/model/timeline.ts";
+import { MODEL_MIME_TYPE } from "../src/datatype.ts";
 import type { CadAnchor, CadModelDoc } from "../src/types.ts";
 
 // The subduction fork's Repo needs its wasm before it is constructed.
@@ -16,18 +17,18 @@ beforeAll(() => initSubduction());
 const M1 = readFileSync(new URL("../../features/examples/m1.js", import.meta.url), "utf8");
 
 function model(source = M1): DocHandle<CadModelDoc> {
-  return new Repo().create<CadModelDoc>({ title: "m", source });
+  return new Repo().create<CadModelDoc>({ title: "m", content: source, mimeType: MODEL_MIME_TYPE });
 }
 
 const entries = (handle: DocHandle<CadModelDoc>) => {
-  const source = handle.doc().source;
+  const source = handle.doc().content;
   return timeline(source, analyze(source), []).entries;
 };
 
 /** Comments on the statement of `name`, as the timeline makes it. */
 function commentOn(handle: DocHandle<CadModelDoc>, name: string, anchor: CadAnchor = { feature: name }) {
   const entry = entries(handle).find((e) => e.kind === "feature" && e.name === name)!;
-  const ref = handle.sub("source", cursor(entry.span.start, entry.span.end)).url;
+  const ref = handle.sub("content", cursor(entry.span.start, entry.span.end)).url;
   handle.change((d) => {
     d["@comments"] ??= { threads: [] };
     d["@comments"].threads.push({ id: name, refs: [ref], isResolved: false, comments: [], "@cad": anchor });
@@ -35,7 +36,7 @@ function commentOn(handle: DocHandle<CadModelDoc>, name: string, anchor: CadAnch
   return entry;
 }
 
-const edit = (handle: DocHandle<CadModelDoc>, start: number, remove: number, text = "") => handle.change((d) => splice(d, ["source"], start, remove, text));
+const edit = (handle: DocHandle<CadModelDoc>, start: number, remove: number, text = "") => handle.change((d) => splice(d, ["content"], start, remove, text));
 
 test("a thread's range follows edits before and inside it", () => {
   const handle = model();
@@ -45,7 +46,7 @@ test("a thread's range follows edits before and inside it", () => {
   edit(handle, 0, 0, header);
   edit(handle, header.length + entry.span.start + statement.indexOf("extrude1"), "extrude1".length, "block");
   const [placed] = placeThreads(handle.doc(), handle.url);
-  expect(handle.doc().source.slice(placed!.range!.start, placed!.range!.end)).toBe(statement.replace("extrude1", "block"));
+  expect(handle.doc().content.slice(placed!.range!.start, placed!.range!.end)).toBe(statement.replace("extrude1", "block"));
   expect(entryOf(entries(handle), placed!.range!)).toBe(entries(handle).findIndex((e) => e.kind === "feature" && e.name === "block"));
 });
 
@@ -71,7 +72,7 @@ test("resolved threads, other documents' refs and other paths are left out", () 
   commentOn(handle, "extrude1");
   handle.change((d) => (d["@comments"]!.threads[0]!.isResolved = true));
   expect(placeThreads(handle.doc(), handle.url)).toEqual([]);
-  expect(sourceRange(handle.doc(), handle.url, other.sub("source", cursor(0, 5)).url)).toBeUndefined();
+  expect(sourceRange(handle.doc(), handle.url, other.sub("content", cursor(0, 5)).url)).toBeUndefined();
   expect(sourceRange(handle.doc(), handle.url, handle.sub("title").url)).toBeUndefined();
   expect(sourceRange(handle.doc(), handle.url, handle.url)).toBeUndefined();
 });

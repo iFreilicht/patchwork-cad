@@ -89,7 +89,7 @@ A ref is a **sub-handle URL**: a document URL plus a path into it ([parser.ts](.
 
 ### Anchors under edits
 
-What a cursor range on a statement in `source` resolves to (Automerge 3.4.1, scratch experiment):
+What a cursor range on a statement in `content` resolves to (Automerge 3.4.1, scratch experiment):
 
 | Edit | Range |
 |---|---|
@@ -97,7 +97,7 @@ What a cursor range on a statement in `source` resolves to (Automerge 3.4.1, scr
 | variable renamed inside the range | `"const slot = cut(a);"` |
 | statement deleted | `""` (collapsed) |
 | deleted, then the same text inserted again, which is what an undo does | `""` (collapsed, after the new text) |
-| `source` reassigned instead of spliced | `getCursorPosition` throws |
+| `content` reassigned instead of spliced | `getCursorPosition` throws |
 
 So a comment survives edits to and around its text, but not a delete, even an undone one. Patchwork then hides the thread; nothing deletes it.
 
@@ -125,7 +125,7 @@ Both tools show collaborators ([`presenceSession.ts`](../src/cad/src/components/
   | hovered and selected face or edge | its reference as data, as a pick writes it | see-through highlight in their colour | editor, viewer |
   | hovered features (timeline or code) | feature names | what the features made, in their colour; the entries outlined | editor; viewer shows the 3D part |
   | pointer | the point under it on the model, in world coordinates | a dot with their name | editor, viewer |
-  | code selection | Automerge cursors into `source`, while the code pane has focus | caret with their name and a tint | editor |
+  | code selection | Automerge cursors into `content`, while the code pane has focus | caret with their name and a tint | editor |
   | timeline marker | [`TimelineMarker`](../src/cad/src/types.ts), placed with the editor's own marker logic | a bar in their colour, their name above it | editor |
   | open feature | its name | its entry outlined | editor |
 
@@ -140,8 +140,8 @@ Both tools show collaborators ([`presenceSession.ts`](../src/cad/src/components/
 
 Both tools show and start comments ([`comments.ts`](../src/cad/src/components/comments.ts), [`entityComments.tsx`](../src/cad/src/components/entityComments.tsx), the logic without the DOM in [`model/comments.ts`](../src/cad/src/model/comments.ts)); tests: [`comments.test.ts`](../src/cad/test/comments.test.ts), [`cad-comments.spec.ts`](../src/harness/e2e/tests/cad-comments.spec.ts) in Chromium, Firefox and WebKit, against Patchwork's own Comments panel.
 
-- **Threads are Patchwork's**, under `@comments` in the model document next to `source`. That keeps the model portable ([02](02-model-storage.md#design-goal-portable-models)): the module is `source` alone. Patchwork's `comment-thread` tool renders every thread, in a popover; a thread started and dismissed without text is removed, as in Patchwork's text editor.
-- **Every target is a range in `source`**, because the panel hides anything else, so the panel lists every thread:
+- **Threads are Patchwork's**, under `@comments` in the model document next to `content`. That keeps the model portable ([02](02-model-storage.md#design-goal-portable-models)): the module is `content` alone. Patchwork's `comment-thread` tool renders every thread, in a popover; a thread started and dismissed without text is removed, as in Patchwork's text editor.
+- **Every target is a range in `content`**, because the panel hides anything else, so the panel lists every thread:
 
   | Target | Ref, and `"@cad"` on the thread | Started from | Shown as |
   |---|---|---|---|

@@ -5,12 +5,13 @@ import { initSubduction, Repo, type DocHandle } from "@automerge/automerge-repo"
 import { beforeAll, expect, test } from "vitest";
 import { nearestRegion, regionName } from "../src/components/ViewCube.ts";
 import { addView, freeName, nameProblem, namedViews, removeView, renameView, setHome, updateView } from "../src/model/views.ts";
+import { MODEL_MIME_TYPE } from "../src/datatype.ts";
 import type { CadModelDoc, CameraState } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
 
 const camera = (x: number): CameraState => ({ direction: [x, -1, 0], target: [1, 2, 3], distance: 100, projection: "perspective", zoom: 1 });
-const model = (): DocHandle<CadModelDoc> => new Repo().create<CadModelDoc>({ title: "m", source: "" });
+const model = (): DocHandle<CadModelDoc> => new Repo().create<CadModelDoc>({ title: "m", content: "", mimeType: MODEL_MIME_TYPE });
 
 test("views are added, renamed, updated and removed by id", () => {
   const handle = model();

@@ -106,8 +106,8 @@ export async function reloadStored(page: Page): Promise<void> {
 /** The model source, read from the tab's repo. */
 export async function modelSource(page: Page): Promise<string> {
   return page.evaluate(async (url) => {
-    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { source: string } }> } }).repo;
-    return (await repo.find(url)).doc().source;
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { content: string } }> } }).repo;
+    return (await repo.find(url)).doc().content;
   }, docUrl(page));
 }
 
@@ -119,11 +119,11 @@ export async function modelSource(page: Page): Promise<string> {
 export async function setModelSource(page: Page, source: string, how: "splice" | "replace" = "splice"): Promise<void> {
   await page.evaluate(
     async ([url, text, mode]) => {
-      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { source: string }) => void): void }> } }).repo;
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { content: string }) => void): void }> } }).repo;
       // The page's importmap provides the same automerge as the repo's.
       const specifier = "@automerge/automerge";
       const { updateText } = (await import(specifier)) as { updateText(d: unknown, path: string[], text: string): void };
-      (await repo.find(url!)).change((d) => (mode === "replace" ? (d.source = text!) : updateText(d, ["source"], text!)));
+      (await repo.find(url!)).change((d) => (mode === "replace" ? (d.content = text!) : updateText(d, ["content"], text!)));
     },
     [docUrl(page), source, how],
   );

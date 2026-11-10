@@ -1,4 +1,5 @@
 import type { AutomergeUrl } from "@automerge/automerge-repo";
+import type { MODEL_MIME_TYPE } from "./datatype.ts";
 import type { RefData } from "./kernel/protocol.ts";
 
 /** How a 3D view looks at the model: from `direction` towards `target`, `distance` away. */
@@ -29,7 +30,7 @@ export interface DocUiState {
   visibility?: Record<string, boolean>;
 }
 
-/** A timeline marker: before the entry whose first character `cursor` (an automerge cursor into `source`) is on. */
+/** A timeline marker: before the entry whose first character `cursor` (an automerge cursor into `content`) is on. */
 export interface TimelineMarker {
   cursor: string;
   /** The variable of that entry, for when the cursor is lost; "" for a Custom Script. */
@@ -51,7 +52,7 @@ export interface ViewPresence {
   features?: string[];
   /** The point on the model under the pointer, in world coordinates. */
   pointer?: [number, number, number];
-  /** The code pane's selection as automerge cursors into `source`, while it has focus. */
+  /** The code pane's selection as automerge cursors into `content`, while it has focus. */
   code?: { anchor: string; head: string };
   /** The timeline marker; absent at the end. */
   marker?: TimelineMarker;
@@ -61,8 +62,13 @@ export interface ViewPresence {
 
 export interface CadModelDoc {
   title: string;
-  /** The model: a plain ES module that imports replicad or the feature library and default-exports a function returning shapes. */
-  source: string;
+  /**
+   * The model: a plain ES module that imports replicad or the feature library and default-exports a
+   * function returning shapes. Kept in `content` with a `mimeType`, as Patchwork's file documents
+   * are, so that its service worker serves the document as this module (research/17, "Building blocks").
+   */
+  content: string;
+  mimeType: typeof MODEL_MIME_TYPE;
   /** Patchwork's comment threads (research/13-collaboration.md, "Comments"). */
   "@comments"?: { threads: CommentThread[] };
   /** What the tools keep about the model besides its code (research/18-named-views.md, "Storage"). */
@@ -102,7 +108,7 @@ export interface NamedView {
 /** A comment thread in Patchwork's format (patchwork-base codemirror-base/src/lib/extensions/comments.ts), with our anchor. */
 export interface CommentThread {
   id: string;
-  /** Sub-handle URLs of what it is about; ours are cursor ranges into `source`. */
+  /** Sub-handle URLs of what it is about; ours are cursor ranges into `content`. */
   refs: AutomergeUrl[];
   isResolved: boolean;
   comments: Comment[];
@@ -118,7 +124,7 @@ export interface Comment {
   timestamp: number;
 }
 
-/** What a thread on a feature, face or edge is about, beyond its range in `source`. */
+/** What a thread on a feature, face or edge is about, beyond its range in `content`. */
 export interface CadAnchor {
   /** The commented feature's variable, to anchor the thread again when its statement is deleted and comes back. */
   feature?: string;

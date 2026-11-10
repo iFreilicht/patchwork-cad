@@ -31,7 +31,6 @@
 - Sketches: constraints, e.g. with PlaneGCS (stable segment ids: [07](07-poc-modelling-ui.md#the-feature-library))
 - Assemblies and joints
 - Code editor niceties, e.g. renaming a variable with F2 ([17](17-parameters.md#kinds-units-ranges))
-- Store the model as `content` with a `mimeType`, as Patchwork's file documents are, so that the service worker serves it as a module ([17](17-parameters.md#building-blocks)), while the CAD Editor stays its default tool
 
 ## Known bugs
 

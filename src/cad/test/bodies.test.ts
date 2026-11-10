@@ -23,10 +23,10 @@ ${body
 `;
 
 function edit(source: string, edits: (a: ReturnType<typeof analyze>) => Edit[]): string {
-  let doc = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  let doc = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   const handle = { change: (fn: (d: CadModelDoc) => void) => (doc = A.change(doc, fn)) } as unknown as DocHandle<CadModelDoc>;
   apply(handle, edits(analyze(source)));
-  return doc.source;
+  return doc.content;
 }
 const tlOf = (source: string) => timeline(source, analyze(source), []);
 const indexOf = (source: string, name: string) => tlOf(source).entries.findIndex((e) => e.kind === "feature" && e.name === name);

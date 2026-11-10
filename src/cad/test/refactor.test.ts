@@ -38,9 +38,9 @@ const names = (source: string) => tlOf(source).entries.map((e) => (e.kind === "f
 
 function applied(source: string, r: Refactoring): string {
   if ("error" in r) throw new Error(r.error);
-  let doc = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  let doc = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   apply({ change: (fn: (d: CadModelDoc) => void) => (doc = A.change(doc, fn)) } as unknown as DocHandle<CadModelDoc>, r.edits);
-  return doc.source;
+  return doc.content;
 }
 
 /** Runs a model as the editor's lenient build would, with the names prepare injects; returns main's result and the trace. */

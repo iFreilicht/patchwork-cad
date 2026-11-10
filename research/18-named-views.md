@@ -12,7 +12,7 @@ All three store views in the model, list them, and restore one with a click. Non
 
 ## Storage
 
-The model document holds the views next to `source`, in the `cad` field that configurations will share ([17](17-parameters.md#configurations-and-named-views-in-the-model-document)):
+The model document holds the views next to `content`, in the `cad` field that configurations will share ([17](17-parameters.md#configurations-and-named-views-in-the-model-document)):
 
 ```ts
 cad: { views: { id: string; name: string; camera: CameraState }[] }

@@ -27,7 +27,7 @@ export function applyToText(source: string, edits: Edit[]): string {
 export function apply(handle: DocHandle<CadModelDoc>, edits: Edit[]): void {
   if (edits.length === 0) return;
   handle.change((doc) => {
-    for (const e of [...edits].sort((a, b) => b.start - a.start)) splice(doc, ["source"], e.start, e.end - e.start, e.text);
+    for (const e of [...edits].sort((a, b) => b.start - a.start)) splice(doc, ["content"], e.start, e.end - e.start, e.text);
   });
 }
 

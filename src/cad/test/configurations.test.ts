@@ -5,11 +5,12 @@ import { splice } from "@automerge/automerge";
 import { beforeAll, expect, test } from "vitest";
 import { resolvedFrom } from "../src/components/configurations.ts";
 import { addConfiguration, configurations, isLinked, removeConfiguration, renameConfiguration, renameParamInConfigurations, setConfigurationValues } from "../src/model/configurations.ts";
+import { MODEL_MIME_TYPE } from "../src/datatype.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
 
-const model = (): DocHandle<CadModelDoc> => new Repo().create<CadModelDoc>({ title: "m", source: "" });
+const model = (): DocHandle<CadModelDoc> => new Repo().create<CadModelDoc>({ title: "m", content: "", mimeType: MODEL_MIME_TYPE });
 
 test("configurations are added, renamed, given values and removed", () => {
   const handle = model();

@@ -26,11 +26,11 @@ type Way = "splice" | "recast" | "astring";
 
 /** The form edit, applied the given way to a copy of the document. */
 function formEdit(doc: Doc, way: Way): Doc {
-  const source = doc.source;
+  const source = doc.content;
   if (way === "splice") {
     const call = analyze(source).calls.find((c) => c.variable === "fillet1")!;
     const [edit] = setProp(call, "radius", "2");
-    return A.change(doc, (d) => A.splice(d, ["source"], edit!.start, edit!.end - edit!.start, edit!.text));
+    return A.change(doc, (d) => A.splice(d, ["content"], edit!.start, edit!.end - edit!.start, edit!.text));
   }
   let printed: string;
   if (way === "recast") {
@@ -56,7 +56,7 @@ function formEdit(doc: Doc, way: Way): Doc {
     }
     printed = generate(ast);
   }
-  return A.change(doc, (d) => A.updateText(d, ["source"], printed));
+  return A.change(doc, (d) => A.updateText(d, ["content"], printed));
 }
 
 /** Concurrent edits by another user, as character splices like typing, with a marker that shows the edit arrived. */
@@ -75,7 +75,7 @@ const concurrent: Record<string, { edit: (s: string) => string; marker: string }
 };
 
 function typed(doc: Doc, edit: (s: string) => string): Doc {
-  return A.change(doc, (d) => A.updateText(d, ["source"], edit(d.source)));
+  return A.change(doc, (d) => A.updateText(d, ["content"], edit(d.content)));
 }
 
 const parses = (s: string) => {
@@ -98,10 +98,10 @@ interface Outcome {
 }
 
 function run(way: Way, name: string): Outcome {
-  const doc = A.from({ title: "m1", source: base }) as Doc;
+  const doc = A.from({ title: "m1", content: base }) as Doc;
   const a = formEdit(A.clone(doc), way);
   const b = typed(A.clone(doc), concurrent[name]!.edit);
-  const merged = A.merge(a, b).source;
+  const merged = A.merge(a, b).content;
   // What a perfect merge would contain: B's text with only the radius changed.
   const ideal = concurrent[name]!.edit(base).replace(/radius: 1\.5\b/, "radius: 2");
   const idealLines = new Set(ideal.split("\n"));
@@ -139,11 +139,11 @@ test("form edits merged with concurrent edits", () => {
 });
 
 test("a cursor survives splices, but not replacing the whole text", () => {
-  let doc = A.from({ title: "m1", source: base }) as Doc;
+  let doc = A.from({ title: "m1", content: base }) as Doc;
   const at = base.indexOf("fillet(");
-  const cursor = A.getCursor(doc, ["source"], at);
-  doc = A.change(doc, (d) => A.splice(d, ["source"], 0, 0, "// typed\n"));
-  expect(A.getCursorPosition(doc, ["source"], cursor)).toBe(at + "// typed\n".length);
-  doc = A.change(doc, (d) => (d.source = `${d.source}`));
-  expect(() => A.getCursorPosition(doc, ["source"], cursor)).toThrow();
+  const cursor = A.getCursor(doc, ["content"], at);
+  doc = A.change(doc, (d) => A.splice(d, ["content"], 0, 0, "// typed\n"));
+  expect(A.getCursorPosition(doc, ["content"], cursor)).toBe(at + "// typed\n".length);
+  doc = A.change(doc, (d) => (d.content = `${d.content}`));
+  expect(() => A.getCursorPosition(doc, ["content"], cursor)).toThrow();
 });

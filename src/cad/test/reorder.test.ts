@@ -24,10 +24,10 @@ const indexOf = (source: string, name: string) => tlOf(source).entries.findIndex
 const names = (source: string) => tlOf(source).entries.map((e) => (e.kind === "feature" ? e.name : "script"));
 
 function edit(source: string, edits: (a: ReturnType<typeof analyze>) => Edit[]): string {
-  let doc = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  let doc = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   const handle = { change: (fn: (d: CadModelDoc) => void) => (doc = A.change(doc, fn)) } as unknown as DocHandle<CadModelDoc>;
   apply(handle, edits(analyze(source)));
-  return doc.source;
+  return doc.content;
 }
 
 const move = (source: string, name: string, position: number) => edit(source, (a) => moveEntry(source, a, tlOf(source), indexOf(source, name), position));
@@ -125,24 +125,24 @@ test("a fillet inserted before the chamfer goes into the chain", () => {
 
 test("the marker stays between the surviving entries when entries on both sides are deleted at once", () => {
   const source = example("m1");
-  const doc = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  const doc = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   // The marker sits between chamfer1 and sketch3: its cursor is on sketch3's first character.
   const tl = tlOf(source);
-  const cursor = A.getCursor(doc, ["source"], tl.entries[indexOf(source, "sketch3")]!.span.start, "after");
+  const cursor = A.getCursor(doc, ["content"], tl.entries[indexOf(source, "sketch3")]!.span.start, "after");
   // Another user deletes notch, fillet1 and chamfer1 before the marker and sketch3 after it.
   const lineOf = (name: string) => {
     const e = tl.entries[indexOf(source, name)]!.span;
     return { start: source.lastIndexOf("\n", e.start) + 1, end: source.indexOf("\n", e.end) + 1 };
   };
   const doomed = ["notch", "fillet1", "chamfer1", "sketch3"].map(lineOf).sort((a, b) => b.start - a.start);
-  const edited = A.change(doc, (d) => doomed.forEach((l) => A.splice(d, ["source"], l.start, l.end - l.start)));
-  const after = tlOf(edited.source);
-  const position = markerPosition(after, A.getCursorPosition(edited, ["source"], cursor), "sketch3");
-  expect(names(edited.source)[position - 1]).toBe("sketch2");
-  expect(names(edited.source)[position]).toBe("extrude2");
+  const edited = A.change(doc, (d) => doomed.forEach((l) => A.splice(d, ["content"], l.start, l.end - l.start)));
+  const after = tlOf(edited.content);
+  const position = markerPosition(after, A.getCursorPosition(edited, ["content"], cursor), "sketch3");
+  expect(names(edited.content)[position - 1]).toBe("sketch2");
+  expect(names(edited.content)[position]).toBe("extrude2");
   // When the whole text is replaced, the cursor is lost and the marker falls back to the next entry's name.
-  const replaced = A.change(A.clone(doc), (d) => (d.source = source));
-  expect(() => A.getCursorPosition(replaced, ["source"], cursor)).toThrow();
+  const replaced = A.change(A.clone(doc), (d) => (d.content = source));
+  expect(() => A.getCursorPosition(replaced, ["content"], cursor)).toThrow();
   expect(markerPosition(tlOf(source), undefined, "sketch3")).toBe(indexOf(source, "sketch3"));
 });
 
@@ -152,10 +152,10 @@ test("the marker stays between the surviving entries when entries on both sides 
  */
 test("concurrent edits and moves merge as deletes and inserts of text", () => {
   const source = example("m1");
-  const base = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  const base = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   const change = (doc: A.Doc<CadModelDoc>, edits: Edit[]) =>
-    A.change(doc, (d) => [...edits].sort((x, y) => y.start - x.start).forEach((e) => A.splice(d, ["source"], e.start, e.end - e.start, e.text)));
-  const moveIn = (doc: A.Doc<CadModelDoc>, name: string, position: number) => change(A.clone(doc), moveEntry(doc.source, analyze(doc.source), tlOf(doc.source), indexOf(doc.source, name), position));
+    A.change(doc, (d) => [...edits].sort((x, y) => y.start - x.start).forEach((e) => A.splice(d, ["content"], e.start, e.end - e.start, e.text)));
+  const moveIn = (doc: A.Doc<CadModelDoc>, name: string, position: number) => change(A.clone(doc), moveEntry(doc.content, analyze(doc.content), tlOf(doc.content), indexOf(doc.content, name), position));
   const parses = (text: string) => {
     try {
       analyze(text);
@@ -168,21 +168,21 @@ test("concurrent edits and moves merge as deletes and inserts of text", () => {
   // A moves chamfer1 before fillet1 while B changes chamfer1's distance: B's insertion survives the
   // deletion of the text around it, so it is left behind where the statement was, and the code doesn't parse.
   const moved = moveIn(base, "chamfer1", indexOf(source, "fillet1"));
-  const edited = A.change(A.clone(base), (d) => A.splice(d, ["source"], source.indexOf("distance: 1 })"), "distance: 1".length, "distance: 2"));
-  const orphaned = A.merge(A.clone(moved), edited).source;
+  const edited = A.change(A.clone(base), (d) => A.splice(d, ["content"], source.indexOf("distance: 1 })"), "distance: 1".length, "distance: 2"));
+  const orphaned = A.merge(A.clone(moved), edited).content;
   expect(orphaned).toContain("radius: 1.5 });\ndistance: 2  const sketch3");
   expect(orphaned).toContain("const chamfer1 = chamfer({ body: notch, edges: [edge(extrude1.end, extrude1.side.front).piece(notch, 1, { near: [49.75, 0, 20] })], distance: 1 });");
   expect(parses(orphaned)).toBe(false);
 
   // A and B move chamfer1 at once: its statement is there twice, a redeclared const that doesn't parse.
   const elsewhere = moveIn(base, "chamfer1", 8);
-  const both = A.merge(moveIn(base, "chamfer1", indexOf(source, "fillet1")), elsewhere).source;
+  const both = A.merge(moveIn(base, "chamfer1", indexOf(source, "fillet1")), elsewhere).content;
   expect(both.match(/const chamfer1 =/g)).toHaveLength(2);
   expect(parses(both)).toBe(false);
 
   // A moves chamfer1 while B edits another feature: both arrive.
-  const other = A.change(A.clone(base), (d) => A.splice(d, ["source"], source.indexOf("radius: 1.5"), "radius: 1.5".length, "radius: 2"));
-  const merged = A.merge(moveIn(base, "chamfer1", indexOf(source, "fillet1")), other).source;
-  expect(merged).toBe(moved.source.replace("radius: 1.5", "radius: 2"));
+  const other = A.change(A.clone(base), (d) => A.splice(d, ["content"], source.indexOf("radius: 1.5"), "radius: 1.5".length, "radius: 2"));
+  const merged = A.merge(moveIn(base, "chamfer1", indexOf(source, "fillet1")), other).content;
+  expect(merged).toBe(moved.content.replace("radius: 1.5", "radius: 2"));
   run(merged);
 });

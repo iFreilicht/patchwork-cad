@@ -17,7 +17,7 @@ A Patchwork tool with a datatype whose document holds the model as code ([02](02
 
 ## Implementation
 
-[src/cad/](../src/cad/) is the tool: a datatype `cad-model` with the document `{ title, source }` and the tool `cad-model-code-preview`, a Solid view with CodeMirror (bound to `source` by `@automerge/automerge-codemirror`) next to a three.js view, and one kernel worker per open view. The worker runs `replicad-evaluator`'s builder on replicad 1.1.0 and `replicad-opencascadejs` 1.1.0. `replicad-threejs-helper` turns its meshes into geometry, keeping the face and edge groups. Its [README](../src/cad/README.md) carries the unsandboxed warning.
+[src/cad/](../src/cad/) is the tool: a datatype `cad-model` with the document `{ title, content, mimeType }` and the tool `cad-model-code-preview`, a Solid view with CodeMirror (bound to `content` by `@automerge/automerge-codemirror`) next to a three.js view, and one kernel worker per open view. The worker runs `replicad-evaluator`'s builder on replicad 1.1.0 and `replicad-opencascadejs` 1.1.0. `replicad-threejs-helper` turns its meshes into geometry, keeping the face and edge groups. Its [README](../src/cad/README.md) carries the unsandboxed warning.
 
 A model is a plain ES module, `import { … } from "replicad"; export default function main(params) { return shape }`, which also runs unchanged under Node with only replicad and OCCT. [PoC 2](07-poc-modelling-ui.md) adds the feature library as a second import, three more tools, and a seed model that uses the library.
 

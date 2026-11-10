@@ -44,8 +44,8 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
 export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
   const ui = createUiState(props.element, props.handle.url);
   // The parameters this user shows the model with: a configuration and values they try (research/17).
-  const [code, setCode] = createSignal(props.handle.doc()?.source ?? "");
-  const onCode = () => setCode(props.handle.doc()?.source ?? "");
+  const [code, setCode] = createSignal(props.handle.doc()?.content ?? "");
+  const onCode = () => setCode(props.handle.doc()?.content ?? "");
   props.handle.on("change", onCode);
   onCleanup(() => props.handle.off("change", onCode));
   const params = createParams(props.handle, code, createConfigurations(props.handle), ui);

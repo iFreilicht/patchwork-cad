@@ -12,9 +12,9 @@ const example = (name: string) => readFileSync(new URL(`../../features/examples/
 
 /** Just enough of a DocHandle for apply(). */
 function fakeHandle(source: string) {
-  let doc = A.from({ title: "t", source }) as A.Doc<CadModelDoc>;
+  let doc = A.from({ title: "t", content: source }) as A.Doc<CadModelDoc>;
   const handle = { change: (fn: (d: CadModelDoc) => void) => (doc = A.change(doc, fn)), doc: () => doc };
-  return { handle: handle as unknown as DocHandle<CadModelDoc>, source: () => doc.source };
+  return { handle: handle as unknown as DocHandle<CadModelDoc>, source: () => doc.content };
 }
 
 const edit = (source: string, edits: (a: ReturnType<typeof analyze>) => Edit[]) => {

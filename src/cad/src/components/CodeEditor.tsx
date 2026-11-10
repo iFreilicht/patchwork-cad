@@ -14,7 +14,7 @@ import { contactToken } from "./presence.ts";
 import { codeComments, setCommentMarks } from "./codeComments.ts";
 import type { CommentStore } from "./comments.ts";
 
-/** A collaborator's selection in the code, as automerge cursors into `source`. */
+/** A collaborator's selection in the code, as automerge cursors into `content`. */
 export interface PeerSelection {
   key: string;
   color: string;
@@ -271,7 +271,7 @@ export function CodeEditor(props: {
     const doc = props.handle.doc();
     let cursors: { anchor: string; head: string } | undefined;
     try {
-      cursors = selection && doc ? { anchor: getCursor(doc, ["source"], selection.anchor), head: getCursor(doc, ["source"], selection.head) } : undefined;
+      cursors = selection && doc ? { anchor: getCursor(doc, ["content"], selection.anchor), head: getCursor(doc, ["content"], selection.head) } : undefined;
     } catch {
       // The editor is ahead of the document for a moment; the next update sends it.
       return;
@@ -301,7 +301,7 @@ export function CodeEditor(props: {
     });
   };
   const view = new EditorView({
-    doc: props.handle.doc()?.source ?? "",
+    doc: props.handle.doc()?.content ?? "",
     extensions: [
       lineNumbers(),
       highlightActiveLineGutter(),
@@ -349,7 +349,7 @@ export function CodeEditor(props: {
       peerSelections,
       commenting.of([]),
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
-      automergeSyncPlugin({ handle: props.handle, path: ["source"] }),
+      automergeSyncPlugin({ handle: props.handle, path: ["content"] }),
     ],
   });
 
@@ -399,8 +399,8 @@ export function CodeEditor(props: {
     if (!doc) return;
     const resolved = (props.peerSelections ?? []).flatMap((s) => {
       try {
-        const anchor = getCursorPosition(doc, ["source"], s.anchor);
-        const head = getCursorPosition(doc, ["source"], s.head);
+        const anchor = getCursorPosition(doc, ["content"], s.anchor);
+        const head = getCursorPosition(doc, ["content"], s.head);
         return [{ from: Math.min(anchor, head), to: Math.max(anchor, head), head, color: s.color, contactUrl: s.contactUrl }];
       } catch {
         return [];
@@ -448,7 +448,7 @@ export function CodeEditor(props: {
   const toChange = (patches: Patch[]) => {
     let at: number | undefined;
     for (const p of patches) {
-      if (p.path[0] !== "source" || typeof p.path[1] !== "number") continue;
+      if (p.path[0] !== "content" || typeof p.path[1] !== "number") continue;
       at = p.path[1] + (p.action === "splice" ? p.value.length : 0);
     }
     // After the sync plugin has applied the same patches.

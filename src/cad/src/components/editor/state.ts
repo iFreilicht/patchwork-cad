@@ -221,8 +221,8 @@ export const derivedBody = (type: string, param: string): string | undefined =>
 const labelOf = (entry: Entry | undefined) => (!entry ? "the end" : entry.kind === "feature" ? entry.names.join(", ") : `the Custom Script at lines ${entry.lines.join("–")}`);
 
 export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: Pick<UiState, "marker" | "setMarker" | "renameVisibility">): Editor {
-  const [source, setSource] = createSignal(handle.doc()?.source ?? "");
-  const onChange = () => setSource(handle.doc()?.source ?? "");
+  const [source, setSource] = createSignal(handle.doc()?.content ?? "");
+  const onChange = () => setSource(handle.doc()?.content ?? "");
   handle.on("change", onChange);
   onCleanup(() => handle.off("change", onChange));
 
@@ -251,7 +251,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const c = cursor();
     if (!c || !a) return undefined;
     try {
-      const offset = getCursorPosition(doc(), ["source"], c);
+      const offset = getCursorPosition(doc(), ["content"], c);
       if (a.calls.some((x) => x.span.start === offset)) return offset;
     } catch {
       // The cursor's text is gone.
@@ -273,13 +273,13 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
 
   const openFeature = (entry: FeatureEntry | undefined) => {
     setPickTarget(undefined);
-    setCursor(entry ? getCursor(doc(), ["source"], entry.call.span.start) : undefined);
+    setCursor(entry ? getCursor(doc(), ["content"], entry.call.span.start) : undefined);
     setOpenName(entry?.name);
   };
 
   /** The open feature's call, re-analyzed from the document as it is now. */
   const current = (): { call: FeatureCall; analysis: Analysis; source: string } | undefined => {
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     const offset = openOffset(a);
     const call = a?.calls.find((x) => x.span.start === offset);
@@ -296,7 +296,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
 
   const insert = (type: InsertableType) => {
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     if (!a) return;
     const name = freshName(text, type);
@@ -319,17 +319,17 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const consumes = type === "fillet" || type === "chamfer" || type === "combine" ? body : undefined;
     const hides = type === "extrude" ? sketch : undefined;
     apply(handle, insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) }));
-    const after = tryAnalyze(doc().source).analysis;
+    const after = tryAnalyze(doc().content).analysis;
     const call = after?.calls.find((x) => x.variable === name);
     if (!call) return;
-    setCursor(getCursor(doc(), ["source"], call.span.start));
+    setCursor(getCursor(doc(), ["content"], call.span.start));
     setOpenName(name);
     setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : type === "combine" ? { param: "tools", kind: "body", multi: true } : undefined);
   };
 
   const deleteOpen = () => {
     const entry = open();
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     if (!entry || !a) return;
     const fresh = timeline(text, a, []).entries.find((e): e is FeatureEntry => e.kind === "feature" && e.name === entry.name);
@@ -443,7 +443,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
 
   /** The current document, analyzed, with its timeline. */
   const fresh = () => {
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     return a ? { text, a, t: timeline(text, a, []) } : undefined;
   };
@@ -468,7 +468,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (!m) return t.entries.length + 1;
     let offset: number | undefined;
     try {
-      offset = getCursorPosition(doc(), ["source"], m.cursor);
+      offset = getCursorPosition(doc(), ["content"], m.cursor);
     } catch {
       // The cursor's text was replaced as a whole.
     }
@@ -486,8 +486,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const setMarkerIn = (t: Timeline, a: Analysis, position: number) => {
     const entry = t.entries[position];
     const end = t.returned?.start ?? (a.main ? a.main.body.end - 1 : undefined);
-    if (entry) ui.setMarker({ cursor: getCursor(doc(), ["source"], entry.span.start, "after"), next: entry.kind === "feature" ? entry.name : "" });
-    else if (position === t.entries.length && end !== undefined) ui.setMarker({ cursor: getCursor(doc(), ["source"], end, "after"), next: RETURN });
+    if (entry) ui.setMarker({ cursor: getCursor(doc(), ["content"], entry.span.start, "after"), next: entry.kind === "feature" ? entry.name : "" });
+    else if (position === t.entries.length && end !== undefined) ui.setMarker({ cursor: getCursor(doc(), ["content"], end, "after"), next: RETURN });
     else ui.setMarker(undefined);
   };
   const setMarker = (position: number) => {
@@ -645,7 +645,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
    * message of why not, which it resolves to.
    */
   const refactorEntry = async (index: number, make: (text: string, a: Analysis, fresh: Timeline, i: number) => Refactoring, doing: string, trial = false): Promise<string | undefined> => {
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     if (!a) return "The code doesn't parse.";
     const fresh = timeline(text, a, []);
@@ -656,7 +656,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (trial) {
       const why = await breaks(doing, text, r.edits);
       if (why) return why;
-      if (doc().source !== text) return "The model changed meanwhile; try again.";
+      if (doc().content !== text) return "The model changed meanwhile; try again.";
     }
     apply(handle, r.edits);
     return undefined;
@@ -728,7 +728,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const entry = tl().entries[index];
     // Custom Script code is opaque: try the move in the background first and keep it only if the model still builds as well as before.
     if (entry?.kind === "script") {
-      const text = doc().source;
+      const text = doc().content;
       const { analysis: a } = tryAnalyze(text);
       if (!a) return "The code doesn't parse.";
       const fresh = timeline(text, a, []);
@@ -737,7 +737,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       const why = await breaks(`Moving ${labelOf(entry)} ${target ? `before ${labelOf(target)}` : "to the end"}`, text, edits);
       if (why) return why;
     }
-    const text = doc().source;
+    const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     if (!a) return "The code doesn't parse.";
     const fresh = timeline(text, a, []);
@@ -746,8 +746,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (from < 0 || to < 0) return "The timeline changed meanwhile.";
     if (!canMove(graph(a, fresh), from, to)) return blocked(index, position) ?? "The timeline changed meanwhile.";
     apply(handle, moveEntry(text, a, fresh, from, to));
-    const after = tryAnalyze(doc().source).analysis;
-    if (after) setMarkerIn(timeline(doc().source, after, []), after, markerGap);
+    const after = tryAnalyze(doc().content).analysis;
+    if (after) setMarkerIn(timeline(doc().content, after, []), after, markerGap);
     return undefined;
   };
 
