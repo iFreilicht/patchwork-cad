@@ -1,11 +1,11 @@
 /**
  * Parameters (research/17-parameters.md): the parameters entry edits defaultParams, main's pattern
- * and the derived constants as code; a user tries values only for themselves, applies them, keeps
- * them as a configuration of the model, or links one to another document's number; a feature's
- * number becomes a parameter; and an embed shows the model with a configuration.
+ * and the derived constants as code; configurations keep values of their own, which a user shows
+ * the model with, only for themselves, and which can link to another document's number; a
+ * feature's number becomes a parameter; and an embed shows the model with a configuration.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, createModel, dialog, docUrl, editorView, modelSource, timelineEntry } from "../cad.ts";
+import { CAD_MODULES, createModel, dialog, docUrl, editorView, modelSource, setModelSource, timelineEntry } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -51,7 +51,7 @@ test("the parameters entry edits parameters and derived ones in the code", async
   await openParams(page);
   await expect(params(page).locator("tr[data-param]")).toHaveCount(4);
   // Units follow from where a parameter goes: all of these are lengths.
-  for (const key of ["width", "depth", "height", "hole"]) await expect(row(page, key).locator("td").nth(3)).toHaveText("mm");
+  for (const key of ["width", "depth", "height", "hole"]) await expect(row(page, key).locator(".cad-editor__param-unit")).toHaveText("mm");
 
   // Typed key by key, the field keeps the focus while each key rewrites the code.
   const height = params(page).getByRole("textbox", { name: "Default of height" });
@@ -78,15 +78,74 @@ test("the parameters entry edits parameters and derived ones in the code", async
   await expect.poll(() => modelSource(page)).not.toContain("gap");
 
   // A derived parameter is a const at the start of main, and no timeline entry.
-  await params(page).getByRole("button", { name: "Add derived" }).click();
+  await params(page).getByRole("button", { name: "Add derived value" }).click();
   await rename(page, "half");
   await params(page).getByRole("textbox", { name: "Expression of half" }).fill("w / 2");
   await expect.poll(() => modelSource(page)).toContain("main({ w, depth, height, hole }) {\n  const half = w / 2;\n  const sketch1");
+  // Its final value, and the parameters', are what the build computed.
+  await expect(params(page).locator('tr[data-derived="half"] .cad-editor__param-final')).toHaveText("30");
+  await expect(row(page, "height").locator(".cad-editor__param-final")).toHaveText("20");
   await expect(page.locator(".cad-editor__entry").first()).toHaveAttribute("data-name", "sketch1");
   await expect(editorView(page)).toHaveAttribute("data-state", "ready");
 });
 
-test("values are tried, applied, kept as configurations and embedded", async ({ users }) => {
+/** A derived value, code that isn't one, and a const after that code, which is code, too. */
+const between = `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
+
+export const defaultParams = { w: 60, d: 40, h: 8 };
+
+export default function main({ w, d, h }) {
+  const r = w / 4;
+  let scale = 1;
+  const t = h * scale;
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [w, d] }) });
+  const plate = extrude({ sketch: sketch1, distance: t + r * 0 });
+  return { plate };
+}
+`;
+
+test("code between the parameters' derived values and the features stays a Custom Script", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await setModelSource(page, between);
+  await expect(timelineEntry(page, "plate")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+
+  // The timeline: the parameters entry, the code from `let scale` to `const t`, then the features.
+  const entries = page.locator(".cad-editor__entry");
+  await expect.poll(() => entries.evaluateAll((els) => els.map((e) => e.getAttribute("data-name") ?? "script"))).toEqual(["script", "sketch1", "plate"]);
+  const paramsBox = await page.locator(".cad-editor__params-entry").boundingBox();
+  const scriptBox = await entries.first().boundingBox();
+  expect(paramsBox!.x).toBeLessThan(scriptBox!.x);
+  await entries.first().hover();
+  await expect(entries.first()).toHaveAttribute("title", /lines 7–8/);
+
+  // The dialog: the parameters, and only the derived value before the code.
+  await openParams(page);
+  await expect(params(page).locator("tr[data-param]")).toHaveCount(3);
+  await expect(params(page).locator("tr[data-derived]")).toHaveCount(1);
+  await expect(params(page).locator('tr[data-derived="r"] .cad-editor__param-final')).toHaveText("15");
+
+  // Each table's "Edit code" marks its own place in the code.
+  const code = page.locator(".cad-model__code");
+  const mark = code.locator(".cad-model__focus");
+  await params(page).getByRole("button", { name: "Edit code of the parameters" }).click();
+  await expect(mark.first()).toContainText("export const defaultParams");
+  await params(page).getByRole("button", { name: "Edit code of the derived values" }).click();
+  await expect(mark).toHaveText(["const r = w / 4;"]);
+
+  // A derived value is added after the others, before the code.
+  await params(page).getByRole("button", { name: "Add derived value" }).click();
+  await rename(page, "half");
+  await expect.poll(() => modelSource(page)).toContain("  const r = w / 4;\n  const half = 0;\n  let scale = 1;");
+  await expect(params(page).locator("tr[data-derived]")).toHaveCount(2);
+  await expect.poll(() => entries.evaluateAll((els) => els.map((e) => e.getAttribute("data-name") ?? "script"))).toEqual(["script", "sketch1", "plate"]);
+});
+
+test("configurations override defaults: switching between them and the defaults shows each, for everyone", async ({ users }) => {
   const [a, b] = await users(2);
   if (!a || !b) throw new Error("users(2) returned fewer than two users");
   const { page } = a;
@@ -94,43 +153,80 @@ test("values are tried, applied, kept as configurations and embedded", async ({ 
   await createModel(page);
   await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   const model = docUrl(page);
-  const narrow = await extentX(page);
-  expect(narrow).toBeLessThanOrEqual(60);
+  expect(await extentX(page)).toBeLessThanOrEqual(60);
   await openParams(page);
+  await expect(configurationRow(page, "Defaults")).toHaveAttribute("data-current", "true");
+  const final = (key: string) => row(page, key).locator(".cad-editor__param-final");
 
-  // A value tried is only shown, only for this user.
-  const width = params(page).getByRole("textbox", { name: "Value of width" });
-  await width.fill("100");
-  await width.press("Enter");
-  await expect.poll(() => extentX(page)).toBeGreaterThan(90);
-  await expect(status(page)).toContainText("Shown with 1 value you try");
-  expect(await modelSource(page)).toContain("width: 60");
-  await bootToFrame(b.page, `/#doc=${encodeURIComponent(model)}`);
-  await expect(editorView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
-  expect(await extentX(b.page)).toBeLessThanOrEqual(60);
-
-  // Kept as a configuration of the model, which the other user can show, too.
-  await params(page).getByRole("button", { name: "Save as configuration" }).click();
+  // A new configuration from the defaults overrides nothing yet, and is shown.
+  await params(page).getByRole("button", { name: "Save as new configuration" }).click();
   await expect(configurationRow(page, "Configuration")).toHaveAttribute("data-current", "true");
-  await expect(status(page)).toContainText("Shown with Configuration");
+  await expect(status(page)).toContainText('Shown with configuration "Configuration"');
   await configurationRow(page, "Configuration").click({ button: "right" });
   await page.getByRole("menu").getByRole("menuitem", { name: "Rename" }).click();
   await rename(page, "Wide");
   // Enter, which renames, doesn't also click the name that gets the focus back.
   await expect(configurationRow(page, "Wide")).toHaveAttribute("data-current", "true");
-  await configurationRow(b.page, "Wide").getByRole("button", { name: "Wide" }).click();
-  await expect.poll(() => extentX(b.page)).toBeGreaterThan(90);
-  await configurationRow(page, "Wide").getByRole("button", { name: "Wide" }).click();
-  await expect(configurationRow(page, "Wide")).not.toHaveAttribute("data-current", "true");
-  await expect.poll(() => extentX(page)).toBeLessThanOrEqual(60);
+  const wide = params(page).getByRole("textbox", { name: "width in Wide" });
+  await expect(wide).toHaveValue("");
+  await expect(params(page).getByRole("textbox", { name: "Default of width" })).toHaveCount(0);
+  await expect(row(page, "width").locator(".cad-editor__param-default")).toHaveText("60");
+  await expect(final("width")).toHaveText("60");
 
-  // Tried values are applied to the code's defaults.
-  const height = params(page).getByRole("textbox", { name: "Value of height" });
-  await height.fill("5");
-  await height.press("Enter");
-  await params(page).getByRole("button", { name: "Apply to defaults" }).click();
-  await expect.poll(() => modelSource(page)).toContain("height: 5");
-  await expect(status(page)).not.toContainText("Shown with");
+  // Its overrides are its own: the code's defaults stay.
+  await wide.fill("100");
+  await wide.press("Enter");
+  await expect.poll(() => extentX(page)).toBeGreaterThan(90);
+  await expect(final("width")).toHaveText("100");
+  expect(await modelSource(page)).toContain("width: 60");
+
+  // Switching shows each: the defaults, the configuration. Its code is edited with the defaults shown.
+  await expect(row(page, "width").getByRole("button", { name: "Remove width" })).toHaveCount(0);
+  // Under each table: switching back, and its code.
+  await expect(params(page).getByRole("button", { name: "Switch back to Defaults to edit" })).toHaveCount(2);
+  await expect(params(page).getByRole("button", { name: "Add parameter" })).toHaveCount(0);
+  await params(page).getByRole("button", { name: "Switch back to Defaults to edit" }).first().click();
+  await expect(configurationRow(page, "Defaults")).toHaveAttribute("data-current", "true");
+  await expect.poll(() => extentX(page)).toBeLessThanOrEqual(60);
+  await expect(final("width")).toHaveText("60");
+  await expect(params(page).getByRole("textbox", { name: "width in Wide" })).toHaveCount(0);
+  await expect(params(page).getByRole("button", { name: "Switch back to Defaults to edit" })).toHaveCount(0);
+  await configurationRow(page, "Wide").getByRole("button", { name: "Wide" }).click();
+  await expect.poll(() => extentX(page)).toBeGreaterThan(90);
+  await expect(params(page).getByRole("textbox", { name: "width in Wide" })).toHaveValue("100");
+
+  // A second configuration starts with the shown one's overrides and goes its own way.
+  await params(page).getByRole("button", { name: "Save as new configuration" }).click();
+  const narrow = params(page).getByRole("textbox", { name: "width in Wide 2" });
+  await expect(narrow).toHaveValue("100");
+  await narrow.fill("30");
+  await narrow.press("Enter");
+  await expect.poll(() => extentX(page)).toBeLessThanOrEqual(30);
+  await configurationRow(page, "Wide").getByRole("button", { name: "Wide" }).click();
+  await expect.poll(() => extentX(page)).toBeGreaterThan(90);
+
+  // A default changes what every configuration doesn't override.
+  await configurationRow(page, "Defaults").getByRole("button", { name: "Defaults" }).click();
+  await params(page).getByRole("textbox", { name: "Default of depth" }).fill("50");
+  await expect.poll(() => modelSource(page)).toContain("depth: 50");
+  await configurationRow(page, "Wide").getByRole("button", { name: "Wide" }).click();
+  await expect(final("depth")).toHaveText("50");
+  await expect(final("width")).toHaveText("100");
+
+  // Which one a user shows is theirs; the configurations are everyone's.
+  await bootToFrame(b.page, `/#doc=${encodeURIComponent(model)}`);
+  await expect(editorView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expect(configurationRow(b.page, "Defaults")).toHaveAttribute("data-current", "true");
+  expect(await extentX(b.page)).toBeLessThanOrEqual(60);
+  await configurationRow(b.page, "Wide 2").getByRole("button", { name: "Wide 2" }).click();
+  await expect.poll(() => extentX(b.page)).toBeLessThanOrEqual(30);
+  await expect(configurationRow(page, "Wide")).toHaveAttribute("data-current", "true");
+
+  // Hovering a configuration hovers the parameters entry.
+  await configurationRow(page, "Wide 2").hover();
+  await expect(page.locator(".cad-editor__params-entry")).toHaveAttribute("data-hovered", "true");
+  await page.mouse.move(0, 0);
+  await expect(page.locator(".cad-editor__params-entry")).not.toHaveAttribute("data-hovered", "true");
 
   // A feature's number becomes a parameter.
   await params(page).getByRole("button", { name: "close" }).click();
@@ -184,15 +280,13 @@ test("a value linked to another document's number follows it", async ({ users })
       [sheet, value ?? null] as const,
     );
   await openParams(page);
-  const width = params(page).getByRole("textbox", { name: "Value of width" });
+  await params(page).getByRole("button", { name: "Save as new configuration" }).click();
+  const width = params(page).getByRole("textbox", { name: "width in Configuration" });
   await width.fill(`${sheet}/rows/@0/width`);
   await width.press("Enter");
   await expect.poll(() => extentX(page)).toBeGreaterThan(80);
   await setWidth(130);
   await expect.poll(() => extentX(page)).toBeGreaterThan(120);
-  // Kept in a configuration, the link stays a link.
-  await params(page).getByRole("button", { name: "Save as configuration" }).click();
-  await expect(configurationRow(page, "Configuration")).toHaveAttribute("data-current", "true");
   await setWidth(undefined);
   await expect(status(page)).toContainText("width: its linked value isn't there any more");
   await expect(width).toHaveAttribute("aria-invalid", "true");

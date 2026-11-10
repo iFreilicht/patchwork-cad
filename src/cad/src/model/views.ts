@@ -7,6 +7,17 @@ import type { CadModelDoc, CameraState, NamedView } from "../types.ts";
 
 export const namedViews = (doc: CadModelDoc | undefined): NamedView[] => doc?.cad?.views ?? [];
 
+/** The id of the Home view, which every model has: an embed of it names it so (research/18, "Home"). */
+export const HOME = "home";
+
+/** Sets where the Home view looks from; `undefined` resets it to the ViewCube's Home framing. */
+export function setHome(doc: CadModelDoc, camera: CameraState | undefined): void {
+  if (camera) {
+    if (!doc.cad) doc.cad = {};
+    doc.cad.home = copy(camera);
+  } else if (doc.cad?.home) delete doc.cad.home;
+}
+
 /** Named things in the model document: views and configurations. */
 type Named = { id: string; name: string };
 
@@ -24,6 +35,7 @@ export function nameProblem(items: readonly Named[], id: string, name: string, n
   return undefined;
 }
 
+/** A new id, never the Home view's. */
 export const newId = () => crypto.randomUUID().slice(0, 8);
 
 /** A copy that shares no arrays with `camera`, which may be another document's. */

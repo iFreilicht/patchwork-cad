@@ -94,6 +94,10 @@ export interface ViewerProps {
   view?: CameraState | undefined;
   /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
   onViewChange?: (view: CameraState) => void;
+  /** Where Home goes, the model's Home view if it was changed; else Home frames the model from the front, right and above. */
+  home?: CameraState | undefined;
+  /** Marks the ViewCube's Home button as hovered, e.g. while the Home view is hovered in the browser. */
+  homeHovered?: boolean;
   /** Hands over what the view can tell its owner at any time, once it is mounted. */
   onApi?: (api: ViewerApi) => void;
   /** Starts with the ViewCube collapsed to its toggle. The state is local to this mount. */
@@ -108,7 +112,18 @@ export interface ViewerProps {
 export interface ViewerApi {
   /** The camera the view shows now, as onViewChange reports it. */
   camera(): CameraState;
+  /** Goes Home, as the ViewCube's Home button does. */
+  home(): void;
+  /** Where Home goes now: the model's Home view, or the framing from the front, right and above. */
+  homeCamera(): CameraState | undefined;
 }
+
+/** Two cameras are the same up to rounding, e.g. one reported after moving to the other. */
+export const nearCamera = (a: CameraState | undefined, b: CameraState | undefined, tolerance = 1e-6) =>
+  !!a &&
+  !!b &&
+  a.projection === b.projection &&
+  [...a.direction, ...a.target, a.distance, a.zoom].every((x, i) => Math.abs(x - [...b.direction, ...b.target, b.distance, b.zoom][i]!) <= tolerance * Math.max(1, Math.abs(x)));
 
 /** Two cameras are the same; storage may reorder an object's keys. */
 export const sameCamera = (a: CameraState | undefined, b: CameraState | undefined) => !!a && !!b && cameraKey(a) === cameraKey(b);
@@ -476,7 +491,10 @@ export function Viewer(props: ViewerProps) {
     const turnTo = (to: THREE.Vector3) => moveTo({ direction: to }, true);
     controls.addEventListener("start", () => setTurn(undefined));
 
-    home = () => frame(true, HOME_DIRECTION, true);
+    home = () => {
+      if (props.home) apply(props.home, true);
+      else frame(true, HOME_DIRECTION, true);
+    };
     toggleProjection = (byUser = true) => {
       setTurn(undefined);
       const d = distance();
@@ -517,15 +535,15 @@ export function Viewer(props: ViewerProps) {
     };
     controls.addEventListener("end", report);
 
-    /** Shows `view`: animated once the view has shown a camera, e.g. on Reset, at once when it opens. */
-    const apply = (view: CameraState) => {
+    /** Shows `view`: animated once the view has shown a camera, e.g. on Reset, at once when it opens; `report` calls onViewChange at the end. */
+    const apply = (view: CameraState, report = false) => {
       setTurn(undefined);
       if (view.projection !== projection()) toggleProjection(false);
       const to = { direction: new THREE.Vector3(...view.direction).normalize(), target: new THREE.Vector3(...view.target), distance: view.distance, zoom: view.zoom };
       // As if framed from there, so that a build only reframes if the model doesn't fit.
       framed = new THREE.Sphere(to.target.clone(), view.distance / 3);
       radius = framed.radius;
-      if (shown) return moveTo(to, false);
+      if (shown) return moveTo(to, report);
       shown = true;
       place(to);
     };
@@ -596,7 +614,9 @@ export function Viewer(props: ViewerProps) {
       // Indices may name other entities in the new shapes.
       setHovered(undefined);
       setSelected(undefined);
-      frame();
+      // A view that shows no camera yet opens at the model's Home, if it was moved (research/18, "Home").
+      if (!shown && props.home) apply(props.home);
+      else frame();
       setRenders((n) => n + 1);
     });
 
@@ -1008,7 +1028,14 @@ export function Viewer(props: ViewerProps) {
       },
     };
     (container as HTMLDivElement & { cadViewer?: ViewerTestHook }).cadViewer = hook;
-    props.onApi?.({ camera: cameraState });
+    const homeCamera = (): CameraState | undefined => {
+      if (props.home) return props.home;
+      const box = new THREE.Box3().setFromObject(group);
+      if (box.isEmpty()) return undefined;
+      const sphere = box.getBoundingSphere(new THREE.Sphere());
+      return { direction: vector(HOME_DIRECTION), target: vector(sphere.center), distance: round(sphere.radius * 3), projection: projection(), zoom: 1 };
+    };
+    props.onApi?.({ camera: cameraState, home: () => home(), homeCamera });
 
     onCleanup(() => {
       cancelAnimationFrame(frameId);
@@ -1043,7 +1070,7 @@ export function Viewer(props: ViewerProps) {
             <path d="M8 1.5 14 5V11L8 14.5 2 11V5ZM2 5 8 8.5 14 5M8 8.5V14.5" />
           </svg>
         </button>
-        <button class="cad-viewcube__button cad-viewcube__button--home" aria-label="Home view" title="Home view" onClick={() => home()}>
+        <button class="cad-viewcube__button cad-viewcube__button--home" aria-label="Home view" title="Home view" data-hovered={props.homeHovered ? "true" : undefined} onClick={() => home()}>
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5" />
           </svg>

@@ -3,17 +3,17 @@ import { splice } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import type { BuildParams } from "../../kernel/protocol.ts";
 import { analyze, type Analysis, type FeatureCall } from "../../model/analyze.ts";
-import { isLinked, renameParamInConfigurations } from "../../model/configurations.ts";
+import { renameParamInConfigurations } from "../../model/configurations.ts";
 import { addDerived, addParam, nameProblem, parameters, quantities, removeDerived, removeParam, renameDerived, renameParam, setDefault, setDerived, type ParamEdit, type Parameters, type Quantity } from "../../model/params.ts";
-import { applyToText, freshName, setProp, type Edit } from "../../model/splice.ts";
+import { applyToText, freshName, setProp } from "../../model/splice.ts";
 import type { CadModelDoc, Configuration, LinkedValue, ParamValue } from "../../types.ts";
 import type { Configurations } from "../configurations.ts";
 import type { UiState } from "../uiState.ts";
 
 /**
  * The editor's side of a model's parameters (research/17-parameters.md): the parameters entry's
- * edits of the code, the configurations, and what this user shows the model with: a configuration
- * and values they try over it.
+ * edits of the code, the configurations and their values, and the configuration this user shows
+ * the model with.
  */
 export interface ParamsController {
   /** The parameters as the code has them, while it parses. */
@@ -22,19 +22,15 @@ export interface ParamsController {
   configurations: Configurations;
   /** The configuration this user shows the model with. */
   selected: Accessor<Configuration | undefined>;
-  /** Values this user tries, over the configuration or the defaults; a link tries another document's value. */
-  tried: Accessor<Record<string, ParamValue | LinkedValue>>;
-  /** What the view builds with over the defaults: the configuration's values and the tried ones. */
+  /** What the view builds with over the defaults: the selected configuration's values. */
   shown: Accessor<BuildParams | undefined>;
   /** Linked values that can't be read. */
   problems: Accessor<string[]>;
+  /** Shows the model with configuration `id`, or with the defaults, only for this user. */
   select(id: string | undefined): void;
-  /** Tries `value` for parameter `key`; `undefined` stops trying one. */
-  tryValue(key: string, value: ParamValue | LinkedValue | undefined): void;
-  reset(): void;
-  /** Writes the tried values to configuration `id`, else to the selected one, else to the code's defaults, and shows it; says why not, if not. */
-  apply(id?: string): string | undefined;
-  /** Saves the shown values as a new configuration and shows it. */
+  /** Sets parameter `key`'s value in the selected configuration: JSON, or a link to another document's number; `undefined` makes it the default again. */
+  setValue(key: string, value: ParamValue | LinkedValue | undefined): void;
+  /** Adds a configuration with the shown one's overrides, none from the defaults, and shows it. */
   saveAs(): Configuration;
   setDefault(key: string, text: string): boolean;
   /** Adds a parameter, and says its name or why not. */
@@ -72,8 +68,7 @@ export function createParams(handle: DocHandle<CadModelDoc>, source: Accessor<st
     return c ? quantities(c.analysis, c.p) : new Map<string, Quantity>();
   });
   const selected = () => configurations.list().find((c) => c.id === ui.params().configuration);
-  const tried = () => ui.params().values ?? {};
-  const configured = createMemo(() => configurations.values(selected()?.id, tried()));
+  const configured = createMemo(() => configurations.values(selected()?.id));
   const shown = createMemo(
     () => {
       const values = configured().values;
@@ -98,47 +93,22 @@ export function createParams(handle: DocHandle<CadModelDoc>, source: Accessor<st
     return undefined;
   };
   const free = (p: Parameters, a: Analysis, text: string, base: string) => (nameProblem(a, p, base) ? freshName(text, base) : base);
-  const tryValue = (key: string, value: ParamValue | LinkedValue | undefined) => {
-    const values = { ...tried() };
-    if (value === undefined) delete values[key];
-    else values[key] = value;
-    ui.setParams({ ...ui.params(), values });
-  };
-
   return {
     info,
     quantities: qs,
     configurations,
     selected,
-    tried,
     shown,
     problems: () => configured().problems,
     select: (id) => ui.setParams({ configuration: id }),
-    tryValue,
-    reset: () => ui.setParams({ configuration: ui.params().configuration }),
-    apply(id) {
-      const values = tried();
-      const configuration = id ? configurations.list().find((c) => c.id === id) : selected();
-      if (configuration) configurations.setValues(configuration.id, values);
-      else {
-        const why = edit((text, _, p) => {
-          const edits: Edit[] = [];
-          for (const [key, value] of Object.entries(values)) {
-            if (isLinked(value)) return { error: `${key} links to another document's value, which only a configuration can keep` };
-            const r = setDefault(text, p, key, asCode(value));
-            if ("error" in r) return r;
-            edits.push(...r.edits);
-          }
-          return { edits };
-        });
-        if (why) return why;
-      }
-      ui.setParams({ configuration: configuration?.id });
-      return undefined;
+    setValue(key, value) {
+      const configuration = selected();
+      if (configuration) configurations.setValues(configuration.id, { [key]: value });
     },
     saveAs() {
+      // A copy of the shown configuration's overrides; from the defaults, none.
       const base = selected();
-      const configuration = configurations.add(base ? base.name : "Configuration", { ...(base?.params ?? {}), ...tried() });
+      const configuration = configurations.add(base ? base.name : "Configuration", { ...(base?.params ?? {}) });
       ui.setParams({ configuration: configuration.id });
       return configuration;
     },
@@ -153,20 +123,9 @@ export function createParams(handle: DocHandle<CadModelDoc>, source: Accessor<st
         (_, a, p) => renameParam(a, p, from, to),
         (d) => renameParamInConfigurations(d, from, to),
       );
-      if (why) return why;
-      const values = { ...tried() };
-      if (from in values) {
-        values[to] = values[from]!;
-        delete values[from];
-        ui.setParams({ ...ui.params(), values });
-      }
-      return undefined;
-    },
-    remove(key) {
-      const why = edit((_, a, p) => removeParam(a, p, key));
-      if (!why && key in tried()) tryValue(key, undefined);
       return why;
     },
+    remove: (key) => edit((_, a, p) => removeParam(a, p, key)),
     setDerived(name, text) {
       return (
         edit((_, __, p) => {

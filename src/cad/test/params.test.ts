@@ -143,3 +143,22 @@ test("a parameter's quantity is inferred from the arguments it goes into, also t
   expect(q3.get("t")).toBe("length");
   expect(q3.get("ribT")).toBe("length");
 });
+
+test("code between the derived values and the features is a Custom Script, with the consts after it", () => {
+  const between = model.replace("  const t = Math.min(h, 3);\n", "  let scale = 1;\n  const t = Math.min(h, 3) * scale;\n");
+  const p = read(between);
+  expect(p.derived.map((d) => d.name)).toEqual(["r"]);
+  const entries = timeline(between, analyze(between), []).entries;
+  expect(entries.map((e) => (e.kind === "feature" ? e.name : "script"))).toEqual(["script", "sketch1", "plate"]);
+  const script = entries[0]!;
+  expect(between.slice(script.span.start, script.span.end)).toBe("let scale = 1;\n  const t = Math.min(h, 3) * scale;");
+  // A new derived value goes after the others, before the script; the script's const stays code.
+  const added = applied(between, addDerived(between, analyze(between), p, "half", "w / 2"));
+  expect(added).toContain("  const r = w / 4;\n  const half = w / 2;\n  let scale = 1;");
+  expect(read(added).derived.map((d) => d.name)).toEqual(["r", "half"]);
+  // Without a derived value before it, a script at the start of main has the derived values added before it.
+  const first = between.replace("  const r = w / 4;\n", "").replace("t + r * 0", "t");
+  const prepended = applied(first, addDerived(first, analyze(first), read(first), "r", "w / 4"));
+  expect(prepended).toContain("main({ w, d, h }) {\n  const r = w / 4;\n  let scale = 1;");
+  expect(timeline(prepended, analyze(prepended), []).entries[0]?.kind).toBe("script");
+});

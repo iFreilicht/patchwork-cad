@@ -1,7 +1,7 @@
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { Engine, type BuildResult } from "../kernel/engine.ts";
-import type { BuildParams, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
+import type { BuildParams, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
 import type { CadModelDoc } from "../types.ts";
 
 export type ModelStatus = "loading" | "init-failed" | "building" | "error" | "ready";
@@ -23,6 +23,8 @@ export interface Model {
   status: Accessor<ModelStatus>;
   /** The values of parameters it builds with over the model's defaults, if any. */
   params: Accessor<BuildParams | undefined>;
+  /** What the last successful build's parameters and derived parameters were. */
+  paramValues: Accessor<ParamValues | undefined>;
 }
 
 /** The same values of parameters, whichever order their keys are in. */
@@ -77,7 +79,11 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
   });
 
   const status = (): ModelStatus => (initError() ? "init-failed" : !init() ? "loading" : building() ? "building" : error() ? "error" : "ready");
-  return { engine, shapes, sketches, error, trace, init, initError, last, building, status, params: () => params?.() };
+  const paramValues = () => {
+    const result = last();
+    return result?.ok ? result.paramValues : undefined;
+  };
+  return { engine, shapes, sketches, error, trace, init, initError, last, building, status, params: () => params?.(), paramValues };
 }
 
 /** The data attributes the e2e specs read from a tool's root element, as getters so that a JSX spread tracks them. */

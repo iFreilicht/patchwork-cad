@@ -2,9 +2,10 @@ import { createSignal, For, Index, Show } from "solid-js";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
 import { dragDocument } from "../embed.ts";
 import type { NamedViews } from "../namedViews.ts";
-import { sameCamera } from "../Viewer.tsx";
+import { nearCamera } from "../Viewer.tsx";
 import type { CameraState, Configuration, NamedView } from "../../types.ts";
 import type { ParamsController } from "./parameters.ts";
+import { HOME } from "../../model/views.ts";
 import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
@@ -46,8 +47,13 @@ export interface ViewsSection {
   /** The camera as the view last settled, reactively, to mark the view it is at. */
   current(): CameraState | undefined;
   goTo(view: NamedView): void;
-  /** Creates an embed of the model seen from `view`, for dragging it out. */
-  embed(view: NamedView): { url: AutomergeUrl; title: string } | undefined;
+  /** Goes Home, as the ViewCube's Home button does. */
+  goHome(): void;
+  /** Where Home goes now, to mark it when the camera is there. */
+  homeCamera(): CameraState | undefined;
+  setHomeHovered(hovered: boolean): void;
+  /** Creates an embed of the model seen from view `view` (Home's id is `HOME`), for dragging it out. */
+  embed(view: { id: string; name: string }): { url: AutomergeUrl; title: string } | undefined;
 }
 
 /**
@@ -159,7 +165,7 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * its features; clicking it opens its last feature, or picks it. Its context menu renames it, and
  * hides or shows it.
  */
-export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection; params: ParamsController; embedConfiguration: (configuration: Configuration) => { url: AutomergeUrl; title: string } | undefined }) {
+export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection; params: ParamsController; onHoverConfiguration: (hovered: boolean) => void; embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined }) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
   /** The open context menu: its items, and the key of the row it is for. */
@@ -194,7 +200,7 @@ export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSec
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
         <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
-        <ConfigurationList params={props.params} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
+        <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
       </aside>
       {/* In the editor, not the browser, which would clip it. */}
       <Show when={menu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
@@ -222,6 +228,10 @@ function NamedList<T extends { id: string; name: string }>(props: {
   select(item: T): void;
   selectTitle(item: T): string;
   rename(item: T, to: string): string | undefined;
+  /** The model's own items, Home and Defaults, which keep their name. */
+  fixed(item: T): boolean;
+  /** Called with the hovered item, and with `undefined` when none is. */
+  onHover?(item: T | undefined): void;
   actions(item: T): MenuItem[];
   embed(item: T): { url: AutomergeUrl; title: string } | undefined;
   editor: Editor;
@@ -236,8 +246,11 @@ function NamedList<T extends { id: string; name: string }>(props: {
     if (typeof added === "string") return props.editor.setNotice(added);
     if (added) queueMicrotask(() => props.setRenaming(keyOf(added)));
   };
-  const open = (item: T, x: number, y: number) =>
-    props.openMenu({ key: keyOf(item), label: `Actions for ${props.noun} ${item.name}`, items: [{ label: "Rename", run: () => void queueMicrotask(() => props.setRenaming(keyOf(item))) }, ...props.actions(item)], x, y });
+  const rename = (item: T) => !props.fixed(item) && props.setRenaming(keyOf(item));
+  const open = (item: T, x: number, y: number) => {
+    const items = [...(props.fixed(item) ? [] : [{ label: "Rename", run: () => void queueMicrotask(() => rename(item)) }]), ...props.actions(item)];
+    if (items.length) props.openMenu({ key: keyOf(item), label: `Actions for ${props.noun} ${item.name}`, items, x, y });
+  };
   return (
     <>
       <h3 class="cad-editor__browser-heading cad-editor__browser-heading--named">
@@ -263,7 +276,10 @@ function NamedList<T extends { id: string; name: string }>(props: {
                 data-kind={props.noun}
                 data-key={key}
                 data-name={item.name}
+                data-fixed={props.fixed(item) ? "true" : undefined}
                 data-current={props.current(item) ? "true" : undefined}
+                onPointerEnter={() => props.onHover?.(item)}
+                onPointerLeave={() => props.onHover?.(undefined)}
                 onContextMenu={(event) => {
                   if (renaming()) return;
                   event.preventDefault();
@@ -288,11 +304,11 @@ function NamedList<T extends { id: string; name: string }>(props: {
                     class="cad-editor__browser-name"
                     title={props.selectTitle(item)}
                     onClick={() => props.select(item)}
-                    onDblClick={() => props.setRenaming(key)}
+                    onDblClick={() => rename(item)}
                     onKeyDown={(event) => {
                       if (event.key === "F2") {
                         event.preventDefault();
-                        props.setRenaming(key);
+                        rename(item);
                       } else if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
                         event.preventDefault();
                         const r = event.currentTarget.getBoundingClientRect();
@@ -312,34 +328,56 @@ function NamedList<T extends { id: string; name: string }>(props: {
   );
 }
 
-/** The named views: "+" adds one from the current camera; a click goes to one; one can be updated to the current camera. */
+/** A named view or Home, whose camera is unset until it is changed (research/18, "Home"). */
+type ViewItem = { id: string; name: string; camera: CameraState | undefined };
+
+/**
+ * The named views, Home first: "+" adds one from the current camera; a click goes to one; one can
+ * be updated to the current camera, Home also reset to the ViewCube's framing.
+ */
 function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
   const views = props.section.views;
+  const items = (): ViewItem[] => [{ id: HOME, name: "Home", camera: views.home() }, ...views.views()];
+  const update = (view: ViewItem) => {
+    const camera = props.section.camera();
+    if (!camera) return;
+    if (view.id === HOME) views.setHome(camera);
+    else views.update(view.id, camera);
+  };
   return (
-    <NamedList<NamedView>
+    <NamedList<ViewItem>
       heading="Views"
       noun="view"
-      items={views.views()}
+      items={items()}
       addLabel="New view from the current camera"
       onAdd={() => {
         const camera = props.section.camera();
         return camera ? views.add(camera) : "The view hasn't shown the model yet";
       }}
-      current={(view) => sameCamera(props.section.current(), view.camera)}
-      select={(view) => props.section.goTo(view)}
+      current={(view) => nearCamera(props.section.current(), view.id === HOME ? props.section.homeCamera() : view.camera)}
+      select={(view) => (view.camera ? props.section.goTo({ ...view, camera: view.camera }) : props.section.goHome())}
       selectTitle={(view) => `Look from ${view.name}`}
       rename={(view, to) => views.rename(view.id, to)}
+      fixed={(view) => view.id === HOME}
       actions={(view) => [
-        {
-          label: "Update to current view",
-          run: () => {
-            const camera = props.section.camera();
-            if (camera) views.update(view.id, camera);
-          },
-        },
-        { label: "Delete", danger: true, run: () => views.remove(view.id) },
+        { label: "Update to current view", run: () => update(view) },
+        ...(view.id !== HOME
+          ? [{ label: "Delete", danger: true, run: () => views.remove(view.id) }]
+          : view.camera
+            ? [
+                {
+                  label: "Reset to default",
+                  run: () => {
+                    views.setHome(undefined);
+                    // Goes there, to show where that is, once the view knows Home moved.
+                    queueMicrotask(() => props.section.goHome());
+                  },
+                },
+              ]
+            : []),
       ]}
-      embed={(view) => props.section.embed(view)}
+      onHover={(view) => props.section.setHomeHovered(view?.id === HOME)}
+      embed={(view) => props.section.embed({ id: view.id, name: view.name })}
       editor={props.editor}
       renaming={props.renaming}
       setRenaming={props.setRenaming}
@@ -349,28 +387,27 @@ function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () =
   );
 }
 
-/** The configurations (research/17-parameters.md): "+" keeps the shown values as one; a click shows the model with one, only for this user. */
-function ConfigurationList(props: { params: ParamsController; embed: (configuration: Configuration) => { url: AutomergeUrl; title: string } | undefined; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
+/** The model's defaults in the configurations list: no configuration. */
+const DEFAULTS: Configuration = { id: "", name: "Defaults", params: {} };
+
+/** The configurations (research/17-parameters.md), Defaults first: "+" keeps the shown values as one; a click shows the model with one, only for this user. */
+function ConfigurationList(props: { params: ParamsController; onHover: (hovered: boolean) => void; embed: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
   const configurations = props.params.configurations;
   return (
     <NamedList<Configuration>
       heading="Configurations"
       noun="configuration"
-      items={configurations.list()}
+      items={[DEFAULTS, ...configurations.list()]}
       addLabel="New configuration from the values the model is shown with"
       onAdd={() => props.params.saveAs()}
-      current={(c) => props.params.selected()?.id === c.id}
-      select={(c) => props.params.select(props.params.selected()?.id === c.id ? undefined : c.id)}
-      selectTitle={(c) => (props.params.selected()?.id === c.id ? `Show the defaults again, not ${c.name}` : `Show the model with ${c.name}, only for you`)}
+      current={(c) => (props.params.selected()?.id ?? "") === c.id}
+      select={(c) => props.params.select(c.id || undefined)}
+      selectTitle={(c) => `Show the model with ${c === DEFAULTS ? "its defaults" : c.name}, only for you`}
       rename={(c, to) => configurations.rename(c.id, to)}
-      actions={(c) => [
-        {
-          label: "Update to the values you try",
-          run: async () => props.params.apply(c.id),
-        },
-        { label: "Delete", danger: true, run: () => configurations.remove(c.id) },
-      ]}
-      embed={props.embed}
+      fixed={(c) => c === DEFAULTS}
+      actions={(c) => (c === DEFAULTS ? [] : [{ label: "Delete", danger: true, run: () => configurations.remove(c.id) }])}
+      onHover={(c) => props.onHover(!!c)}
+      embed={(c) => props.embed(c === DEFAULTS ? undefined : c)}
       editor={props.editor}
       renaming={props.renaming}
       setRenaming={props.setRenaming}

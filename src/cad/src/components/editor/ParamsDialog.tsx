@@ -1,4 +1,5 @@
-import { createSignal, For, Index, Show } from "solid-js";
+import { createSignal, For, Index, Show, type JSX } from "solid-js";
+import type { ParamValues } from "../../kernel/protocol.ts";
 import { isLinked } from "../../model/configurations.ts";
 import { unitOf, usesOf, type ParamConfig } from "../../model/params.ts";
 import type { LinkedValue, ParamValue } from "../../types.ts";
@@ -23,7 +24,7 @@ function parseValue(text: string): { value: ParamValue | LinkedValue | undefined
 }
 
 /** Why `value` is outside what `config` allows, if it is. */
-function rangeProblem(value: ParamValue | undefined, config: ParamConfig | undefined): string | undefined {
+function rangeProblem(value: unknown, config: ParamConfig | undefined): string | undefined {
   if (typeof value !== "number" || !config) return undefined;
   if (config.minimum !== undefined && value < config.minimum) return `less than the minimum, ${config.minimum}`;
   if (config.maximum !== undefined && value > config.maximum) return `more than the maximum, ${config.maximum}`;
@@ -32,10 +33,10 @@ function rangeProblem(value: ParamValue | undefined, config: ParamConfig | undef
 }
 
 /**
- * A value this user tries for a parameter: JSON, or an automerge URL that resolves to a number.
- * It applies on Enter or when the field is left; an empty field stops trying it.
+ * A parameter's override in a configuration: JSON, or an automerge URL that resolves to a number. It
+ * applies on Enter or when the field is left; an empty field takes the default.
  */
-function TryInput(props: { label: string; value: string | undefined; placeholder: string; onCommit: (value: ParamValue | LinkedValue | undefined) => void; problem: string | undefined }) {
+function OverrideInput(props: { label: string; value: string | undefined; onCommit: (value: ParamValue | LinkedValue | undefined) => void; problem: string | undefined }) {
   const [invalid, setInvalid] = createSignal(false);
   const commit = (input: HTMLInputElement) => {
     const parsed = parseValue(input.value);
@@ -48,9 +49,8 @@ function TryInput(props: { label: string; value: string | undefined; placeholder
       classList={{ "cad-editor__input--invalid": invalid() || !!props.problem }}
       aria-label={props.label}
       aria-invalid={invalid() || !!props.problem}
-      title={props.problem ?? "A value to try, only for you: JSON, or an automerge URL of another document's number"}
+      title={props.problem ?? "This configuration's value: JSON, or an automerge URL of another document's number; empty for the default"}
       value={props.value ?? ""}
-      placeholder={props.placeholder}
       spellcheck={false}
       onKeyDown={(event) => event.key === "Enter" && commit(event.currentTarget)}
       onBlur={(event) => commit(event.currentTarget)}
@@ -58,32 +58,92 @@ function TryInput(props: { label: string; value: string | undefined; placeholder
   );
 }
 
+/** A value the build computed, as text: numbers to six significant digits, which the column fits; "–" when there is none. */
+function formatValue(value: unknown, digits = 6): string {
+  if (value === undefined) return "–";
+  if (typeof value === "number") return String(Number(value.toPrecision(digits)));
+  return JSON.stringify(value);
+}
+
+/** A final value, marked when it is outside what paramConfig allows. */
+function FinalValue(props: { value: unknown; problem: string | undefined }): JSX.Element {
+  return (
+    <td class="cad-editor__param-final" data-problem={props.problem ? "true" : undefined} title={props.problem ? `${formatValue(props.value, 15)} is ${props.problem}` : formatValue(props.value, 15)}>
+      {formatValue(props.value)}
+    </td>
+  );
+}
+
+/** A parameter's or derived value's name: renamed with F2 or a double click while the defaults are shown. */
+function NameCell(props: { name: string; title: string | undefined; editable: boolean; renaming: boolean; onRename: () => void; rename: (to: string) => Promise<string | undefined>; onNotice: (why: string | undefined) => void; onDone: () => void }) {
+  return (
+    <td title={props.title ? `${props.name}: ${props.title}` : props.name}>
+      <Show when={!props.renaming} fallback={<NameField from={props.name} rename={props.rename} onNotice={props.onNotice} onDone={props.onDone} />}>
+        <Show
+          when={props.editable}
+          fallback={
+            <span class="cad-editor__param-name">
+              <code>{props.name}</code>
+              <Show when={props.title}>{(title) => <span class="cad-editor__muted">{title()}</span>}</Show>
+            </span>
+          }
+        >
+          <button class="cad-editor__param-name" title={`Rename ${props.name} (F2 or double click)`} onDblClick={() => props.onRename()} onKeyDown={(e) => e.key === "F2" && props.onRename()}>
+            <code>{props.name}</code>
+            <Show when={props.title}>{(title) => <span class="cad-editor__muted">{title()}</span>}</Show>
+          </button>
+        </Show>
+      </Show>
+    </td>
+  );
+}
+
 /**
- * The parameters entry's dialog (research/17-parameters.md, "The parameters entry"): each parameter's
- * name, default in the code, the value this user shows the model with, and unit; the derived
- * parameters; and the configurations, which this user picks, tries values over, and saves.
+ * The parameters entry's dialog (research/17-parameters.md, "The parameters entry"). With the defaults
+ * shown, it edits the code: each parameter's default, the derived values' expressions, and which
+ * there are. With a configuration shown, it edits that configuration's overrides, next to each
+ * parameter's default and final value; derived values follow from them and show their final value.
  */
-export function ParamsDialog(props: { params: ParamsController; editor: Editor; onClose: () => void; onEditCode: () => void }) {
+export function ParamsDialog(props: { params: ParamsController; editor: Editor; values: () => ParamValues | undefined; onClose: () => void; onEditCode: (section: "params" | "derived") => void }) {
   const info = () => props.params.info();
   const readOnly = () => info()?.readOnly;
-  const [renaming, setRenaming] = createSignal<string>();
-  const tried = () => props.params.tried();
   const selected = () => props.params.selected();
+  /** The code is edited only while the defaults are shown, and only if the editor can write it. */
+  const editable = () => !selected() && !readOnly();
+  const [renaming, setRenaming] = createSignal<string>();
   const notice = (why: string | undefined) => props.editor.setNotice(why);
-  /** Adds a parameter or derived one, and starts renaming it. */
+  /** Adds a parameter or derived value, and starts renaming it. */
   const add = (made: { name: string } | { error: string }, kind: "param" | "derived") => {
     if ("error" in made) return notice(made.error);
     queueMicrotask(() => setRenaming(`${kind}:${made.name}`));
   };
   const unit = (name: string, key: string) => info()?.config[key]?.unit ?? unitOf(props.params.quantities().get(name));
+  /** A table's buttons: adding to it and its code with the defaults shown, else back to the defaults; its code. */
+  const actions = (section: "params" | "derived") => (
+    <div class="cad-editor__params-actions">
+      <Show when={editable()}>
+        <button class="cad-editor__button" onClick={() => (section === "params" ? add(props.params.add(), "param") : add(props.params.addDerived(), "derived"))}>
+          {section === "params" ? "Add parameter" : "Add derived value"}
+        </button>
+      </Show>
+      <Show when={selected() && !readOnly()}>
+        <button class="cad-editor__button" onClick={() => props.params.select(undefined)}>
+          Switch back to Defaults to edit
+        </button>
+      </Show>
+      <button class="cad-editor__button" aria-label={section === "params" ? "Edit code of the parameters" : "Edit code of the derived values"} onClick={() => props.onEditCode(section)}>
+        Edit code
+      </button>
+    </div>
+  );
   const uses = (name: string) => {
     const analysis = props.editor.analysis();
     return analysis ? usesOf(analysis, name) : 0;
   };
   return (
-    <section class="cad-editor__dialog cad-editor__params" aria-label="Parameters" data-feature="parameters">
+    <section class="cad-editor__dialog cad-editor__params" aria-label="Parameters" data-feature="parameters" data-configuration={selected()?.name ?? ""}>
       <header class="cad-editor__dialog-header">
-        <strong>Parameters</strong> <code>main</code>
+        <strong>Parameters</strong>
         <button class="cad-editor__link" aria-label="close" onClick={() => props.onClose()}>
           ×
         </button>
@@ -91,7 +151,7 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
       <Show when={readOnly()}>{(why) => <p class="cad-editor__muted">Only shown here: {why()}.</p>}</Show>
       <div class="cad-editor__params-shown">
         <label>
-          <span class="cad-editor__muted">Show with</span>{" "}
+          <span class="cad-editor__muted">Configuration</span>{" "}
           <select class="cad-editor__input" aria-label="Configuration" onChange={(event) => props.params.select(event.currentTarget.value || undefined)}>
             <option value="" selected={!selected()}>
               Defaults
@@ -105,26 +165,23 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
             </For>
           </select>
         </label>
-        <Show when={Object.keys(tried()).length > 0}>
-          <button class="cad-editor__button" onClick={() => notice(props.params.apply())} title={selected() ? `Keep the values you try in ${selected()!.name}` : "Write the values you try into defaultParams"}>
-            {selected() ? `Update ${selected()!.name}` : "Apply to defaults"}
-          </button>
-          <button class="cad-editor__button" onClick={() => props.params.reset()}>
-            Reset
-          </button>
-        </Show>
-        <button class="cad-editor__button" onClick={() => props.params.saveAs()} title="Keep the values the model is shown with as a configuration of the model">
-          Save as configuration
+        <button class="cad-editor__button" onClick={() => props.params.saveAs()} title="Keep the values the model is shown with as a new configuration of the model">
+          Save as new configuration
         </button>
       </div>
-      <table class="cad-editor__params-table">
+      <table class="cad-editor__params-table" aria-label="Parameters">
         <thead>
           <tr>
-            <th>Name</th>
-            <th>Default</th>
-            <th title="What the model is shown with, only for you">Shown</th>
-            <th>Unit</th>
-            <th />
+            <th class="cad-editor__param-name-column">Name</th>
+            <th title="defaultParams in the code">Default</th>
+            <Show when={selected()}>
+              <th class="cad-editor__param-field" title={`What ${selected()?.name} sets; empty: the default`}>
+                Override
+              </th>
+            </Show>
+            <th class="cad-editor__param-final">Final value</th>
+            <th class="cad-editor__param-unit">Unit</th>
+            <th class="cad-editor__param-remove" />
           </tr>
         </thead>
         <tbody>
@@ -132,88 +189,103 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
           <Index each={info()?.params ?? []}>
             {(param) => {
               const config = () => info()?.config[param().key];
-              const value = () => tried()[param().key];
-              const fromConfiguration = () => selected()?.params[param().key];
+              /** Its override in the shown configuration, if it sets one. */
+              const value = () => selected()?.params[param().key];
               const linked = () => {
-                const v = value() ?? fromConfiguration();
+                const v = value();
                 return isLinked(v) ? props.params.configurations.resolve(v.link) : undefined;
               };
-              const effective = () => {
-                const v = value() ?? fromConfiguration();
-                return isLinked(v) ? linked()?.value : (v ?? param().literal);
-              };
-              const problem = () => (linked()?.problem ? `Its linked value ${linked()!.problem}` : rangeProblem(effective() ?? undefined, config()));
+              const final = () => props.values()?.params[param().key];
               return (
-                <tr data-param={param().key} data-tried={value() !== undefined ? "true" : undefined} title={config()?.description}>
-                  <td>
-                    <Show
-                      when={renaming() !== `param:${param().key}`}
-                      fallback={<NameField from={param().key} rename={(to) => props.params.rename(param().key, to)} onNotice={notice} onDone={() => setRenaming(undefined)} />}
-                    >
-                      <button class="cad-editor__param-name" disabled={!!readOnly()} title={readOnly() ? param().key : `Rename ${param().key} (F2 or double click)`} onDblClick={() => setRenaming(`param:${param().key}`)} onKeyDown={(e) => e.key === "F2" && setRenaming(`param:${param().key}`)}>
-                        <code>{param().key}</code>
-                        <Show when={config()?.title}>{(title) => <span class="cad-editor__muted">{title()}</span>}</Show>
+                <tr data-param={param().key} data-configured={value() !== undefined ? "true" : undefined} title={config()?.description}>
+                  <NameCell
+                    name={param().key}
+                    title={config()?.title}
+                    editable={editable()}
+                    renaming={renaming() === `param:${param().key}`}
+                    onRename={() => setRenaming(`param:${param().key}`)}
+                    rename={(to) => props.params.rename(param().key, to)}
+                    onNotice={notice}
+                    onDone={() => setRenaming(undefined)}
+                  />
+                  <Show when={editable()} fallback={<td class="cad-editor__param-default"><code>{param().value ?? "–"}</code></td>}>
+                    <td>
+                      <ExpressionInput label={`Default of ${param().key}`} value={param().value ?? ""} onCommit={(text) => props.params.setDefault(param().key, text)} />
+                    </td>
+                  </Show>
+                  <Show when={selected()}>
+                    {(c) => (
+                      <td>
+                        <OverrideInput label={`${param().key} in ${c().name}`} value={shown(value())} problem={linked()?.problem ? `Its linked value ${linked()!.problem}` : undefined} onCommit={(v) => props.params.setValue(param().key, v)} />
+                      </td>
+                    )}
+                  </Show>
+                  <FinalValue value={final()} problem={rangeProblem(final(), config())} />
+                  <td class="cad-editor__muted cad-editor__param-unit">{unit(param().local, param().key) ?? ""}</td>
+                  <Show when={editable()} fallback={<td />}>
+                    <td>
+                      <button class="cad-editor__link" aria-label={`Remove ${param().key}`} disabled={uses(param().local) > 0} title={uses(param().local) > 0 ? `${param().key} is used in the model` : `Remove ${param().key}`} onClick={() => notice(props.params.remove(param().key))}>
+                        ×
                       </button>
-                    </Show>
-                  </td>
-                  <td>
-                    <ExpressionInput label={`Default of ${param().key}`} value={param().value ?? ""} disabled={!!readOnly()} onCommit={(text) => props.params.setDefault(param().key, text)} />
-                  </td>
-                  <td>
-                    <TryInput
-                      label={`Value of ${param().key}`}
-                      value={shown(value())}
-                      placeholder={linked()?.value !== undefined ? `${linked()!.value} (linked)` : (shown(fromConfiguration()) ?? param().value ?? "")}
-                      problem={problem()}
-                      onCommit={(v) => props.params.tryValue(param().key, v)}
-                    />
-                  </td>
-                  <td class="cad-editor__muted">{unit(param().local, param().key) ?? ""}</td>
-                  <td>
-                    <button class="cad-editor__link" aria-label={`Remove ${param().key}`} disabled={!!readOnly() || uses(param().local) > 0} title={uses(param().local) > 0 ? `${param().key} is used in the model` : `Remove ${param().key}`} onClick={() => notice(props.params.remove(param().key))}>
-                      ×
-                    </button>
-                  </td>
+                    </td>
+                  </Show>
                 </tr>
               );
             }}
           </Index>
-          <Index each={info()?.derived ?? []}>
-            {(d) => (
-              <tr data-derived={d().name} title={info()?.config[d().name]?.description}>
-                <td>
-                  <Show when={renaming() !== `derived:${d().name}`} fallback={<NameField from={d().name} rename={(to) => props.params.renameDerived(d().name, to)} onNotice={notice} onDone={() => setRenaming(undefined)} />}>
-                    <button class="cad-editor__param-name" title={`Rename ${d().name} (F2 or double click)`} onDblClick={() => setRenaming(`derived:${d().name}`)} onKeyDown={(e) => e.key === "F2" && setRenaming(`derived:${d().name}`)}>
-                      <code>{d().name}</code>
-                      <Show when={info()?.config[d().name]?.title}>{(title) => <span class="cad-editor__muted">{title()}</span>}</Show>
-                    </button>
-                  </Show>
-                </td>
-                <td colSpan={2}>
-                  <ExpressionInput label={`Expression of ${d().name}`} value={d().text} onCommit={(text) => props.params.setDerived(d().name, text)} />
-                </td>
-                <td class="cad-editor__muted">{unit(d().name, d().name) ?? ""}</td>
-                <td>
-                  <button class="cad-editor__link" aria-label={`Remove ${d().name}`} disabled={uses(d().name) > 0} title={uses(d().name) > 0 ? `${d().name} is used in the model` : `Remove ${d().name}`} onClick={() => notice(props.params.removeDerived(d().name))}>
-                    ×
-                  </button>
-                </td>
-              </tr>
-            )}
-          </Index>
         </tbody>
       </table>
-      <footer class="cad-editor__dialog-footer">
-        <button class="cad-editor__button" disabled={!!readOnly()} onClick={() => add(props.params.add(), "param")}>
-          Add parameter
-        </button>
-        <button class="cad-editor__button" disabled={!!readOnly()} onClick={() => add(props.params.addDerived(), "derived")}>
-          Add derived
-        </button>
-        <button class="cad-editor__button" onClick={() => props.onEditCode()}>
-          Edit code
-        </button>
-      </footer>
+      {actions("params")}
+      <h3 class="cad-editor__params-heading">Derived values</h3>
+      <Show when={(info()?.derived.length ?? 0) > 0}>
+        <table class="cad-editor__params-table cad-editor__params-table--derived" aria-label="Derived values">
+          <thead>
+            <tr>
+              <th class="cad-editor__param-name-column">Name</th>
+              <th>Expression</th>
+              <th class="cad-editor__param-final">Final value</th>
+              <th class="cad-editor__param-unit">Unit</th>
+              <th class="cad-editor__param-remove" />
+            </tr>
+          </thead>
+          <tbody>
+            <Index each={info()?.derived ?? []}>
+              {(d) => {
+                const final = () => props.values()?.derived[d().name];
+                return (
+                  <tr data-derived={d().name} title={info()?.config[d().name]?.description}>
+                    <NameCell
+                      name={d().name}
+                      title={info()?.config[d().name]?.title}
+                      editable={editable()}
+                      renaming={renaming() === `derived:${d().name}`}
+                      onRename={() => setRenaming(`derived:${d().name}`)}
+                      rename={(to) => props.params.renameDerived(d().name, to)}
+                      onNotice={notice}
+                      onDone={() => setRenaming(undefined)}
+                    />
+                    <Show when={editable()} fallback={<td class="cad-editor__param-default"><code>{d().text}</code></td>}>
+                      <td>
+                        <ExpressionInput label={`Expression of ${d().name}`} value={d().text} onCommit={(text) => props.params.setDerived(d().name, text)} />
+                      </td>
+                    </Show>
+                    <FinalValue value={final()} problem={rangeProblem(final(), info()?.config[d().name])} />
+                    <td class="cad-editor__muted cad-editor__param-unit">{unit(d().name, d().name) ?? ""}</td>
+                    <Show when={editable()} fallback={<td />}>
+                      <td>
+                        <button class="cad-editor__link" aria-label={`Remove ${d().name}`} disabled={uses(d().name) > 0} title={uses(d().name) > 0 ? `${d().name} is used in the model` : `Remove ${d().name}`} onClick={() => notice(props.params.removeDerived(d().name))}>
+                          ×
+                        </button>
+                      </td>
+                    </Show>
+                  </tr>
+                );
+              }}
+            </Index>
+          </tbody>
+        </table>
+      </Show>
+      {actions("derived")}
     </section>
   );
 }

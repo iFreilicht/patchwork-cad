@@ -283,17 +283,23 @@ export function CodeEditor(props: {
   };
   const patchwork = new Compartment();
   const commenting = new Compartment();
-  /** Whether the `focus` span is marked. */
+  /** Whether the `focus` span is marked, and how many marks there were, so that removing one doesn't remove a later one. */
   let marked = false;
-  /** Removes the mark, after the event or update that asked for it: nothing here may interfere with CodeMirror's input handling. */
-  const unmark = () =>
-    marked &&
+  let marks = 0;
+  /**
+   * Removes the mark, after the event or update that asked for it: nothing here may interfere with
+   * CodeMirror's input handling. Not a mark made meanwhile, e.g. by a button whose click blurred the editor.
+   */
+  const unmark = () => {
+    if (!marked) return;
+    const mark = marks;
     queueMicrotask(() => {
-      if (!marked || disposed) return;
+      if (!marked || disposed || mark !== marks) return;
       marked = false;
       view.dispatch({ effects: setFocus.of(undefined) });
       props.onFocusDone?.();
     });
+  };
   const view = new EditorView({
     doc: props.handle.doc()?.source ?? "",
     extensions: [
@@ -369,6 +375,7 @@ export function CodeEditor(props: {
     // Focusing may blur the editor's previous focus first: mark only once it has the focus.
     view.focus();
     marked = true;
+    marks++;
   });
   // Both follow the source, which changes inside CodeMirror's own update when the user types here
   // (the sync plugin writes to the document then), and a dispatch during an update throws: dispatch after it.

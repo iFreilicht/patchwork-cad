@@ -8,7 +8,8 @@ import { createPeerHighlights, joinPresence, peerMarkers } from "../components/p
 import { createUiState } from "../components/uiState.ts";
 import { createNamedViews } from "../components/namedViews.ts";
 import { createConfigurations } from "../components/configurations.ts";
-import { sameCamera, Viewer, type ViewerProps } from "../components/Viewer.tsx";
+import { sameCamera, Viewer, type ViewerApi, type ViewerProps } from "../components/Viewer.tsx";
+import { HOME } from "../model/views.ts";
 import type { CadModelDoc, CadModelEmbedDoc, CameraState } from "../types.ts";
 import type { Model } from "../components/createModel.ts";
 import { createComments } from "../components/comments.ts";
@@ -107,11 +108,12 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
 function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
   const model = createModel(props.handle);
   const ui = createUiState(props.element, props.handle.url);
+  const views = createNamedViews(props.handle);
   const { props: presence, popover } = viewerPresence(props.element, props.handle, model);
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} collapseViewCube {...presence} />
+      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} home={views.home()} collapseViewCube {...presence} />
       {popover(() => root)}
       <StatusBar model={model} />
     </div>
@@ -156,23 +158,45 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   const views = createNamedViews(props.model);
   const { props: presence, popover } = viewerPresence(props.element, props.model, model);
   let stage!: HTMLDivElement;
-  const view = createMemo(() => views.views().find((v) => v.id === props.doc()?.view));
+  /** The model's views, Home first, whose camera is unset until it is changed (research/18, "Home"). */
+  const all = () => [{ id: HOME, name: "Home", camera: views.home() }, ...views.views()];
+  const view = createMemo(() => all().find((v) => v.id === props.doc()?.view), undefined, { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
   /** Its view was deleted from the model. */
   const deleted = () => !!props.doc()?.view && !view();
+  let viewer: ViewerApi | undefined;
   // The camera the viewer shows: the view's, again as a new object on Reset, which the viewer applies even if the view's didn't change.
   const [shown, setShown] = createSignal<CameraState>();
+  /** Where the user orbited to, if away from the view. */
   const [current, setCurrent] = createSignal<CameraState>();
   createEffect(() => {
-    const camera = view()?.camera;
-    setShown(camera);
-    setCurrent(camera);
+    setShown(view()?.camera);
+    setCurrent(undefined);
   });
+  /** Home before it was changed reports its framing when it gets there, which isn't moving away. */
+  let homing = false;
+  const onViewChange = (camera: CameraState) => {
+    if (homing) homing = false;
+    else setCurrent(camera);
+  };
   const changed = () => !!view() && !!current() && !sameCamera(current(), view()?.camera);
   const reset = () => {
     const camera = view()?.camera;
-    if (!camera) return;
-    setShown({ ...camera });
-    setCurrent(camera);
+    setCurrent(undefined);
+    if (camera) {
+      setShown({ ...camera });
+      return;
+    }
+    homing = true;
+    viewer?.home();
+  };
+  /** Keeps the camera as the view's, in the model, for everyone. */
+  const save = () => {
+    const camera = current();
+    const v = view();
+    if (!camera || !v) return;
+    if (v.id === HOME) views.setHome(camera);
+    else views.update(v.id, camera);
+    setCurrent(undefined);
   };
   const choose = (id: string) => props.handle.change((d) => (d.view = id));
   const chooseConfiguration = (id: string) =>
@@ -185,7 +209,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   return (
     <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"} data-configuration={configuration()?.name ?? ""} data-configuration-deleted={configurationDeleted() ? "true" : "false"}>
       <div class="cad-embed__stage" ref={stage}>
-        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={setCurrent} collapseViewCube {...presence} />
+        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={onViewChange} onApi={(api) => (viewer = api)} home={views.home()} collapseViewCube {...presence} />
         <div class="cad-embed__edit">
           <select class="cad-editor__button" aria-label="View" title={deleted() ? "This view was deleted from the model; choose another" : "The model's view this embed shows"} onChange={(event) => choose(event.currentTarget.value)}>
             <Show when={!view()}>
@@ -193,7 +217,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
                 {deleted() ? "Deleted view" : "No view"}
               </option>
             </Show>
-            <For each={views.views()}>
+            <For each={all()}>
               {(v) => (
                 <option value={v.id} selected={v.id === props.doc()?.view}>
                   {v.name}
@@ -221,6 +245,9 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
             </select>
           </Show>
           <Show when={changed()}>
+            <button class="cad-editor__button" onClick={save} title={`Keep this camera as ${view()?.name}, in the model, for everyone`}>
+              Save view
+            </button>
             <button class="cad-editor__button" onClick={reset}>
               Reset
             </button>

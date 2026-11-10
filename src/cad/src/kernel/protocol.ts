@@ -85,6 +85,12 @@ export interface ModelError {
 /** Values of a model's parameters, by key, that replace those of its `defaultParams`. */
 export type BuildParams = Record<string, unknown>;
 
+/** What a build's parameters and derived parameters were, as far as they are JSON (research/17-parameters.md). */
+export interface ParamValues {
+  params: Record<string, unknown>;
+  derived: Record<string, unknown>;
+}
+
 export type WorkerRequest =
   /** `params`: values of parameters that replace the model's defaults (research/17-parameters.md). */
   | { type: "build"; id: number; source: string; params?: BuildParams }
@@ -105,7 +111,7 @@ export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
   /** `dropped`: how many of the values main returned can't be shown, e.g. a string. */
-  | { type: "built"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
+  | { type: "built"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number; paramValues: ParamValues }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[] }
   | { type: "picked"; id: number; code: string; ref: RefData }

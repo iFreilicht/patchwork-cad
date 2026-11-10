@@ -137,6 +137,7 @@
 }
 
 .cad-model .cad-viewcube__button:hover,
+.cad-model .cad-viewcube__button[data-hovered="true"],
 .cad-model .cad-viewcube__button[aria-pressed="true"] {
   color: var(--cad-model-accent-text);
 }
@@ -617,6 +618,12 @@
   user-select: none;
 }
 
+/* Views and configurations hover as bodies do. */
+.cad-editor__named-row:hover,
+.cad-editor__named-row:focus-within {
+  background: var(--cad-model-cross-hover);
+}
+
 /* The view the camera is at, as Onshape selects it, and the configuration the model is shown with. */
 .cad-editor__named-row[data-current="true"] .cad-editor__browser-name {
   font-weight: 600;
@@ -1037,7 +1044,8 @@
  */
 .cad-editor__entry[data-hovered="true"],
 .cad-editor__return[data-hovered="true"],
-.cad-editor__params-entry:hover {
+.cad-editor__params-entry:hover,
+.cad-editor__params-entry[data-hovered="true"] {
   outline: 1px solid var(--cad-model-fg);
   outline-offset: 2px;
 }
@@ -1460,21 +1468,84 @@
   width: auto;
 }
 
-/* Values are short: their fields have a fixed width, and the names take the rest; a narrow view scrolls the dialog. */
+/*
+ * Fixed columns, as wide as the dialog in both tables, so that their final values line up: values
+ * are short and get fixed widths, names take the rest, and an expression's field all that its table
+ * leaves, as expressions get long. A narrow view scrolls the dialog.
+ */
 .cad-editor__params-table {
+  width: 100%;
+  /* Room for the names next to the fixed columns. */
+  min-width: 24rem;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
 }
 
-.cad-editor__params-table .cad-editor__input {
-  box-sizing: border-box;
-  width: 5.5rem;
+.cad-editor__params-table .cad-editor__param-field {
+  width: 6.5rem;
 }
 
-/* A derived parameter's expression spans the default and shown columns. */
-.cad-editor__params-table td[colspan] .cad-editor__input {
+/* The same in both tables, so that they line up; longer names are cut off. */
+.cad-editor__params-table .cad-editor__param-name-column {
+  width: 7rem;
+}
+
+.cad-editor__params-table td:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cad-editor__params-table .cad-editor__rename {
+  box-sizing: border-box;
   width: 100%;
 }
+
+/* Six digits and a decimal separator; longer values, e.g. lists, are cut off, and their tooltip has them whole. */
+.cad-editor__params-table .cad-editor__param-final {
+  box-sizing: content-box;
+  width: 7ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The heading wraps, to keep the column as narrow as its values. */
+.cad-editor__params-table th.cad-editor__param-final {
+  white-space: normal;
+}
+
+/* Outside what paramConfig allows. */
+.cad-editor__params-table .cad-editor__param-final[data-problem="true"] {
+  color: var(--cad-model-warning);
+}
+
+.cad-editor__params-table .cad-editor__param-unit {
+  width: 2.5rem;
+}
+
+.cad-editor__params-table .cad-editor__param-remove {
+  width: 1rem;
+}
+
+.cad-editor__params-table .cad-editor__input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.cad-editor__params-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-2xs, 4px);
+}
+
+.cad-editor__params-heading {
+  margin: var(--studio-space-2xs, 4px) 0 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 
 .cad-editor__params-table th {
   padding: 2px 4px;
@@ -1488,7 +1559,7 @@
   vertical-align: middle;
 }
 
-.cad-editor__params-table tr[data-tried="true"] td:nth-child(3) .cad-editor__input {
+.cad-editor__params-table tr[data-configured="true"] td:nth-child(3) .cad-editor__input {
   border-color: var(--cad-model-accent);
 }
 

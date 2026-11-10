@@ -6,8 +6,8 @@ import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
-import { prepare, PrepareError, PROVIDED } from "./prepare.ts";
-import type { BuildParams, BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import { DERIVED, prepare, PrepareError, PROVIDED } from "./prepare.ts";
+import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -61,6 +61,17 @@ const browserEvaluator = createBrowserCodeEvaluator();
 let params: BuildParams | undefined;
 /** `main`'s argument: the module's defaults, with the build's values over them. */
 const withParams = (defaults: unknown): unknown => (params ? { ...(typeof defaults === "object" && defaults ? defaults : {}), ...params } : defaults);
+/** What the running build's `main` got, and its derived parameters' values, which prepare.ts makes them report. */
+let paramValues: ParamValues = { params: {}, derived: {} };
+/** A value as JSON, if it is one: numbers, strings, booleans, and arrays and plain objects of them. */
+const json = (value: unknown): unknown => {
+  try {
+    return JSON.parse(JSON.stringify(value)) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+(globalThis as Record<string, unknown>)[DERIVED] = (name: string, value: unknown) => (paramValues.derived[name] = json(value));
 
 /** What `main` returned in the running build, to find the bodies behind the meshed shapes. */
 let returned: unknown;
@@ -85,7 +96,9 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
     ...module,
     default: (...args: unknown[]) => {
       // The builder passes the module's defaults, as it gets no values of its own.
-      const value = (main as (...a: unknown[]) => unknown)(params ? withParams(module["defaultParams"]) : args[0], ...args.slice(1));
+      const arg = params ? withParams(module["defaultParams"]) : args[0];
+      paramValues.params = (json(arg) ?? {}) as Record<string, unknown>;
+      const value = (main as (...a: unknown[]) => unknown)(arg, ...args.slice(1));
       if (isOutputs(value)) {
         const entries = Object.entries(value).filter(([, v]) => !isEmptyBody(v));
         returned = entries.map(([, v]) => v);
@@ -206,6 +219,7 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
 
 async function build(id: number, source: string, buildParams: BuildParams | undefined): Promise<void> {
   params = buildParams;
+  paramValues = { params: {}, derived: {} };
   const t0 = performance.now();
   const fail = (error: ModelError) => {
     const t = performance.now() - t0;
@@ -249,7 +263,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
   const timings: BuildTimings = { build: t2 - t1, total: performance.now() - t0 };
   const sketches = values.flatMap((v) => (v instanceof features.Sketch ? shownSketch(v) : []));
   const dropped = values.filter((v) => !(v instanceof features.Sketch)).length - kept.length;
-  post({ type: "built", id, shapes, sketches, dropped, trace: serialize(lastTrace, unusedResults(lastTrace, values)), timings, heapBytes: heapBytes() });
+  post({ type: "built", id, shapes, sketches, dropped, trace: serialize(lastTrace, unusedResults(lastTrace, values)), timings, heapBytes: heapBytes(), paramValues });
 }
 
 /**

@@ -142,6 +142,8 @@ export interface ParametersEntry {
   onOpen(): void;
   /** How many parameters and derived ones the model has. */
   count: number;
+  /** A configuration is hovered, e.g. in the browser. */
+  hovered: boolean;
 }
 
 export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined; result?: ResultEntry; parameters?: ParametersEntry }) {
@@ -651,6 +653,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
               class="cad-editor__params-entry"
               data-kind="parameters"
               aria-pressed={parameters().open}
+              data-hovered={parameters().hovered ? "true" : undefined}
               style={{ order: 0 }}
               title={`The model's parameters: ${parameters().count}`}
               onClick={() => parameters().onOpen()}

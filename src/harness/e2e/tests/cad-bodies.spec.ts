@@ -13,8 +13,10 @@ test.use({ siteModules: CAD_MODULES });
 const shots = process.env["CAD_SHOTS"];
 
 const browser = (page: Page) => page.getByRole("complementary", { name: "Browser" });
-const row = (page: Page, name: string) => browser(page).locator(`.cad-editor__browser-row[data-name="${name}"]`);
-const rows = (page: Page) => browser(page).locator(".cad-editor__browser-row").evaluateAll((els) => els.map((e) => `${e.getAttribute("data-name")}:${e.getAttribute("data-version")}${e.getAttribute("data-visible") === "true" ? " shown" : ""}`));
+/** Rows of bodies and sketches, not of views or configurations. */
+const BODY_ROW = ".cad-editor__browser-row:not(.cad-editor__named-row)";
+const row = (page: Page, name: string) => browser(page).locator(`${BODY_ROW}[data-name="${name}"]`);
+const rows = (page: Page) => browser(page).locator(BODY_ROW).evaluateAll((els) => els.map((e) => `${e.getAttribute("data-name")}:${e.getAttribute("data-version")}${e.getAttribute("data-visible") === "true" ? " shown" : ""}`));
 const eye = (page: Page, name: string) => row(page, name).getByRole("button", { name: /^(Hide|Show) / });
 const marker = (page: Page) => page.getByRole("slider", { name: "Timeline marker" });
 /** Moves the timeline marker `steps` back from the end, past the return. */

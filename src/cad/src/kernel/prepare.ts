@@ -1,4 +1,4 @@
-import { analyze, FEATURES_MODULE } from "../model/analyze.ts";
+import { analyze, derivedStatements, FEATURES_MODULE } from "../model/analyze.ts";
 
 /** Modules a model may import, and the global the worker provides each as. */
 export const PROVIDED: Record<string, string> = {
@@ -6,6 +6,9 @@ export const PROVIDED: Record<string, string> = {
   "replicad/shape-functions": "replicadShapeFns",
   [FEATURES_MODULE]: "patchworkCadFeatures",
 };
+
+/** The global a model's derived parameters report their values to, when the worker provides it. */
+export const DERIVED = "patchworkCadDerived";
 
 export class PrepareError extends Error {
   constructor(
@@ -27,6 +30,8 @@ export class PrepareError extends Error {
  * - Feature calls get a second argument with their name and line (research/03, "feature names come
  *   from the variable names"): `const extrude1 = extrude({…})` becomes
  *   `const extrude1 = extrude({…}, { name: "extrude1", line: 7, variable: true })`. The stored file stays plain.
+ * - Derived parameters report their values (research/17, "Derived parameters"): `const r = w / 4;`
+ *   is followed by `; globalThis.patchworkCadDerived?.("r", r);` on the same line.
  */
 export function prepare(source: string): string {
   let analysis;
@@ -69,6 +74,10 @@ export function prepare(source: string): string {
       edits.push({ start: second.end, end: second.end, text: ")}" });
     } else if (first) edits.push({ start: first.end, end: first.end, text: `, ${meta}` });
     else edits.push({ start: call.span.end - 1, end: call.span.end - 1, text: `undefined, ${meta}` });
+  }
+  for (const statement of derivedStatements(analysis)) {
+    const name = statement.type === "VariableDeclaration" && statement.declarations[0]?.id.type === "Identifier" ? statement.declarations[0].id.name : undefined;
+    if (name) edits.push({ start: statement.end, end: statement.end, text: `; globalThis.${DERIVED}?.(${JSON.stringify(name)}, ${name});` });
   }
   let out = source;
   for (const edit of edits.sort((a, b) => b.start - a.start || b.end - a.end)) out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);

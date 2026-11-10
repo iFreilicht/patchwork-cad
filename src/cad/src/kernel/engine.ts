@@ -1,7 +1,7 @@
-import type { BuildParams, BuildTimings, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
-  | { ok: true; source: string; params: BuildParams | undefined; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: true; source: string; params: BuildParams | undefined; paramValues: ParamValues; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
   | { ok: false; source: string; params: BuildParams | undefined; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
@@ -202,7 +202,7 @@ export class Engine {
       this.#start(next.source, next.params);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, paramValues: message.paramValues, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
     else onResult({ ok: false, source: running.source, params: running.params, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

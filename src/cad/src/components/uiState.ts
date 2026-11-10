@@ -1,7 +1,7 @@
 import { createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
-import type { CameraState, DocUiState, LinkedValue, ParamValue, TimelineMarker, UiStorageDoc } from "../types.ts";
+import type { CameraState, DocUiState, TimelineMarker, UiStorageDoc } from "../types.ts";
 
 /** The tool-storage id both tools share, so that state can be read by either. */
 const TOOL_STORAGE_ID = "patchwork-cad";
@@ -22,9 +22,9 @@ export interface UiState {
   setBrowserOpen(open: boolean): void;
   /** What this user shows or hides against the default, by key (`DocUiState.visibility`). */
   visibility: Accessor<Record<string, boolean>>;
-  /** The configuration this user shows the model with, and the values they try over it (research/17, "Trying values"). */
+  /** The configuration this user shows the model with (research/17, "Configurations"). */
   params: Accessor<NonNullable<DocUiState["params"]>>;
-  setParams(params: { configuration?: string | undefined; values?: Record<string, ParamValue | LinkedValue> | undefined }): void;
+  setParams(params: { configuration?: string | undefined }): void;
   /** Sets or, with `undefined`, clears the override of one key; `rename` moves keys to new names. */
   setVisibility(key: string, visible: boolean | undefined): void;
   renameVisibility(renames: Record<string, string>): void;
@@ -110,9 +110,7 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
     },
     params,
     setParams(next) {
-      // Plain copies: the values may come from another document.
-      const values = next.values && Object.keys(next.values).length ? (JSON.parse(JSON.stringify(next.values)) as typeof next.values) : undefined;
-      const plain = { ...(next.configuration ? { configuration: next.configuration } : {}), ...(values ? { values } : {}) };
+      const plain = next.configuration ? { configuration: next.configuration } : {};
       setState((s) => ({ ...s, params: plain }));
       write((entry) => {
         if (Object.keys(plain).length) entry.params = plain;

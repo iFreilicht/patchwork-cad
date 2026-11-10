@@ -79,6 +79,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setCamera(view);
     ui.setView(EDITOR_TOOL_ID, view);
   };
+  /** The Home view or a configuration is hovered in the browser: the ViewCube's Home button or the parameters entry show it. */
+  const [homeHovered, setHomeHovered] = createSignal(false);
+  const [configurationHovered, setConfigurationHovered] = createSignal(false);
   const views: ViewsSection = {
     views: createNamedViews(props.handle),
     camera() {
@@ -92,6 +95,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       setGoTo({ ...view.camera });
       saveCamera(view.camera);
     },
+    goHome: () => viewer?.home(),
+    homeCamera: () => viewer?.homeCamera(),
+    setHomeHovered,
     embed: (view) => createEmbed(props.handle, { view }),
   };
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -343,19 +349,20 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setCodeFocus({ ...span });
     setCodeOpen(true);
   };
-  /** Opens the code pane at main's parameters. */
-  const editParams = () => {
-    const at = params.info()?.defaults?.statement ?? params.info()?.mainStatement;
+  /** Opens the code pane at main's parameters, or at its derived values, which are at the start of main, in another place. */
+  const editParams = (section: "params" | "derived") => {
+    const info = params.info();
+    const derived = info?.derived ?? [];
+    const first = derived[0];
+    const last = derived[derived.length - 1];
+    const at = section === "derived" ? (first && last ? { start: first.statement.start, end: last.statement.end } : info?.mainBody) : (info?.defaults?.statement ?? info?.mainStatement);
     if (at) setCodeFocus({ ...at });
     setCodeOpen(true);
   };
   /** What the view shows the model with, if not its defaults. */
   const shownWith = () => {
     const configuration = params.selected()?.name;
-    const tried = Object.keys(params.tried()).length;
-    if (!configuration && !tried) return undefined;
-    const values = tried ? `${tried} value${tried === 1 ? "" : "s"} you try` : "";
-    return `Shown with ${[configuration, values].filter(Boolean).join(" and ")}`;
+    return configuration ? `Shown with configuration "${configuration}"` : undefined;
   };
   /** Opens the code pane at the return. */
   const editReturn = () => {
@@ -377,7 +384,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} params={params} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
+        <Browser editor={editor} bodies={bodies} views={views} params={params} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
       </Show>
       <div class="cad-editor__stage" ref={stage}>
         <Viewer
@@ -399,10 +406,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
           onViewChange={saveCamera}
           onApi={(api) => (viewer = api)}
+          home={views.views.home()}
+          homeHovered={homeHovered()}
         />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} promote={params.promote} />}</Show>
         <Show when={paramsOpen() && !editor.open()}>
-          <ParamsDialog params={params} editor={editor} onClose={() => setParamsOpen(false)} onEditCode={editParams} />
+          <ParamsDialog params={params} editor={editor} values={model.paramValues} onClose={() => setParamsOpen(false)} onEditCode={editParams} />
         </Show>
         <Show when={resultOpen() && !editor.open()}>
           <ResultDialog
@@ -467,6 +476,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           },
           get count() {
             return (params.info()?.params.length ?? 0) + (params.info()?.derived.length ?? 0);
+          },
+          get hovered() {
+            return configurationHovered();
           },
           onOpen: () => {
             const open = !paramsOpen() || !!editor.open();

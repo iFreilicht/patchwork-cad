@@ -18,8 +18,8 @@ export interface Configurations {
   remove(id: string): void;
   /** A linked value, as its document has it now. */
   resolve(link: AutomergeUrl): Resolved;
-  /** The values configuration `id` builds with, and `over` them, links read, and why some aren't there. */
-  values(id: string | undefined, over?: Record<string, ParamValue | LinkedValue>): { values: Record<string, ParamValue>; problems: string[] };
+  /** The values configuration `id` builds with, links read, and why some aren't there. */
+  values(id: string | undefined): { values: Record<string, ParamValue>; problems: string[] };
 }
 
 /** A number in text, e.g. a cursor range into a note: digits, with a sign and a decimal point. */
@@ -91,11 +91,11 @@ export function createConfigurations(handle: DocHandle<CadModelDoc>): Configurat
     setValues: (id, values) => handle.change((d) => setConfigurationValues(d, id, values)),
     remove: (id) => handle.change((d) => removeConfiguration(d, id)),
     resolve,
-    values(id, over = {}) {
+    values(id) {
       const c = list().find((x) => x.id === id);
       const values: Record<string, ParamValue> = {};
       const problems: string[] = [];
-      for (const [key, value] of Object.entries({ ...(c?.params ?? {}), ...over })) {
+      for (const [key, value] of Object.entries(c?.params ?? {})) {
         if (!isLinked(value)) values[key] = value as ParamValue;
         else {
           const r = resolve(value.link);

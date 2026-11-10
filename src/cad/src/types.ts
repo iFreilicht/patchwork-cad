@@ -20,8 +20,8 @@ export interface DocUiState {
   marker?: TimelineMarker;
   /** Whether the browser pane is open; it is by default. */
   browserOpen?: boolean;
-  /** The configuration this user shows the model with, and values they try over it (research/17, "Trying values"). */
-  params?: { configuration?: string; values?: Record<string, ParamValue | LinkedValue> };
+  /** The configuration this user shows the model with (research/17, "Configurations"). */
+  params?: { configuration?: string };
   /**
    * What this user shows or hides, against the default (research/15, "Visibility"): `body:<name>`
    * for a body by its name, `version:<name>` for a returned version that isn't a body's head.
@@ -72,6 +72,8 @@ export interface CadModelDoc {
 /** The tools' data in a model document, next to its code. */
 export interface CadData {
   views?: NamedView[];
+  /** Where the Home view looks from, if the model's users changed it; else the ViewCube's Home framing (research/18, "Home"). */
+  home?: CameraState;
   configurations?: Configuration[];
 }
 

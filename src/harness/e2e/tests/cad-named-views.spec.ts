@@ -2,8 +2,9 @@
  * Named views (research/18-named-views.md): the browser's Views section adds a view from the
  * current camera, goes to one with a click, renames, updates and deletes it from its context menu,
  * and every collaborator sees them. Dragging a view out embeds the model seen from it: the viewer
- * shows the embed from the view, orbiting is local until "Reset", a picker switches the view, and
- * the embed follows the view as it is updated or deleted in the model.
+ * shows the embed from the view, orbiting is local until "Reset" or "Save view", a picker switches the
+ * view, and the embed follows the view as it is updated or deleted in the model. Every model has a
+ * Home view, where the ViewCube's Home goes, which can be moved and reset.
  */
 import type { Locator, Page } from "@playwright/test";
 import { CAD_MODULES, cameraDirection, clickViewCube, createModel, docPathWith, docUrl, editorView, reloadStored, type Region } from "../cad.ts";
@@ -19,7 +20,8 @@ async function expectDirection(page: Page, region: Region | [number, number, num
 
 const views = (page: Page) => page.locator(".cad-editor__browser").getByRole("list", { name: "Views" });
 const viewRow = (page: Page, name: string) => views(page).locator(`.cad-editor__named-row[data-name="${name}"]`);
-const viewNames = (page: Page) => views(page).locator(".cad-editor__named-row").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-name")));
+/** The named views, after Home, which every model has. */
+const viewNames = (page: Page) => views(page).locator(".cad-editor__named-row:not([data-fixed])").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-name")));
 
 /** Adds a view from the current camera and names it `name`. */
 async function addView(page: Page, name: string): Promise<void> {
@@ -66,7 +68,8 @@ test("named views are added, gone to, renamed, updated and deleted, for everyone
   await createModel(page);
   await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   const home = await cameraDirection(page);
-  await expect(views(page).getByText("none")).toHaveCount(1);
+  await expect.poll(() => viewNames(page)).toEqual([]);
+  await expect(viewRow(page, "Home")).toHaveAttribute("data-fixed", "true");
 
   // A new view is named after the ViewCube region it looks from, and is where the camera is.
   await page.getByRole("button", { name: "New view from the current camera" }).click();
@@ -171,17 +174,24 @@ test("a view dragged into the sidebar embeds the model seen from it, and follows
   await expect(embed).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await expect(embed).toHaveAttribute("data-view", "Corner");
 
+  // "Save view" keeps an orbit as the view, in the model.
+  await clickViewCube(page, [1, 0, 0]);
+  await embed.getByRole("button", { name: "Save view" }).click();
+  await expect(reset).toHaveCount(0);
+
   // A collaborator updates the view in the model: the embed follows.
   await bootToFrame(b.page, `/#doc=${encodeURIComponent(model)}`);
   await expect(editorView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
-  await clickViewCube(b.page, [-1, -1, 1]);
+  await viewRow(b.page, "Corner").getByRole("button", { name: "Corner" }).click();
+  await expectDirection(b.page, [1, 0, 0]);
+  await clickViewCube(b.page, [1, -1, 1]);
   await viewMenu(b.page, "Corner", "Update to current view");
-  await expectDirection(page, [-1, -1, 1]);
+  await expectDirection(page, [1, -1, 1]);
 
   // They delete it: the embed says so, and offers the model's other views.
   await viewMenu(b.page, "Corner", "Delete");
   await expect(embed).toHaveAttribute("data-deleted", "true");
-  await expect(picker.locator("option")).toHaveText(["Deleted view", "Hero"]);
+  await expect(picker.locator("option")).toHaveText(["Deleted view", "Home", "Hero"]);
   await picker.selectOption({ label: "Hero" });
   await expect(embed).toHaveAttribute("data-deleted", "false");
   await expectDirection(page, [0, -1, 0]);
@@ -190,4 +200,51 @@ test("a view dragged into the sidebar embeds the model seen from it, and follows
   await embed.getByRole("button", { name: "Open model" }).click();
   await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   expect(docUrl(page)).toBe(model);
+});
+
+test("Home is a view of every model: it can be moved, for everyone, and reset", async ({ users }) => {
+  const [a, b] = await users(2);
+  if (!a || !b) throw new Error("users(2) returned fewer than two users");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  const framing = await cameraDirection(page);
+  const home = page.locator(".cad-model__viewer").getByRole("button", { name: "Home view" });
+
+  // Home goes where the Home view looks from, and is then the current view.
+  await clickViewCube(page, [1, 0, 0]);
+  await expect(viewRow(page, "Home")).not.toHaveAttribute("data-current", "true");
+  await viewRow(page, "Home").getByRole("button", { name: "Home" }).click();
+  await expectDirection(page, framing);
+  await expect(viewRow(page, "Home")).toHaveAttribute("data-current", "true");
+  // Hovering it hovers the ViewCube's Home button.
+  await viewRow(page, "Home").hover();
+  await expect(home).toHaveAttribute("data-hovered", "true");
+  await clickViewCube(page, [-1, -1, 1]);
+  await viewRow(page, "Home").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Update to current view"]);
+  await page.getByRole("menu").getByRole("menuitem", { name: "Update to current view" }).click();
+  await clickViewCube(page, [0, -1, 0]);
+  await home.click();
+  await expectDirection(page, [-1, -1, 1]);
+
+  // For everyone: the viewer opens there, and goes Home there.
+  await bootToFrame(b.page, docPathWith(page, "cad-model-viewer"));
+  await expect(b.page.locator(".cad-model--viewer")).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expectDirection(b.page, [-1, -1, 1]);
+  await clickViewCube(b.page, [0, -1, 0]);
+  await b.page.locator(".cad-model__viewer").getByRole("button", { name: "Home view" }).click();
+  await expectDirection(b.page, [-1, -1, 1]);
+
+  // Reset, Home frames the model as at first, and the camera goes there.
+  await clickViewCube(page, [0, -1, 0]);
+  await viewMenu(page, "Home", "Reset to default");
+  await expectDirection(page, framing);
+  await expect(viewRow(page, "Home")).toHaveAttribute("data-current", "true");
+  await clickViewCube(page, [0, -1, 0]);
+  await home.click();
+  await expectDirection(page, framing);
+  await viewRow(page, "Home").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Update to current view"]);
 });

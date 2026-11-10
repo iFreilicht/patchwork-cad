@@ -4,7 +4,7 @@ import { save } from "@automerge/automerge";
 import { initSubduction, Repo, type DocHandle } from "@automerge/automerge-repo";
 import { beforeAll, expect, test } from "vitest";
 import { nearestRegion, regionName } from "../src/components/ViewCube.ts";
-import { addView, freeName, nameProblem, namedViews, removeView, renameView, updateView } from "../src/model/views.ts";
+import { addView, freeName, nameProblem, namedViews, removeView, renameView, setHome, updateView } from "../src/model/views.ts";
 import type { CadModelDoc, CameraState } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
@@ -69,4 +69,15 @@ test("two users' concurrent views both stay, and a removal wins over a rename", 
       .map((v) => v.id)
       .sort(),
   ).toEqual(["a", "b"]);
+});
+
+test("Home is moved and reset to the ViewCube's framing", () => {
+  const handle = model();
+  expect(handle.doc().cad?.home).toBeUndefined();
+  handle.change((d) => setHome(d, camera(1)));
+  expect(handle.doc().cad?.home).toEqual(camera(1));
+  handle.change((d) => setHome(d, undefined));
+  expect(handle.doc().cad?.home).toBeUndefined();
+  handle.change((d) => setHome(d, undefined));
+  expect(handle.doc().cad).toEqual({});
 });
