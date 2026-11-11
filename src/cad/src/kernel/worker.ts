@@ -6,7 +6,8 @@ import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
-import { DERIVED, prepare, PrepareError, PROVIDED } from "./prepare.ts";
+import { dataModule, type Imports } from "./imports.ts";
+import { DERIVED, prepare, prepareImported, PrepareError, PROVIDED, type Resolve } from "./prepare.ts";
 import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -115,13 +116,50 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
  * (research/08); within one build, the first import is reused instead.
  */
 let buildModule: { code: string; module: Promise<Record<string, unknown>> } | undefined;
+
+/**
+ * Blob URLs of imported documents' modules, by their code: a document that didn't change stays one
+ * module, evaluated once in the worker's life, and one that changed is a new module.
+ */
+const importUrls = new Map<string, string>();
+const isImportUrl = new Set<string>();
+
+/** Makes the documents of `imports` modules, each after the documents it imports itself. */
+function resolver(imports: Imports): Resolve {
+  const resolving = new Set<string>();
+  const resolve: Resolve = (specifier) => {
+    const imported = imports[specifier];
+    if (!imported) throw new Error("it wasn't loaded");
+    if (imported.kind === "problem") throw new Error(imported.problem);
+    if (resolving.has(specifier)) throw new Error("it imports itself, through the documents it imports");
+    resolving.add(specifier);
+    let code;
+    try {
+      code = imported.kind === "data" ? dataModule(imported.value) : prepareImported(imported.code, resolve);
+    } catch (error) {
+      throw error instanceof PrepareError ? new Error(`${error.message} (its line ${error.line})`) : error;
+    } finally {
+      resolving.delete(specifier);
+    }
+    let url = importUrls.get(code);
+    if (!url) {
+      url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      importUrls.set(code, url);
+      isImportUrl.add(url);
+    }
+    return url;
+  };
+  return resolve;
+}
+/** The running build's or check's documents. */
+let resolve: Resolve = resolver({});
 const kernel = loadKernel();
 const builder = createBuilder({
   runtime: async () => ({ replicad, oc: (await kernel).oc }),
   codeEvaluator: {
     runInContext: browserEvaluator.runInContext,
     evaluateModule<TModule>(code: string, options?: Parameters<typeof browserEvaluator.evaluateModule>[1]): Promise<TModule> {
-      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule<Record<string, unknown>>(prepare(code), options).then(recordMain) };
+      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule<Record<string, unknown>>(prepare(code, resolve), options).then(recordMain) };
       return buildModule.module as Promise<TModule>;
     },
   },
@@ -132,10 +170,11 @@ kernel.then(
   (error: unknown) => post({ type: "init-failed", message: String((error as Error)?.message ?? error) }),
 );
 
-/** The first `blob:` frame of a stack is the model module; its line is the source line (see prepare). */
+/** The first `blob:` frame of a stack that isn't in an imported document is the model module; its line is the source line (see prepare). */
 function lineFromStack(stack: unknown): number | undefined {
-  const match = typeof stack === "string" ? /blob:[^\s)]*?:(\d+):\d+/.exec(stack) : null;
-  return match ? Number(match[1]) : undefined;
+  if (typeof stack !== "string") return undefined;
+  for (const match of stack.matchAll(/(blob:[^\s)]*?):(\d+):\d+/g)) if (!isImportUrl.has(match[1]!)) return Number(match[2]);
+  return undefined;
 }
 
 interface BuiltShape {
@@ -217,8 +256,9 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
   };
 }
 
-async function build(id: number, source: string, buildParams: BuildParams | undefined): Promise<void> {
+async function build(id: number, source: string, buildParams: BuildParams | undefined, imports: Imports): Promise<void> {
   params = buildParams;
+  resolve = resolver(imports);
   paramValues = { params: {}, derived: {} };
   const t0 = performance.now();
   const fail = (error: ModelError) => {
@@ -226,7 +266,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
     post({ type: "failed", id, error, trace: serialize(currentTrace()), timings: { build: t, total: t }, heapBytes: heapBytes() });
   };
   try {
-    prepare(source);
+    prepare(source, resolve);
   } catch (error) {
     if (error instanceof PrepareError) return fail({ message: error.message, line: error.line, kind: error.kind });
     throw error;
@@ -270,11 +310,12 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
  * Runs a model on trial without meshing, keeping the last build's trace for rollback and picking.
  * Its bodies are left to the heap limit (research/08).
  */
-async function check(id: number, source: string, buildParams: BuildParams | undefined): Promise<void> {
+async function check(id: number, source: string, buildParams: BuildParams | undefined, imports: Imports): Promise<void> {
   params = buildParams;
+  resolve = resolver(imports);
   const problems = () => currentTrace().filter((t) => t.status !== "ok").length;
   try {
-    const code = prepare(source);
+    const code = prepare(source, resolve);
     await kernel;
     beginBuild({ lenient: true });
     // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
@@ -336,7 +377,7 @@ const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   if (request.type === "check") {
-    enqueue(() => check(request.id, request.source, request.params));
+    enqueue(() => check(request.id, request.source, request.params, request.imports ?? {}));
     return;
   }
   if (request.type !== "build") {
@@ -347,7 +388,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     }
     return;
   }
-  enqueue(() => build(request.id, request.source, request.params).catch((error: unknown) =>
+  enqueue(() => build(request.id, request.source, request.params, request.imports ?? {}).catch((error: unknown) =>
     post({
       type: "failed",
       id: request.id,

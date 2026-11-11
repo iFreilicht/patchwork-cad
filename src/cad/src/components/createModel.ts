@@ -1,6 +1,8 @@
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { Engine, type BuildResult } from "../kernel/engine.ts";
+import type { Imports } from "../kernel/imports.ts";
+import { createImports } from "./imports.ts";
 import type { BuildParams, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
 import type { CadModelDoc } from "../types.ts";
 
@@ -25,6 +27,8 @@ export interface Model {
   params: Accessor<BuildParams | undefined>;
   /** What the last successful build's parameters and derived parameters were. */
   paramValues: Accessor<ParamValues | undefined>;
+  /** The documents `source` imports, as they are now, e.g. for a trial build of it. */
+  imports(source: string): Promise<Imports>;
 }
 
 /** The same values of parameters, whichever order their keys are in. */
@@ -32,7 +36,8 @@ const paramsKey = (params: BuildParams | undefined) => (params ? JSON.stringify(
 
 /**
  * Builds the document's source on every change, one build at a time (see Engine), with `params`
- * over the model's defaults when given (research/17-parameters.md). Disposed with the owner.
+ * over the model's defaults when given (research/17-parameters.md), and on every change of a
+ * document it imports and follows. Disposed with the owner.
  */
 export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<BuildParams | undefined>): Model {
   const [shapes, setShapes] = createSignal<MeshedShape[]>();
@@ -46,6 +51,9 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
 
   let latest = handle.doc()?.content ?? "";
   let latestParams = paramsKey(params?.());
+  let latestImports = "";
+  /** Counts rebuilds, so that only the newest one builds once its imports are read. */
+  let requests = 0;
   const engine = new Engine({
     onResult(result) {
       setLast(result);
@@ -61,20 +69,27 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
     onInitFailed: setInitError,
   });
 
-  const rebuild = () => {
+  const rebuild = async () => {
+    const request = ++requests;
     const source = handle.doc()?.content ?? "";
     const values = params?.();
-    if (source === latest && paramsKey(values) === latestParams && last()) return;
+    const { imports: read, key: importsKey } = await imports.read(source);
+    if (request !== requests) return;
+    if (source === latest && paramsKey(values) === latestParams && importsKey === latestImports && last()) return;
     latest = source;
     latestParams = paramsKey(values);
+    latestImports = importsKey;
     setBuilding(true);
-    engine.build(source, values);
+    engine.build(source, values, read);
   };
-  rebuild();
-  handle.on("change", rebuild);
-  if (params) createEffect(on(params, rebuild, { defer: true }));
+  const imports = createImports(() => void rebuild());
+  void rebuild();
+  const onChange = () => void rebuild();
+  handle.on("change", onChange);
+  if (params) createEffect(on(params, onChange, { defer: true }));
   onCleanup(() => {
-    handle.off("change", rebuild);
+    handle.off("change", onChange);
+    imports.dispose();
     engine.dispose();
   });
 
@@ -83,7 +98,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
     const result = last();
     return result?.ok ? result.paramValues : undefined;
   };
-  return { engine, shapes, sketches, error, trace, init, initError, last, building, status, params: () => params?.(), paramValues };
+  return { engine, shapes, sketches, error, trace, init, initError, last, building, status, params: () => params?.(), paramValues, imports: async (source) => (await imports.read(source)).imports };
 }
 
 /** The data attributes the e2e specs read from a tool's root element, as getters so that a JSX spread tracks them. */

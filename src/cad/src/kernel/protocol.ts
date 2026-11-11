@@ -1,5 +1,6 @@
 import type { Owned, RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { ReplicadMeshedEdges, ReplicadMeshedFaces } from "replicad-threejs-helper";
+import type { Imports } from "./imports.ts";
 
 /** Milliseconds per phase, measured inside the worker with performance.now(). */
 export interface InitTimings {
@@ -92,8 +93,8 @@ export interface ParamValues {
 }
 
 export type WorkerRequest =
-  /** `params`: values of parameters that replace the model's defaults (research/17-parameters.md). */
-  | { type: "build"; id: number; source: string; params?: BuildParams }
+  /** `params`: values of parameters that replace the model's defaults (research/17-parameters.md); `imports`: the documents it imports. */
+  | { type: "build"; id: number; source: string; params?: BuildParams; imports?: Imports }
   /** The bodies visible before feature `feature` of the last build (or after it), for picking while it is edited and for the timeline marker. */
   | { type: "rollback"; id: number; feature: string; after?: boolean }
   /** The reference code for entity `index` of body `body` of the last build. */
@@ -105,7 +106,7 @@ export type WorkerRequest =
   /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
   | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
-  | { type: "check"; id: number; source: string; params?: BuildParams };
+  | { type: "check"; id: number; source: string; params?: BuildParams; imports?: Imports };
 
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }

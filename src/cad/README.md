@@ -35,7 +35,7 @@ export default function main({ size }) {
 }
 ```
 
-`main` returns a shape or body, an array of them, or `{ shape, name, color }` entries ([replicad-evaluator](https://github.com/sgenoud/replicad/tree/main/packages/replicad-evaluator) conventions). Only `replicad`, `replicad/shape-functions` and `@patchwork-cad/features` can be imported. The editor recognizes `const x = feature({…})` statements of `main` as timeline entries; everything else is a Custom Script.
+`main` returns a shape or body, an array of them, or `{ shape, name, color }` entries ([replicad-evaluator](https://github.com/sgenoud/replicad/tree/main/packages/replicad-evaluator) conventions). Only `replicad`, `replicad/shape-functions`, `@patchwork-cad/features` and documents (`automerge:` URLs of data documents and JS files, see [research/02](../../research/02-model-storage.md#imports-in-the-prototype)) can be imported. The editor recognizes `const x = feature({…})` statements of `main` as timeline entries; everything else is a Custom Script.
 
 `main` takes its parameters from `defaultParams`; `const`s at its start that only compute values are derived parameters, and an optional `export const paramConfig = { w: { title, minimum, maximum, unit } }` describes them in JSON Schema's terms ([research/17](../../research/17-parameters.md)). The editor's first timeline entry, "params", edits them; configurations (named sets of values) and named views are kept in the model document next to the code.
 

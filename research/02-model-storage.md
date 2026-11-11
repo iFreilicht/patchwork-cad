@@ -72,6 +72,25 @@ Use imports directly in the code, e.g. `import { gear } from "automerge:<id>#<he
 
 The openscad-style drag-and-drop can remain as UX that inserts an import line. The service worker accepts URLs with heads, and redirects one without heads to the document's current heads (`Response.redirect(location, 307)`, [`automerge-protocol-handler-worker.js`](../node_modules/.pnpm/@inkandswitch+patchwork-bootloader@0.8.4_@automerge+automerge-repo-keyhive@0.6.0-alpha._3df521e76561f6a9ee47cd61d96bee70/node_modules/@inkandswitch/patchwork-bootloader/dist/automerge-protocol-handler-worker.js)); it serves a document's `content` as a file and any other document as JSON ([17](17-parameters.md#building-blocks)). Still to verify: whether the sandbox (e.g. a worker) can resolve these service-worker URLs.
 
+### Imports in the prototype
+
+Models import data documents and JS files by their URL; models themselves, and the sandbox ([05](05-sandboxing.md)), are left for later ([`imports.test.ts`](../src/cad/test/imports.test.ts), [`cad-imports.spec.ts`](../src/harness/e2e/tests/cad-imports.spec.ts)):
+
+```js
+import { hole_diameter } from "automerge:2owYJFe8TQ9krQHCDVJgKfVXggLG";              // follows the document
+import { width } from "automerge:2owYJFe8TQ9krQHCDVJgKfVXggLG#<heads>";               // pinned to a version
+import settings from "automerge:2owYJFe8TQ9krQHCDVJgKfVXggLG/settings/screws";        // a value inside a document
+```
+
+- **The tool reads the documents, not the service worker.** It finds each URL once with `repo.find`, which also resolves heads and paths ([17](17-parameters.md#building-blocks)); the handle keeps the document in memory as changes sync in, and the tool makes a module of it again only when its heads changed. So it knows when one changes: a URL without heads follows its document, and a change rebuilds the model; one with heads never changes. It sends what it read to the kernel worker, which makes a blob-URL module of each and puts that URL in place of the specifier, so every line of the model stays where it was ([`components/imports.ts`](../src/cad/src/components/imports.ts), [`kernel/imports.ts`](../src/cad/src/kernel/imports.ts), [`prepare.ts`](../src/cad/src/kernel/prepare.ts)). Whether the worker could fetch service-worker URLs itself didn't need answering.
+- **What a document is, as the service worker has it:** a document with `content` and the `mimeType` `application/javascript` or `text/javascript` is JS, which may itself import replicad, the feature library and other documents; one of `application/json` is its parsed data; a CAD model is refused for now; any other document, or the value a path names, is data as JSON has it.
+- **Data is a module of its keys:** the whole value is the default export, and each key a named export, as a string name if it isn't an identifier (`import { "hole-depth" as depth } from …`). A JSON module of the browser's (`with { type: "json" }`) only has the default export.
+- **Errors point at the model:** a document that can't be loaded or isn't importable is an import error on the line of its import, naming the document; an error thrown in an imported module is on the line of the model that called it. A cycle of imports is an import error.
+- **A model without imports costs nothing extra:** without `automerge:` in its code, nothing is parsed or read. Edit-to-result times were the same as before imports existed, within a few milliseconds of noise (Chromium about 22 ms, Firefox about 50 ms for the seed model).
+- **An imported module is evaluated once per content:** its blob URL is kept by its code, so a document that didn't change isn't evaluated again in the next build; an edited one is a new module.
+- **Feature calls in an imported JS file aren't named,** so their bodies and faces don't show as features of their own in the timeline, and references into them aren't stable.
+- **Portable only within the Automerge network:** an `automerge:` URL resolves only where its document can be synced. Exporting such a model needs the imported documents written out next to it, with the specifiers mapped to them, e.g. by an import map.
+
 ## Open
 
 - The shape of feature references (edges, faces): [03-topological-naming.md](03-topological-naming.md#recommendation) recommends history-based names rooted in feature variables and sketch segment ids, cross-checked by geometry and written as JS expressions like `edge(f1.end, f1.side.front).piece(notch, 1)`. [PoC 2](07-poc-modelling-ui.md#the-reference-syntax) prototypes them; adopting them for the product is not decided yet.

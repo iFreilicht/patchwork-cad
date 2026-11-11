@@ -1,3 +1,4 @@
+import type { Imports } from "./imports.ts";
 import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 export type BuildResult =
@@ -55,7 +56,7 @@ export class Engine {
   #loaded = false;
   #watchdog: ReturnType<typeof setTimeout> | undefined;
   #running: { id: number; source: string; params: BuildParams | undefined; started: number } | undefined;
-  #waiting: { source: string; params: BuildParams | undefined } | undefined;
+  #waiting: { source: string; params: BuildParams | undefined; imports: Imports } | undefined;
   #nextId = 1;
   readonly #pending = new Map<number, { resolve: (answer: Answer) => void; reject: (error: Error) => void }>();
 
@@ -66,11 +67,11 @@ export class Engine {
     this.#worker = this.#spawn();
   }
 
-  /** Builds `source`, with `params` over its `defaultParams` (research/17-parameters.md). */
-  build(source: string, params?: BuildParams): void {
+  /** Builds `source`, with `params` over its `defaultParams` (research/17-parameters.md) and the documents it imports. */
+  build(source: string, params?: BuildParams, imports: Imports = {}): void {
     this.stats.requested++;
-    if (this.#running) this.#waiting = { source, params };
-    else this.#start(source, params);
+    if (this.#running) this.#waiting = { source, params, imports };
+    else this.#start(source, params, imports);
   }
 
   /** The bodies visible before `feature` (or after it) in the last build, meshed for picking, and the sketches no feature used yet. */
@@ -104,8 +105,8 @@ export class Engine {
   }
 
   /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
-  async check(source: string, params?: BuildParams): Promise<{ error: ModelError | undefined; problems: number }> {
-    const answer = await this.#request({ type: "check", id: this.#nextId++, source, ...(params ? { params } : {}) });
+  async check(source: string, params?: BuildParams, imports: Imports = {}): Promise<{ error: ModelError | undefined; problems: number }> {
+    const answer = await this.#request({ type: "check", id: this.#nextId++, source, imports, ...(params ? { params } : {}) });
     return answer.type === "checked" ? { error: answer.error, problems: answer.problems } : { error: undefined, problems: 0 };
   }
 
@@ -172,7 +173,7 @@ export class Engine {
     if (this.#waiting !== undefined) {
       const next = this.#waiting;
       this.#waiting = undefined;
-      this.#start(next.source, next.params);
+      this.#start(next.source, next.params, next.imports);
     }
     if (!running) return;
     const ms = performance.now() - running.started;
@@ -180,14 +181,14 @@ export class Engine {
     this.#callbacks.onResult({ ok: false, source: running.source, params: running.params, error, trace: [], timings: { build: ms, total: ms } });
   }
 
-  #start(source: string, params: BuildParams | undefined): void {
+  #start(source: string, params: BuildParams | undefined, imports: Imports): void {
     // Restarting before a build, not after one, keeps the worker that holds the
     // shown shapes alive until a new build replaces them.
     if (this.#heapBytes > this.#heapLimit) this.#restart();
     this.stats.executed++;
     this.#running = { id: this.#nextId++, source, params, started: performance.now() };
     // A new worker runs it as soon as OCCT has loaded.
-    this.#worker.postMessage({ type: "build", id: this.#running.id, source, ...(params ? { params } : {}) });
+    this.#worker.postMessage({ type: "build", id: this.#running.id, source, imports, ...(params ? { params } : {}) });
     this.#watch();
   }
 
@@ -199,7 +200,7 @@ export class Engine {
     if (this.#waiting !== undefined) {
       const next = this.#waiting;
       this.#waiting = undefined;
-      this.#start(next.source, next.params);
+      this.#start(next.source, next.params, next.imports);
     }
     const { onResult } = this.#callbacks;
     if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, paramValues: message.paramValues, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
