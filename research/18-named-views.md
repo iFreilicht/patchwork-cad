@@ -22,7 +22,7 @@ A view is a camera only; configurations and visible bodies may join it later. Na
 
 ## Home
 
-Every model has a Home view, first in the list, which Fusion keeps as a named view, too. Until someone changes it, it looks from the front, right and above and frames the model, as the ViewCube's Home button always did; "Update to current view" moves it, for everyone, into `cad.home`, and "Reset to default" removes that again and goes there, to show where that is. The Home button, in the editor and the viewer, goes there, and a view without a camera of its own, e.g. a user's first look at a model, opens there. It is set in bold when the camera is there, also at its default framing, which the viewer computes, and hovering it marks the ViewCube's Home button. It can't be renamed or deleted, and an embed names it by the id `home`.
+Every model has a Home view, first in the list, which Fusion keeps as a named view, too. Until someone changes it, it looks from the front, right and above and frames the model with a margin of 0.1 on each side ([20](20-view-framing.md#the-design)), as the ViewCube's Home button always did; "Update to current view" moves it, for everyone, into `cad.home`, and "Reset to default" removes that again and goes there, to show where that is. The Home button, in the editor and the viewer, goes there, and a view without a camera of its own, e.g. a user's first look at a model, opens there. It is set in bold when the camera is there, also at its default framing, which the viewer computes, and hovering it marks the ViewCube's Home button. It can't be renamed or deleted, and an embed names it by the id `home`.
 
 ## In the editor
 

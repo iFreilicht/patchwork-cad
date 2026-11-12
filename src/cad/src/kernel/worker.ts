@@ -352,6 +352,16 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
         return { name: `${request.feature}:changed:${i}`, color: undefined, opacity: undefined, faces: meshable.mesh(MESH), edges: meshable.meshEdges(MESH), body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
       }),
     });
+  } else if (request.type === "refs") {
+    const refs = request.faces.map(({ body, index }) => {
+      const b = bodies.get(body);
+      try {
+        return b ? pickData(b, "face", index) : null;
+      } catch {
+        return null;
+      }
+    });
+    post({ type: "refsMade", id: request.id, refs });
   } else if (request.type === "locate") {
     const shown = request.bodies.flatMap((name) => {
       const body = bodies.get(name);

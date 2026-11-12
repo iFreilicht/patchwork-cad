@@ -1,7 +1,9 @@
 import { createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { subscribe } from "@inkandswitch/patchwork-providers";
+import { copyCamera } from "../model/views.ts";
 import type { CameraState, DocUiState, TimelineMarker, UiStorageDoc } from "../types.ts";
+import { cameraOf } from "./framing.ts";
 
 /** The tool-storage id both tools share, so that state can be read by either. */
 const TOOL_STORAGE_ID = "patchwork-cad";
@@ -142,12 +144,15 @@ export function createUiState(element: HTMLElement, docUrl: AutomergeUrl): UiSta
         }
       });
     },
-    view: (toolId) => loadedViews()?.[toolId],
+    view(toolId) {
+      const stored = loadedViews()?.[toolId];
+      return stored && cameraOf(stored);
+    },
     setView(toolId, view) {
       if (!loadedViews()) moved.add(toolId);
       write((entry) => {
         entry.views ??= {};
-        entry.views[toolId] = view;
+        entry.views[toolId] = copyCamera(view);
       });
     },
   };

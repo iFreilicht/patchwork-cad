@@ -6,8 +6,9 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
-import type { MeshedShape, ShownSketch } from "../kernel/protocol.ts";
-import type { CameraState } from "../types.ts";
+import type { MeshedShape, RefData, ShownSketch } from "../kernel/protocol.ts";
+import type { CameraState, Margins, StoredCamera } from "../types.ts";
+import { cameraOf, corners, DEFAULT_MARGINS, expand, fitLens, fitted, inside, marginsOf, meet, overlaps, TAN, tanToShow, trimmed, visibleAt, type Lens, type Rect, type Shot } from "./framing.ts";
 import { contactToken } from "./presence.ts";
 import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 
@@ -91,11 +92,13 @@ export interface ViewerProps {
   /** Collaborators' pointers. */
   peers?: PeerMarker[] | undefined;
   /** A camera to show, e.g. the one the user last left; it applies whenever it changes. */
-  view?: CameraState | undefined;
+  view?: StoredCamera | undefined;
   /** Called when the user has moved the camera: after an orbit, a ViewCube turn, Home or a projection switch. */
   onViewChange?: (view: CameraState) => void;
   /** Where Home goes, the model's Home view if it was changed; else Home frames the model from the front, right and above. */
-  home?: CameraState | undefined;
+  home?: StoredCamera | undefined;
+  /** Turns faces into references and back, so that a view of a close-up follows what it shows (research/20, "Close-ups"). */
+  faceRefs?: FaceRefs | undefined;
   /** Marks the ViewCube's Home button as hovered, e.g. while the Home view is hovered in the browser. */
   homeHovered?: boolean;
   /** Hands over what the view can tell its owner at any time, once it is mounted. */
@@ -109,25 +112,45 @@ export interface ViewerProps {
   selectionAction?: { label: string; run: (at: { x: number; y: number }) => void } | undefined;
 }
 
+export interface FaceRefs {
+  /** The references to faces of shown bodies, null for a face that has none. */
+  refs(faces: { body: string; index: number }[]): Promise<(RefData | null)[]>;
+  /** For each of `refs`, the faces it names in bodies `bodies`. */
+  locate(bodies: string[], refs: RefData[]): Promise<{ body: string; indices: number[] }[][]>;
+}
+
 export interface ViewerApi {
-  /** The camera the view shows now, as onViewChange reports it. */
-  camera(): CameraState;
+  /** The camera the view shows now, as onViewChange reports it, once it shows one. */
+  camera(): CameraState | undefined;
   /** Goes Home, as the ViewCube's Home button does. */
   home(): void;
   /** Where Home goes now: the model's Home view, or the framing from the front, right and above. */
   homeCamera(): CameraState | undefined;
 }
 
-/** Two cameras are the same up to rounding, e.g. one reported after moving to the other. */
-export const nearCamera = (a: CameraState | undefined, b: CameraState | undefined, tolerance = 1e-6) =>
-  !!a &&
-  !!b &&
-  a.projection === b.projection &&
-  [...a.direction, ...a.target, a.distance, a.zoom].every((x, i) => Math.abs(x - [...b.direction, ...b.target, b.distance, b.zoom][i]!) <= tolerance * Math.max(1, Math.abs(x)));
+/**
+ * Two cameras are the same up to rounding, e.g. one reported after moving to the other. A camera
+ * with margins or a subject is where it fits them, wherever its target and extent were when stored.
+ */
+export const nearCamera = (a: StoredCamera | undefined, b: StoredCamera | undefined, tolerance = 1e-6) => {
+  if (!a || !b) return false;
+  const [x, y] = [cameraOf(a), cameraOf(b)];
+  const near = (p: readonly number[], q: readonly number[]) => p.length === q.length && p.every((v, i) => Math.abs(v - q[i]!) <= tolerance * Math.max(1, Math.abs(v)));
+  if (x.projection !== y.projection || !near([...x.direction, x.eye ?? 1], [...y.direction, y.eye ?? 1]) || !x.fit !== !y.fit || !x.subject !== !y.subject) return false;
+  if (x.fit && y.fit) return near(x.fit, y.fit);
+  if (x.subject && y.subject) return near(x.subject.fit, y.subject.fit) && canonical([x.subject.faces, x.subject.sketches]) === canonical([y.subject.faces, y.subject.sketches]);
+  return near([...x.target, ...x.extent], [...y.target, ...y.extent]);
+};
 
 /** Two cameras are the same; storage may reorder an object's keys. */
-export const sameCamera = (a: CameraState | undefined, b: CameraState | undefined) => !!a && !!b && cameraKey(a) === cameraKey(b);
-const cameraKey = (v: CameraState) => JSON.stringify([v.direction, v.target, v.distance, v.projection, v.zoom]);
+export const sameCamera = (a: StoredCamera | undefined, b: StoredCamera | undefined) => !!a && !!b && cameraKey(a) === cameraKey(b);
+const cameraKey = (stored: StoredCamera) => {
+  const v = cameraOf(stored);
+  return canonical([v.direction, v.target, v.extent, v.projection, v.eye ?? 1, v.fit ?? null, v.subject ? [v.subject.faces, v.subject.sketches, v.subject.fit] : null]);
+};
+/** JSON with every object's keys sorted, as Automerge returns a map's keys in its own order. */
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_, v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
 
 /**
  * For tests: where on the screen an entity can be clicked. The e2e specs click real pixels, so
@@ -147,12 +170,25 @@ export interface ViewerTestHook {
   cameraDirection(): [number, number, number];
   /** Where collaborators' pointer markers are on the screen. */
   peerMarkers(): { key: string; x: number; y: number }[];
+  /**
+   * Where points are on the screen, the model's mesh vertices by default: whether all are in the
+   * view, and how much of the view's width or height they span, whichever is more.
+   */
+  onScreen(points?: [number, number, number][]): { inView: boolean; fill: number; center: [number, number] };
+  /** The camera the view is meant to show (research/20). */
+  intent(): CameraState | undefined;
+  /** Where the eye is, which decides the perspective. */
+  eye(): [number, number, number];
 }
 
 export type Projection = CameraState["projection"];
 
 /** The direction the camera looks from at first and after Home: front, right and above. */
 const HOME_DIRECTION = new THREE.Vector3(0.55, -0.85, 0.65).normalize();
+/** The user's own camera refits when a build would show the model, with its margins, less than this part as large (research/20, "When the geometry changes"). */
+const REFIT_BELOW = 0.5;
+/** A camera that cuts off at most this part of the view's width or height of the model, on a side, was meant to show all of it. */
+const SLIVER = 0.02;
 /** How long the camera turns to a ViewCube region. */
 const TURN_MS = 300;
 
@@ -400,9 +436,12 @@ export function Viewer(props: ViewerProps) {
       target: THREE.Vector3;
       distance: number;
       zoom: number;
+      /** The perspective camera's vertical field of view, in degrees. */
+      fov: number;
     }
-    const pose = (): Pose => ({ direction: direction(), target: controls.target.clone(), distance: distance(), zoom: orthographic.zoom });
+    const pose = (): Pose => ({ direction: direction(), target: controls.target.clone(), distance: distance(), zoom: orthographic.zoom, fov: perspective.fov });
     const place = (p: Pose) => {
+      perspective.fov = p.fov;
       controls.target.copy(p.target);
       camera.position.copy(p.target).addScaledVector(p.direction, p.distance);
       for (const c of [perspective, orthographic]) {
@@ -416,17 +455,25 @@ export function Viewer(props: ViewerProps) {
       camera.updateMatrixWorld();
     };
 
-    /** A running move of the camera, e.g. to a ViewCube region; `data-turning` tells tests to wait for its end. */
-    let turn: { from: Pose; to: Pose; rotation: THREE.Quaternion; start: number; report: boolean } | undefined;
+    // Rounded: Automerge 3.4.1 stores 0.9999999999999999 in a list as 0 (research/10-view-state.md).
+    const round = (x: number) => Math.round(x * 1e9) / 1e9;
+    const vector = (v: THREE.Vector3) => v.toArray().map(round) as [number, number, number];
+    const roundRef = (ref: RefData): RefData => (ref.near ? { ...ref, near: ref.near.map(round) as [number, number, number] } : ref);
+
+    /**
+     * A running move of the camera, e.g. to a ViewCube region; `data-turning` tells tests to wait for
+     * its end. One that shows `intent` follows it when the viewport resizes or the model changes.
+     */
+    let turn: { from: Pose; to: Pose; rotation: THREE.Quaternion; start: number; onEnd: (() => void) | undefined; intent: Intent | undefined } | undefined;
     const setTurn = (next: typeof turn) => {
       turn = next;
       container.dataset["turning"] = String(!!turn);
     };
-    /** Moves the camera to `to`, animated unless the user prefers reduced motion; `report` calls onViewChange at the end. */
-    const moveTo = (to: Partial<Pose>, report: boolean) => {
+    /** Moves the camera to `to`, animated unless the user prefers reduced motion, and calls `onEnd` at the end. */
+    const moveTo = (to: Partial<Pose>, onEnd?: () => void, shows?: Intent) => {
       const from = pose();
       const end = { ...from, ...to };
-      setTurn({ from, to: end, rotation: new THREE.Quaternion().setFromUnitVectors(from.direction, end.direction), start: performance.now(), report });
+      setTurn({ from, to: end, rotation: new THREE.Quaternion().setFromUnitVectors(from.direction, end.direction), start: performance.now(), onEnd, intent: shows });
       if (matchMedia("(prefers-reduced-motion: reduce)").matches) turn!.start -= TURN_MS;
       step(performance.now());
     };
@@ -441,35 +488,267 @@ export function Viewer(props: ViewerProps) {
         target: from.target.clone().lerp(to.target, eased),
         distance: THREE.MathUtils.lerp(from.distance, to.distance, eased),
         zoom: THREE.MathUtils.lerp(from.zoom, to.zoom, eased),
+        fov: THREE.MathUtils.lerp(from.fov, to.fov, eased),
       });
       if (t === 1) {
         const done = turn;
         setTurn(undefined);
-        if (done.report) report();
+        done.onEnd?.();
       }
     };
     /** Whether the view has shown a camera yet; until then, cameras apply at once instead of moving there. */
     let shown = false;
 
+    // ---------- framing (research/20-view-framing.md) ----------
+
+    /** The model's size, for picking tolerances. */
     let radius = 50;
-    let framed: THREE.Sphere | undefined;
+    /** The corners of each shown body's bounding box, which a fit of the whole model uses (research/20, "Fitting"). */
+    let bodyCorners: THREE.Vector3[] = [];
+    const modelPoints = () => [...bodyCorners, ...(props.sketches ?? []).flatMap((s) => s.outline.map((p) => new THREE.Vector3(...p)))];
+    const lens = (): Lens => ({ perspective: camera === perspective, aspect: width / height, tan: Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2)) });
+    /** What the camera shows now: its height at the target. */
+    const shot = (): Shot => ({ direction: direction(), target: controls.target.clone(), height: camera === perspective ? heightAt(distance()) : orthoHeight / orthographic.zoom });
+
     /**
-     * Frames the model, unless it still fits in the framed view (so that edits don't move the camera).
-     * Framing keeps the camera's direction; only the first frame and Home look from `towards`. Home
-     * moves there animated and reports the new camera.
+     * What the camera is meant to show: a camera given to the view, e.g. a named view, which a build
+     * fits again exactly, or the user's own, which follows builds less eagerly; resizes refit both.
+     * A close-up's `subject` is located in the shown bodies, `points` once it is.
      */
-    const frame = (force = false, towards?: THREE.Vector3, animate = false) => {
-      const box = new THREE.Box3().setFromObject(group);
-      if (box.isEmpty()) return;
-      const sphere = box.getBoundingSphere(new THREE.Sphere());
-      radius = sphere.radius;
-      if (!force && framed && framed.radius >= sphere.radius && framed.radius <= sphere.radius * 3 && framed.containsPoint(sphere.center) && sphere.center.distanceTo(framed.center) + sphere.radius <= framed.radius * 1.1) return;
-      const to = { direction: (towards ?? (framed ? direction() : HOME_DIRECTION)).clone(), target: sphere.center.clone(), distance: sphere.radius * 3, zoom: 1 };
-      framed = sphere;
-      shown = true;
-      if (animate) return moveTo(to, true);
+    interface Intent {
+      camera: CameraState;
+      given: boolean;
+      points?: THREE.Vector3[];
+      /** It has only a region, e.g. it was stored before research/20, and is classified once the model shows (`classify`). */
+      classify?: boolean;
+    }
+    let intent: Intent | undefined;
+
+    /** The rectangle `i` shows now: its margins around the model or its subject's points, else its extent around its target. */
+    const rectOf = (i: Intent): Rect => {
+      const { camera: c } = i;
+      const along = new THREE.Vector3(...c.direction).normalize();
+      const around = (points: THREE.Vector3[], margins: Margins) => {
+        const fit = fitted(points, along, fitLens(camera === perspective));
+        return fit && expand(fit, margins, along);
+      };
+      const rect = c.fit ? around(modelPoints(), c.fit) : c.subject && i.points?.length ? around(i.points, c.subject.fit) : undefined;
+      return rect ?? { center: new THREE.Vector3(...c.target), width: c.extent[0], height: c.extent[1] };
+    };
+    /**
+     * Where `i` puts the camera: the eye at its distance from the rectangle it shows, which doesn't
+     * depend on the viewport, so that a resize doesn't change the perspective; the field of view
+     * widens or narrows to show the rectangle (research/20, "The design").
+     */
+    const poseOf = (i: Intent): Pose => {
+      const rect = rectOf(i);
+      const along = new THREE.Vector3(...i.camera.direction).normalize();
+      const distance = ((i.camera.eye ?? 1) * Math.max(rect.width, rect.height)) / (2 * TAN);
+      let tan = meet(rect.width, rect.height, width / height) / (2 * distance);
+      // The model's nearest and farthest parts look larger or smaller than the plane through its middle, which the margins are measured in.
+      if (i.camera.fit && camera === perspective) tan = Math.max(tan, tanToShow(modelPoints(), rect.center, along, distance, width / height));
+      return { direction: along, target: rect.center, distance, zoom: 1, fov: Math.min(170, THREE.MathUtils.radToDeg(2 * Math.atan(tan))) };
+    };
+    /** Shows the intent as the model or the viewport now are: by moving there, or by carrying a running move there. */
+    const follow = () => {
+      if (!intent) return;
+      const to = poseOf(intent);
+      if (turn?.intent === intent) turn.to = to;
+      else if (!turn) place(to);
+    };
+
+    /**
+     * The margins the fit of `points` has in the view now. What is in the view is decided by the
+     * meshes; the box corners a fit uses may stick out of it, e.g. of a slanted face, so margins
+     * are at least zero.
+     */
+    const marginsNow = (points: THREE.Vector3[]): Margins | undefined => {
+      const s = shot();
+      const fit = fitted(points, s.direction, fitLens(camera === perspective));
+      return fit && (marginsOf(fit, trimmed(fit, visibleAt(s, lens(), fit.center), s.direction), s.direction).map((m) => round(Math.max(0, m))) as Margins);
+    };
+    const projected = new THREE.Vector3();
+    /** Whether a point is in the view, or at most `sliver` of the view's width or height out of it on a side. */
+    const inView = (p: THREE.Vector3, sliver = 0) => {
+      projected.copy(p).project(camera);
+      const edge = 1 + 2 * sliver;
+      return Math.abs(projected.x) <= edge && Math.abs(projected.y) <= edge && Math.abs(projected.z) <= 1;
+    };
+    /** Whether all of the model is in the view: every vertex of its meshes, and its sketches; a camera that cuts off a sliver of it was still meant to show it all. */
+    const modelInView = () => {
+      const v = new THREE.Vector3();
+      for (const r of rendered) {
+        const position = r.mesh.geometry.getAttribute("position");
+        for (let i = 0; i < position.count; i++) if (!inView(v.fromBufferAttribute(position, i), SLIVER)) return false;
+      }
+      return (props.sketches ?? []).every((s) => s.outline.every((p) => inView(v.set(...p), SLIVER)));
+    };
+    /** The eye's distance from `rect`, in multiples of the distance at which `rect` just fits a square 45° view (`CameraState.eye`). */
+    const eyeFor = (rect: Rect) => round((camera.position.clone().sub(rect.center).dot(direction()) * 2 * TAN) / Math.max(rect.width, rect.height));
+    /** The camera as it is now: its margins around the model if it shows all of it, else its rectangle (research/20). */
+    const measure = (): CameraState => {
+      const s = shot();
+      const extent: [number, number] = [s.height * (width / height), s.height];
+      const camera: CameraState = { direction: vector(s.direction), target: vector(s.target), extent: [round(extent[0]), round(extent[1])], projection: projection(), eye: eyeFor({ center: s.target, width: extent[0], height: extent[1] }) };
+      const fit = modelInView() ? marginsNow(modelPoints()) : undefined;
+      const fitRect = fit && fitted(modelPoints(), s.direction, fitLens(projection() === "perspective"));
+      if (fit && fitRect) return { ...camera, fit, eye: eyeFor(expand(fitRect, fit, s.direction)) };
+      return camera;
+    };
+    /** Makes the camera as it is now the user's. */
+    const rebase = () => {
+      intent = { camera: measure(), given: false };
+    };
+    /**
+     * A given camera with only a region, e.g. one stored before research/20 or one that cut off a
+     * sliver of the model: once the model is shown in it, it gets margins if it shows all of the model,
+     * as it would if saved now.
+     */
+    const classify = (i: Intent) => {
+      if (!i.classify || !modelPoints().length || intent !== i || turn) return;
+      i.classify = false;
+      const now = measure();
+      if (now.fit) i.camera = { ...i.camera, fit: now.fit, eye: now.eye ?? 1 };
+    };
+    /** The user moved the camera: it is theirs now, and reported; a close-up finds its subject. */
+    const moved = () => {
+      rebase();
+      report();
+      if (intent && !intent.camera.fit) void findSubject(intent);
+    };
+
+    /** The faces of a shown body whose every vertex is in the view. */
+    const facesInView = (r: Rendered): number[] => {
+      const position = r.mesh.geometry.getAttribute("position");
+      const index = r.mesh.geometry.getIndex();
+      const v = new THREE.Vector3();
+      const faces: number[] = [];
+      r.mesh.geometry.groups.forEach((g, gi) => {
+        const face = r.shape.faceIndex?.[gi] ?? -1;
+        if (face < 0) return;
+        for (let i = g.start; i < g.start + g.count; i++) if (!inView(v.fromBufferAttribute(position, index ? index.getX(i) : i))) return;
+        faces.push(face);
+      });
+      return faces;
+    };
+    /** The face that covers most of the view, sampled on a grid, if any face is in it. */
+    const faceCoveringView = (): { body: string; index: number } | undefined => {
+      const counts = new Map<string, { body: string; index: number; n: number }>();
+      const meshes = rendered.filter((r) => r.shape.body).map((r) => r.mesh);
+      const N = 12;
+      for (let i = 0; i < N; i++)
+        for (let j = 0; j < N; j++) {
+          raycaster.setFromCamera(new THREE.Vector2(((i + 0.5) / N) * 2 - 1, ((j + 0.5) / N) * 2 - 1), camera);
+          const hit = raycaster.intersectObjects(meshes, false)[0];
+          const r = hit && rendered.find((x) => x.mesh === hit.object);
+          if (!r?.shape.body || hit?.faceIndex == null) continue;
+          const index = groupEntity(r.shape.faceIndex, getFaceIndex(hit.faceIndex, r.mesh.geometry));
+          if (index < 0) continue;
+          const key = `${r.shape.body}:${index}`;
+          const c = counts.get(key) ?? { body: r.shape.body, index, n: 0 };
+          c.n++;
+          counts.set(key, c);
+        }
+      return [...counts.values()].sort((a, b) => b.n - a.n)[0];
+    };
+    /** Points on faces: the corners of each one's bounding box. */
+    const facePoints = (located: { body: string; indices: number[] }[]): THREE.Vector3[] =>
+      located.flatMap(({ body, indices }) => {
+        const r = rendered.find((x) => x.shape.body === body);
+        if (!r) return [];
+        const wanted = new Set(indices);
+        const position = r.mesh.geometry.getAttribute("position");
+        const index = r.mesh.geometry.getIndex();
+        return r.mesh.geometry.groups.flatMap((g, gi) => {
+          if (!wanted.has(r.shape.faceIndex?.[gi] ?? -1)) return [];
+          const box = new THREE.Box3();
+          for (let i = g.start; i < g.start + g.count; i++) box.expandByPoint(new THREE.Vector3().fromBufferAttribute(position, index ? index.getX(i) : i));
+          return corners(box);
+        });
+      });
+    const sketchPoints = (names: readonly string[]) => (props.sketches ?? []).filter((s) => names.includes(s.name)).flatMap((s) => s.outline.map((p) => new THREE.Vector3(...p)));
+    /**
+     * Finds what a close-up shows, so that a view saved from it follows it (research/20, "Close-ups"):
+     * the faces and sketches entirely in it, else the face that covers most of it, shown with the
+     * default margin, else nothing of the model, and it fits the model from its direction.
+     */
+    const findSubject = async (i: Intent) => {
+      if (!props.faceRefs) return;
+      const inside = rendered.flatMap((r) => (r.shape.body ? facesInView(r).map((index) => ({ body: r.shape.body!, index })) : []));
+      const insideSketches = (props.sketches ?? []).filter((s) => s.outline.every((p) => inView(new THREE.Vector3(...p)))).map((s) => s.name);
+      const covering = inside.length || insideSketches.length ? undefined : faceCoveringView();
+      if (!inside.length && !insideSketches.length && !covering) {
+        i.camera = { ...i.camera, fit: DEFAULT_MARGINS };
+        return report();
+      }
+      const faces = covering ? [covering] : inside;
+      const sketches = covering ? [] : insideSketches;
+      const fit = covering ? DEFAULT_MARGINS : marginsNow([...facePoints(faces.map((f) => ({ body: f.body, indices: [f.index] }))), ...sketchPoints(sketches)])!;
+      const made = faces.length ? await props.faceRefs.refs(faces) : [];
+      if (intent !== i) return;
+      const found = made.flatMap((ref) => (ref ? [roundRef(ref)] : []));
+      if (!found.length && !sketches.length) return;
+      i.camera = { ...i.camera, subject: { faces: found, sketches, fit } };
+      report();
+    };
+    /** Locates a close-up's subject in the shown bodies and shows it there, if the camera still shows `i`. */
+    const locateSubject = async (i: Intent) => {
+      const subject = i.camera.subject;
+      if (!subject || !props.faceRefs) return;
+      const bodies = rendered.flatMap((r) => (r.shape.body ? [r.shape.body] : []));
+      const found = subject.faces.length && bodies.length ? await props.faceRefs.locate(bodies, subject.faces) : [];
+      if (intent !== i) return;
+      i.points = [...facePoints(found.flat()), ...sketchPoints(subject.sketches)];
+      follow();
+    };
+
+    /** Shows `camera`, given from outside: animated once the view has shown a camera, at once when it opens; `onEnd` runs at the end. */
+    const apply = (stored: StoredCamera, onEnd?: () => void) => {
       setTurn(undefined);
-      place(to);
+      const given = cameraOf(stored);
+      if (given.projection !== projection()) toggleProjection(false);
+      const next: Intent = { camera: given, given: true, classify: !given.fit && !given.subject };
+      intent = next;
+      if (shown)
+        moveTo(poseOf(next), () => {
+          classify(next);
+          onEnd?.();
+        }, next);
+      else {
+        shown = true;
+        place(poseOf(next));
+        classify(next);
+      }
+      if (given.subject) void locateSubject(next);
+    };
+    /** The Home view before anyone changed it: the model from the front, right and above, with the default margins. */
+    const defaultHome = (): CameraState => {
+      const camera: CameraState = { direction: vector(HOME_DIRECTION), target: [0, 0, 0], extent: [1, 1], projection: projection(), fit: DEFAULT_MARGINS };
+      const rect = rectOf({ camera, given: true });
+      return { ...camera, target: vector(rect.center), extent: [round(rect.width), round(rect.height)] };
+    };
+    /** The model changed: a given camera fits it again; the user's own refits only if the model left it or shrank to less than half (research/20, "When the geometry changes"). */
+    const refit = () => {
+      const points = modelPoints();
+      if (!points.length) return;
+      if (!shown || !intent) return apply(props.home ?? defaultHome());
+      if (intent.given) {
+        classify(intent);
+        if (intent.camera.subject) void locateSubject(intent);
+        else follow();
+        return;
+      }
+      if (turn) return;
+      const s = shot();
+      const fit = fitted(points, s.direction, fitLens(camera === perspective))!;
+      if (intent.camera.fit) {
+        // Within the band, the camera stays and keeps its margins, which a later refit or resize shows again.
+        const wanted = expand(fit, intent.camera.fit, s.direction);
+        if (!inside(fit, visibleAt(s, lens(), fit.center), s.direction) || meet(wanted.width, wanted.height, lens().aspect) < REFIT_BELOW * visibleAt(s, lens(), wanted.center).height) follow();
+      } else if (!overlaps(fit, visibleAt(s, lens(), fit.center), s.direction)) {
+        intent = { camera: { ...intent.camera, fit: DEFAULT_MARGINS }, given: false };
+        follow();
+      }
     };
 
     /** The ViewCube's square in the canvas, in CSS pixels from the bottom left, as three.js's viewport wants it. */
@@ -478,23 +757,34 @@ export function Viewer(props: ViewerProps) {
       const rect = canvas.getBoundingClientRect();
       return { x: cubeRect.left - rect.left, y: rect.bottom - cubeRect.bottom, size: cubeRect.width };
     };
+    /** Whether the user is dragging the camera, whose intent is then older than what the view shows. */
+    let dragging = false;
     const resize = () => {
+      if (dragging) rebase();
       width = container.clientWidth || 1;
       height = container.clientHeight || 1;
       updateProjection();
       renderer.setSize(width, height, false);
+      follow();
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(container);
 
-    const turnTo = (to: THREE.Vector3) => moveTo({ direction: to }, true);
-    controls.addEventListener("start", () => setTurn(undefined));
-
-    home = () => {
-      if (props.home) apply(props.home, true);
-      else frame(true, HOME_DIRECTION, true);
+    /** Turns to look from `to`: a camera that shows the whole model fits it from there with its margins, a close-up turns around its target. */
+    const turnTo = (to: THREE.Vector3) => {
+      const fit = intent?.camera.fit;
+      if (!fit) return moveTo({ direction: to }, moved);
+      const turned: Intent = { camera: { ...intent!.camera, direction: vector(to) }, given: false };
+      intent = turned;
+      moveTo(poseOf(turned), moved, turned);
     };
+    controls.addEventListener("start", () => {
+      setTurn(undefined);
+      dragging = true;
+    });
+
+    home = () => apply(props.home ?? defaultHome(), report);
     toggleProjection = (byUser = true) => {
       setTurn(undefined);
       const d = distance();
@@ -512,41 +802,22 @@ export function Viewer(props: ViewerProps) {
       updateProjection();
       controls.update();
       setProjection(camera === perspective ? "perspective" : "orthographic");
-      if (byUser) report();
+      if (byUser) moved();
     };
 
-    // Rounded: Automerge 3.4.1 stores 0.9999999999999999 in a list as 0 (research/10-view-state.md).
-    const round = (x: number) => Math.round(x * 1e9) / 1e9;
-    const vector = (v: THREE.Vector3) => v.toArray().map(round) as [number, number, number];
-    const cameraState = (): CameraState => ({
-      direction: vector(direction()),
-      target: vector(controls.target),
-      distance: round(distance()),
-      projection: camera === perspective ? "perspective" : "orthographic",
-      zoom: round(orthographic.zoom),
-    });
     const key = cameraKey;
     /** The camera this view last reported or applied, so that it doesn't apply its own state again. */
     let reported: string | undefined;
     const report = () => {
-      const state = cameraState();
-      reported = key(state);
-      props.onViewChange?.(state);
+      if (!intent) return;
+      reported = key(intent.camera);
+      props.onViewChange?.(intent.camera);
     };
-    controls.addEventListener("end", report);
+    controls.addEventListener("end", () => {
+      dragging = false;
+      moved();
+    });
 
-    /** Shows `view`: animated once the view has shown a camera, e.g. on Reset, at once when it opens; `report` calls onViewChange at the end. */
-    const apply = (view: CameraState, report = false) => {
-      setTurn(undefined);
-      if (view.projection !== projection()) toggleProjection(false);
-      const to = { direction: new THREE.Vector3(...view.direction).normalize(), target: new THREE.Vector3(...view.target), distance: view.distance, zoom: view.zoom };
-      // As if framed from there, so that a build only reframes if the model doesn't fit.
-      framed = new THREE.Sphere(to.target.clone(), view.distance / 3);
-      radius = framed.radius;
-      if (shown) return moveTo(to, report);
-      shown = true;
-      place(to);
-    };
     createEffect(() => {
       const view = props.view;
       if (!view || key(view) === reported) return;
@@ -614,9 +885,11 @@ export function Viewer(props: ViewerProps) {
       // Indices may name other entities in the new shapes.
       setHovered(undefined);
       setSelected(undefined);
-      // A view that shows no camera yet opens at the model's Home, if it was moved (research/18, "Home").
-      if (!shown && props.home) apply(props.home);
-      else frame();
+      for (const r of rendered) r.mesh.geometry.computeBoundingBox();
+      bodyCorners = rendered.flatMap((r) => corners(r.mesh.geometry.boundingBox!));
+      radius = new THREE.Box3().setFromPoints(bodyCorners).getBoundingSphere(new THREE.Sphere()).radius || 50;
+      // A view that shows no camera yet opens at the model's Home (research/18, "Home").
+      refit();
       setRenders((n) => n + 1);
     });
 
@@ -932,7 +1205,7 @@ export function Viewer(props: ViewerProps) {
       cubeDown = undefined;
       if (cubeElement.hasPointerCapture(event.pointerId)) cubeElement.releasePointerCapture(event.pointerId);
       delete container.dataset["orbiting"];
-      if (down.orbiting) return report();
+      if (down.orbiting) return moved();
       const region = cancelled ? undefined : cube.regionAt(cubeNdc(event.clientX, event.clientY));
       if (region) turnTo(regionDirection(region));
     };
@@ -1004,6 +1277,19 @@ export function Viewer(props: ViewerProps) {
         return { x: Math.round(rect.left + ((ndc.x + 1) / 2) * rect.width), y: Math.round(rect.top + ((1 - ndc.y) / 2) * rect.height) };
       },
       cameraDirection: () => direction().toArray() as [number, number, number],
+      onScreen(points) {
+        const all = points?.map((p) => new THREE.Vector3(...p)) ?? rendered.flatMap((r) => {
+          const position = r.mesh.geometry.getAttribute("position");
+          return Array.from({ length: position.count }, (_, i) => new THREE.Vector3().fromBufferAttribute(position, i));
+        });
+        const ndc = all.map((p) => p.clone().project(camera));
+        const box = new THREE.Box2().setFromPoints(ndc.map((v) => new THREE.Vector2(v.x, v.y)));
+        const size = box.getSize(new THREE.Vector2());
+        const center = box.getCenter(new THREE.Vector2());
+        return { inView: ndc.every((v) => Math.abs(v.x) <= 1 + 1e-9 && Math.abs(v.y) <= 1 + 1e-9), fill: Math.max(size.x, size.y) / 2, center: [center.x, center.y] };
+      },
+      intent: () => intent?.camera,
+      eye: () => camera.position.toArray() as [number, number, number],
       peerMarkers: () =>
         [...markers].map(([key, m]) => {
           const p = toScreen(m.point);
@@ -1028,14 +1314,8 @@ export function Viewer(props: ViewerProps) {
       },
     };
     (container as HTMLDivElement & { cadViewer?: ViewerTestHook }).cadViewer = hook;
-    const homeCamera = (): CameraState | undefined => {
-      if (props.home) return props.home;
-      const box = new THREE.Box3().setFromObject(group);
-      if (box.isEmpty()) return undefined;
-      const sphere = box.getBoundingSphere(new THREE.Sphere());
-      return { direction: vector(HOME_DIRECTION), target: vector(sphere.center), distance: round(sphere.radius * 3), projection: projection(), zoom: 1 };
-    };
-    props.onApi?.({ camera: cameraState, home: () => home(), homeCamera });
+    const homeCamera = (): CameraState | undefined => (props.home ? cameraOf(props.home) : modelPoints().length ? defaultHome() : undefined);
+    props.onApi?.({ camera: () => intent?.camera, home: () => home(), homeCamera });
 
     onCleanup(() => {
       cancelAnimationFrame(frameId);

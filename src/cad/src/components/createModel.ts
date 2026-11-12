@@ -5,6 +5,10 @@ import type { Imports } from "../kernel/imports.ts";
 import { createImports } from "./imports.ts";
 import type { BuildParams, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
 import type { CadModelDoc } from "../types.ts";
+import type { FaceRefs } from "./Viewer.tsx";
+
+/** The model's worker turning faces into references and back, for close-ups (research/20, "Close-ups"). */
+export const faceRefs = (model: Model): FaceRefs => ({ refs: (faces) => model.engine.refs(faces), locate: (bodies, refs) => model.engine.locate(bodies, refs) });
 
 export type ModelStatus = "loading" | "init-failed" | "building" | "error" | "ready";
 

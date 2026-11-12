@@ -10,7 +10,7 @@ import type { CadModelDoc, CameraState } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
 
-const camera = (x: number): CameraState => ({ direction: [x, -1, 0], target: [1, 2, 3], distance: 100, projection: "perspective", zoom: 1 });
+const camera = (x: number): CameraState => ({ direction: [x, -1, 0], target: [1, 2, 3], extent: [100, 50], projection: "perspective" });
 const model = (): DocHandle<CadModelDoc> => new Repo().create<CadModelDoc>({ title: "m", content: "", mimeType: MODEL_MIME_TYPE });
 
 test("views are added, renamed, updated and removed by id", () => {

@@ -21,6 +21,7 @@ import {
   clickHome,
   clickViewCube,
   cadView,
+  hideSidebars,
 } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu, typeAtStart } from "../ui.ts";
@@ -69,6 +70,8 @@ async function twoUsers(users: (n: number) => Promise<{ page: Page }[]>) {
   await bootToFrame(a.page);
   await createViaMenu(a.page, "CAD Model");
   await expect(editorView(a.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  // A picks in the view, which feature dialogs partly cover: without the sidebars, the model shows beside them.
+  await hideSidebars(a.page);
   await bootToFrame(b.page, docPathWith(a.page));
   await expect(cadView(b.page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
   await openCode(b.page);

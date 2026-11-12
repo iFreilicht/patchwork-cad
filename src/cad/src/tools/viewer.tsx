@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { render } from "solid-js/web";
 import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
-import { createModel, modelAttributes } from "../components/createModel.ts";
+import { createModel, faceRefs, modelAttributes } from "../components/createModel.ts";
 import { StatusBar } from "../components/StatusBar.tsx";
 import { createEntityName } from "../components/entityName.ts";
 import { createPeerHighlights, joinPresence, peerMarkers } from "../components/presence.ts";
@@ -113,7 +113,7 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} home={views.home()} collapseViewCube {...presence} />
+      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
       {popover(() => root)}
       <StatusBar model={model} />
     </div>
@@ -209,7 +209,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   return (
     <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"} data-configuration={configuration()?.name ?? ""} data-configuration-deleted={configurationDeleted() ? "true" : "false"}>
       <div class="cad-embed__stage" ref={stage}>
-        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={onViewChange} onApi={(api) => (viewer = api)} home={views.home()} collapseViewCube {...presence} />
+        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={onViewChange} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
         <div class="cad-embed__edit">
           <select class="cad-editor__button" aria-label="View" title={deleted() ? "This view was deleted from the model; choose another" : "The model's view this embed shows"} onChange={(event) => choose(event.currentTarget.value)}>
             <Show when={!view()}>

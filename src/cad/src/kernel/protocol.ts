@@ -103,6 +103,8 @@ export type WorkerRequest =
   | { type: "result"; id: number; body: string }
   /** The volume feature `feature` of the last build added or removed, meshed, for hovering a feature whose schema says `hover: "difference"`. */
   | { type: "difference"; id: number; feature: string }
+  /** The references to faces of the last build, as data, e.g. what a close-up shows (research/20). */
+  | { type: "refs"; id: number; faces: { body: string; index: number }[] }
   /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
   | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
@@ -116,6 +118,8 @@ export type WorkerResponse =
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[] }
   | { type: "picked"; id: number; code: string; ref: RefData }
+  /** For each of the request's faces, its reference, null if it has none, e.g. its body is gone. */
+  | { type: "refsMade"; id: number; refs: (RefData | null)[] }
   /** For each of the request's refs, the entities it names, by body. */
   | { type: "located"; id: number; found: { body: string; indices: number[] }[][] }
   | { type: "resultMeshed"; id: number; shape: MeshedShape | undefined }

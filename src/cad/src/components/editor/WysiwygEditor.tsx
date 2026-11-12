@@ -6,7 +6,7 @@ import type { Span } from "../../model/analyze.ts";
 import { ownersOf, type Entry, type FeatureEntry } from "../../model/timeline.ts";
 import type { CadModelDoc, CameraState, NamedView } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
-import { createModel, modelAttributes } from "../createModel.ts";
+import { createModel, faceRefs, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
 import { Viewer, type Entity, type Highlight, type ViewerApi } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
@@ -407,6 +407,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onViewChange={saveCamera}
           onApi={(api) => (viewer = api)}
           home={views.views.home()}
+          faceRefs={faceRefs(model)}
           homeHovered={homeHovered()}
         />
         <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} promote={params.promote} />}</Show>

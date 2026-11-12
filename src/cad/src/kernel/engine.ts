@@ -6,7 +6,7 @@ export type BuildResult =
   | { ok: false; source: string; params: BuildParams | undefined; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" | "refsMade" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -86,6 +86,12 @@ export class Engine {
     return answer.type === "picked" ? { code: answer.code, ref: answer.ref } : { code: "", ref: undefined };
   }
 
+  /** The references to `faces` of the last build, as data, null for a face that has none. */
+  async refs(faces: { body: string; index: number }[]): Promise<(RefData | null)[]> {
+    const answer = await this.#request({ type: "refs", id: this.#nextId++, faces });
+    return answer.type === "refsMade" ? answer.refs : faces.map(() => null);
+  }
+
   /** For each of `refs`, the entities it names in bodies `bodies` of the last build. */
   async locate(bodies: string[], refs: RefData[]): Promise<{ body: string; indices: number[] }[][]> {
     const answer = await this.#request({ type: "locate", id: this.#nextId++, bodies, refs });
@@ -134,7 +140,7 @@ export class Engine {
         this.#loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "differenceMeshed" || message.type === "checked" || message.type === "located" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "differenceMeshed" || message.type === "checked" || message.type === "located" || message.type === "refsMade" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));

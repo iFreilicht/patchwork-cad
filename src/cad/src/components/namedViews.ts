@@ -2,6 +2,7 @@ import { createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { addView, freeName, nameProblem, namedViews, newId, removeView, renameView, setHome, updateView } from "../model/views.ts";
 import type { CadModelDoc, CameraState, NamedView } from "../types.ts";
+import { cameraOf } from "./framing.ts";
 import { nearestRegion, regionName } from "./ViewCube.ts";
 
 export interface NamedViews {
@@ -25,8 +26,12 @@ export function createNamedViews(handle: DocHandle<CadModelDoc>): NamedViews {
   handle.on("change", onChange);
   onCleanup(() => handle.off("change", onChange));
   // Edits of the code mustn't look like a change of the views.
-  const views = createMemo(() => namedViews(doc()), [], { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
-  const home = createMemo(() => doc()?.cad?.home, undefined, { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
+  // Cameras stored before research/20 read as the new form.
+  const views = createMemo(() => namedViews(doc()).map((v) => ({ ...v, camera: cameraOf(v.camera) })), [], { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
+  const home = createMemo(() => {
+    const stored = doc()?.cad?.home;
+    return stored && cameraOf(stored);
+  }, undefined, { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
   return {
     views,
     home,

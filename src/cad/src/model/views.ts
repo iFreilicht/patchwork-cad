@@ -1,11 +1,11 @@
-import type { CadModelDoc, CameraState, NamedView } from "../types.ts";
+import type { CadModelDoc, CameraState, NamedView, StoredCamera } from "../types.ts";
 
 /**
  * Named views (research/18-named-views.md): cameras that belong to the model, kept in its document
  * next to the code, under `cad.views`. The edits below run inside a `change` of the model document.
  */
 
-export const namedViews = (doc: CadModelDoc | undefined): NamedView[] => doc?.cad?.views ?? [];
+export const namedViews = (doc: CadModelDoc | undefined): NamedView<StoredCamera>[] => doc?.cad?.views ?? [];
 
 /** The id of the Home view, which every model has: an embed of it names it so (research/18, "Home"). */
 export const HOME = "home";
@@ -38,8 +38,9 @@ export function nameProblem(items: readonly Named[], id: string, name: string, n
 /** A new id, never the Home view's. */
 export const newId = () => crypto.randomUUID().slice(0, 8);
 
-/** A copy that shares no arrays with `camera`, which may be another document's. */
-const copy = (camera: CameraState): CameraState => ({ ...camera, direction: [...camera.direction], target: [...camera.target] });
+/** A copy that shares nothing with `camera`, which may be another document's, and has no undefined fields, which Automerge rejects. */
+export const copyCamera = (camera: CameraState): CameraState => JSON.parse(JSON.stringify(camera)) as CameraState;
+const copy = copyCamera;
 
 export function addView(doc: CadModelDoc, view: NamedView): void {
   // An assignment evaluates to the plain object, not to the document's proxy of it: read back.

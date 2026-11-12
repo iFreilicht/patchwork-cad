@@ -2,21 +2,55 @@ import type { AutomergeUrl } from "@automerge/automerge-repo";
 import type { MODEL_MIME_TYPE } from "./datatype.ts";
 import type { RefData } from "./kernel/protocol.ts";
 
-/** How a 3D view looks at the model: from `direction` towards `target`, `distance` away. */
+/** Distances from a fitted rectangle to the visible one's edges, as fractions of its height (top, bottom) or width (right, left). */
+export type Margins = [top: number, right: number, bottom: number, left: number];
+
+/**
+ * How a 3D view looks at the model (research/20-view-framing.md): from `direction` towards
+ * `target`, showing at least the rectangle `extent` (width, height, in model units) around the
+ * target, as SVG's `meet` fits a viewBox into any viewport.
+ */
 export interface CameraState {
+  direction: [number, number, number];
+  target: [number, number, number];
+  extent: [number, number];
+  projection: "perspective" | "orthographic";
+  /**
+   * How far the eye is from what the camera shows, in multiples of the distance at which the
+   * rectangle it shows (the extent, or the fit with its margins) just fits a square 45° view; 1 if not
+   * given. The eye stays there in any viewport, whose field of view widens or narrows instead.
+   */
+  eye?: number;
+  /** The camera shows the whole model, with these margins around it; it fits them again when shown, and target and extent follow. */
+  fit?: Margins;
+  /** A close-up follows what it shows, if it was saved as a view (research/20, "Close-ups"). */
+  subject?: CameraSubject;
+}
+
+/** What a close-up shows: faces and sketches, and its margins around them. */
+export interface CameraSubject {
+  faces: RefData[];
+  sketches: string[];
+  fit: Margins;
+}
+
+/** A camera as stored before research/20: `distance` from the target, and the orthographic camera's zoom. */
+export interface LegacyCamera {
   direction: [number, number, number];
   target: [number, number, number];
   distance: number;
   projection: "perspective" | "orthographic";
-  /** The orthographic camera's zoom. */
   zoom: number;
 }
+
+/** A camera as a document may hold it; read it with `cameraOf` (`components/framing.ts`). */
+export type StoredCamera = CameraState | LegacyCamera;
 
 /** One user's UI state for one model document. */
 export interface DocUiState {
   codeOpen?: boolean;
   /** The last camera of each tool, by tool id. */
-  views?: Record<string, CameraState>;
+  views?: Record<string, StoredCamera>;
   /** The timeline marker, if it isn't at the end (research/07, "The timeline marker"). */
   marker?: TimelineMarker;
   /** Whether the browser pane is open; it is by default. */
@@ -77,9 +111,9 @@ export interface CadModelDoc {
 
 /** The tools' data in a model document, next to its code. */
 export interface CadData {
-  views?: NamedView[];
+  views?: NamedView<StoredCamera>[];
   /** Where the Home view looks from, if the model's users changed it; else the ViewCube's Home framing (research/18, "Home"). */
-  home?: CameraState;
+  home?: StoredCamera;
   configurations?: Configuration[];
 }
 
@@ -99,10 +133,10 @@ export interface Configuration {
 }
 
 /** A camera that belongs to the model, by name (research/18-named-views.md). */
-export interface NamedView {
+export interface NamedView<Camera = CameraState> {
   id: string;
   name: string;
-  camera: CameraState;
+  camera: Camera;
 }
 
 /** A comment thread in Patchwork's format (patchwork-base codemirror-base/src/lib/extensions/comments.ts), with our anchor. */
