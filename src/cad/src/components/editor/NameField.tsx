@@ -22,7 +22,11 @@ export function NameField(props: { from: string; rename: (to: string) => Promise
         });
       }}
       onKeyDown={(event) => {
-        if (event.key === "Escape") return props.onDone();
+        if (event.key === "Escape") {
+          // Cancelling is what Escape does here, not closing the dialog.
+          event.preventDefault();
+          return props.onDone();
+        }
         if (event.key !== "Enter") return;
         // Else Enter's keypress activates the button that gets the focus back when the field closes.
         event.preventDefault();

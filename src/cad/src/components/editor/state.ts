@@ -1,12 +1,12 @@
 /**
  * State of the WYSIWYG editor. Everything is derived from the document's source text and the last
  * build's trace; the editor owns no model state of its own (research/02, "The timeline is a
- * view"). The open feature is anchored with an automerge cursor, so that it stays open while others
- * edit the code around it, or rename it.
+ * view"). The selected item is anchored with an automerge cursor, so that it stays selected while
+ * others edit the code around it, or rename it.
  */
 import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
-import { createEffect, createMemo, createSignal, onCleanup, type Accessor } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
 import { schemas, type FeatureType, type ParamSpec } from "@patchwork-cad/features/schema";
 import { analyze, returnedOutputs, type Analysis, type FeatureCall } from "../../model/analyze.ts";
 import { allowedRange, canMove, graph, inputOf, paramRole, relations, type Graph, type Relation } from "../../model/deps.ts";
@@ -63,15 +63,44 @@ export interface LaneHover {
   version: string;
 }
 
+export type SelectionKind = "feature" | "script" | "params" | "configuration" | "return" | "view";
+/** Where a selection was made: that pane doesn't scroll to it. */
+export type SelectionFrom = "browser" | "timeline" | "code" | "view" | "dialog" | "toolbar";
+
+/**
+ * The selected item (research/19-selection.md, "The selection"). A timeline entry's `id` is an
+ * automerge cursor at the start of its code; a configuration's or a view's is its own (`""` is
+ * Defaults); the parameters and the return have none.
+ */
+export interface Selection {
+  kind: SelectionKind;
+  id: string;
+  from: SelectionFrom;
+}
+
+/** What can be selected: a timeline entry by its index, or another item. */
+export type Selectable = { kind: "entry"; index: number } | { kind: "params" | "return" } | { kind: "configuration" | "view"; id: string };
+
 export interface Editor {
   source: Accessor<string>;
   /** The last source that parsed, with its timeline; forms are read-only while the code doesn't parse. */
   analysis: Accessor<Analysis | undefined>;
   timeline: Accessor<Timeline>;
   syntaxError: Accessor<string | undefined>;
-  /** The feature whose dialog is open. */
+  /** The one selected item, whose dialog is open (research/19-selection.md); changes only when something else is selected. */
+  selection: Accessor<Selection | undefined>;
+  /** Selects an item, or nothing; ends picking. */
+  select(item: Selectable | undefined, from: SelectionFrom): void;
+  /** Whether `item` is the selected one, e.g. to close it with a click on it. */
+  isSelected(item: Selectable): boolean;
+  /** The selected timeline entry, a feature's or a Custom Script's, by index; kept while the code doesn't parse. */
+  selectedIndex: Accessor<number | undefined>;
+  /** The selected entry as `{ kind, id }` for collaborators: an automerge cursor at the start of its code. */
+  shared: Accessor<{ kind: SelectionKind; id: string } | undefined>;
+  /** The timeline entry a collaborator's selection `{ kind, id }` stands for, if it is one. */
+  entryOf(selection: { kind: string; id: string } | undefined): number | undefined;
+  /** The selected feature, if it has a dialog: not a body() (research/11). */
   open: Accessor<FeatureEntry | undefined>;
-  openFeature(entry: FeatureEntry | undefined): void;
   pickTarget: Accessor<PickTarget | undefined>;
   setPickTarget(target: PickTarget | undefined): void;
   /**
@@ -239,51 +268,131 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     return a && lastGood ? timeline(lastGood.source, a, model.trace()) : { entries: [], returned: undefined };
   });
 
-  // The open feature: an automerge cursor at its call, which survives renames and edits around it,
-  // and its variable name as a fallback for when the whole text was replaced, which loses cursors.
-  const [cursor, setCursor] = createSignal<string>();
-  const [openName, setOpenName] = createSignal<string>();
   const [pickTarget, setPickTarget] = createSignal<PickTarget>();
   const doc = () => handle.doc()!;
 
-  /** Where the open feature's call starts now: at its cursor, or else at its variable. */
-  const openOffset = (a: Analysis | undefined): number | undefined => {
-    const c = cursor();
-    if (!c || !a) return undefined;
+  // The selection (research/19-selection.md). A timeline entry is anchored with an automerge cursor
+  // at the start of its code, a feature's call, which survives renames and edits around it; and with
+  // its variable name, or a Custom Script's index, for when the whole text was replaced, which loses
+  // cursors, and while the code doesn't parse, when offsets don't match the timeline shown.
+  const [selection, setSelection] = createSignal<Selection>();
+  const [anchor, setAnchor] = createSignal<{ cursor: string | undefined; name: string | undefined; index: number }>();
+  /** Where an entry's anchor is, from where its code starts. */
+  const anchorAt = (entry: Entry) => (entry.kind === "feature" ? entry.call.span.start : entry.span.start);
+  /** A cursor's offset in the document, unless its text is gone. */
+  const offsetOf = (cursor: string | undefined): number | undefined => {
+    if (!cursor) return undefined;
     try {
-      const offset = getCursorPosition(doc(), ["content"], c);
-      if (a.calls.some((x) => x.span.start === offset)) return offset;
+      return getCursorPosition(doc(), ["content"], cursor);
     } catch {
-      // The cursor's text is gone.
+      return undefined;
     }
-    return a.calls.find((x) => x.variable === openName())?.span.start;
   };
-
-  const open = createMemo(() => {
-    if (syntaxError()) return undefined;
-    const offset = openOffset(analysis());
-    return tl().entries.find((e): e is FeatureEntry => e.kind === "feature" && e.call.span.start === offset);
+  /** The entry of kind `kind` anchored at `offset`: a feature's call starts there, a Custom Script is the first entry that ends after it. */
+  const entryAtOffset = (entries: Entry[], kind: string, offset: number): number => {
+    if (kind === "feature") return entries.findIndex((e) => e.kind === "feature" && e.call.span.start === offset);
+    const index = entries.findIndex((e) => e.span.end > offset);
+    return entries[index]?.kind === "script" ? index : -1;
+  };
+  /** The entry an anchor stands for: by its cursor, else a feature by its name, a Custom Script by its index if the cursor is lost. */
+  const resolve = (entries: Entry[], kind: SelectionKind, a: { cursor: string | undefined; name: string | undefined; index: number }, byOffset: boolean): number | undefined => {
+    const offset = byOffset ? offsetOf(a.cursor) : undefined;
+    if (offset !== undefined) {
+      const index = entryAtOffset(entries, kind, offset);
+      if (index >= 0) return index;
+      if (kind === "script") return undefined;
+    }
+    if (kind === "feature") {
+      const index = entries.findIndex((e) => e.kind === "feature" && e.name === a.name);
+      return index < 0 ? undefined : index;
+    }
+    return entries[a.index]?.kind === "script" ? a.index : undefined;
+  };
+  /** The selection the selected entry was last resolved for, which it keeps while the code doesn't parse. */
+  let resolvedFor: Selection | undefined;
+  const selectedIndex = createMemo<number | undefined>((previous) => {
+    const s = selection();
+    const a = anchor();
+    source();
+    if (!s || !a || (s.kind !== "feature" && s.kind !== "script")) return undefined;
+    const entries = tl().entries;
+    // While the code doesn't parse, the timeline is the last valid one: the entry stays, or another is selected in it.
+    if (syntaxError()) return resolvedFor === s && previous !== undefined ? previous : resolve(entries, s.kind, a, false);
+    resolvedFor = s;
+    return resolve(entries, s.kind, a, true);
   });
-
-  // Follow renames, so that the fallback name stays current.
+  // Follow renames, moves and lost cursors, so that the fallbacks stay current. A deleted entry is no
+  // longer selected; a feature whose statement only stops being one for a while, e.g. while a
+  // collaborator's `//` comments out the import above it, stays selected while its name is in the code.
   createEffect(() => {
-    const name = open()?.name;
-    if (name && name !== openName()) setOpenName(name);
+    const s = selection();
+    const index = selectedIndex();
+    if (!s || (s.kind !== "feature" && s.kind !== "script") || syntaxError()) return;
+    const a = untrack(anchor);
+    if (index === undefined) {
+      const name = s.kind === "feature" ? a?.name : undefined;
+      if (!name || !new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}($|[^\\w$])`).test(source())) setSelection(undefined);
+      return;
+    }
+    const entry = tl().entries[index]!;
+    const name = entry.kind === "feature" ? entry.name : undefined;
+    const lost = offsetOf(a?.cursor) === undefined;
+    if (a && !lost && a.name === name && a.index === index) return;
+    setAnchor({ cursor: lost ? getCursor(doc(), ["content"], anchorAt(entry)) : a?.cursor, name, index });
+  });
+  const open = createMemo(() => {
+    const index = selectedIndex();
+    const entry = index === undefined ? undefined : tl().entries[index];
+    return entry?.kind === "feature" && entry.type !== "body" ? entry : undefined;
   });
 
-  const openFeature = (entry: FeatureEntry | undefined) => {
-    setPickTarget(undefined);
-    setCursor(entry ? getCursor(doc(), ["content"], entry.call.span.start) : undefined);
-    setOpenName(entry?.name);
+  const select = (item: Selectable | undefined, from: SelectionFrom) =>
+    batch(() => {
+      setPickTarget(undefined);
+      if (item?.kind !== "entry") {
+        setAnchor(undefined);
+        setSelection(item ? { kind: item.kind, id: "id" in item ? item.id : "", from } : undefined);
+        return;
+      }
+      const entry = tl().entries[item.index];
+      if (!entry) return;
+      // While the code doesn't parse, offsets are the last valid code's: the fallbacks anchor it until it parses again.
+      const cursor = syntaxError() ? undefined : getCursor(doc(), ["content"], anchorAt(entry));
+      setAnchor({ cursor, name: entry.kind === "feature" ? entry.name : undefined, index: item.index });
+      setSelection({ kind: entry.kind, id: cursor ?? "", from });
+    });
+  const isSelected = (item: Selectable): boolean => {
+    const s = selection();
+    if (!s) return false;
+    if (item.kind === "entry") return selectedIndex() === item.index;
+    // The parameters entry stands for the configurations, too.
+    if (item.kind === "params") return s.kind === "params" || s.kind === "configuration";
+    return s.kind === item.kind && ("id" in item ? item.id === s.id : true);
+  };
+  const shared = () => {
+    const s = selection();
+    if (!s) return undefined;
+    return s.kind === "feature" || s.kind === "script" ? { kind: s.kind, id: anchor()?.cursor ?? "" } : { kind: s.kind, id: s.id };
+  };
+  const entryOf = (s: { kind: string; id: string } | undefined): number | undefined => {
+    if (!s || (s.kind !== "feature" && s.kind !== "script") || syntaxError()) return undefined;
+    source();
+    const offset = offsetOf(s.id);
+    const index = offset === undefined ? -1 : entryAtOffset(tl().entries, s.kind, offset);
+    return index < 0 ? undefined : index;
   };
 
   /** The open feature's call, re-analyzed from the document as it is now. */
   const current = (): { call: FeatureCall; analysis: Analysis; source: string } | undefined => {
     const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
-    const offset = openOffset(a);
-    const call = a?.calls.find((x) => x.span.start === offset);
-    return call && a ? { call, analysis: a, source: text } : undefined;
+    const s = selection();
+    const at = anchor();
+    if (!a || s?.kind !== "feature" || !at) return undefined;
+    const entries = timeline(text, a, []).entries;
+    const index = resolve(entries, "feature", at, true);
+    const entry = index === undefined ? undefined : entries[index];
+    return entry?.kind === "feature" ? { call: entry.call, analysis: a, source: text } : undefined;
   };
 
   const editOpen = (edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]) => {
@@ -320,10 +429,15 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     const hides = type === "extrude" ? sketch : undefined;
     apply(handle, insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) }));
     const after = tryAnalyze(doc().content).analysis;
-    const call = after?.calls.find((x) => x.variable === name);
-    if (!call) return;
-    setCursor(getCursor(doc(), ["content"], call.span.start));
-    setOpenName(name);
+    const entries = after ? timeline(doc().content, after, []).entries : [];
+    const index = entries.findIndex((e) => e.kind === "feature" && e.name === name);
+    const entry = entries[index];
+    if (entry?.kind !== "feature") return;
+    const cursor = getCursor(doc(), ["content"], entry.call.span.start);
+    batch(() => {
+      setAnchor({ cursor, name, index });
+      setSelection({ kind: "feature", id: cursor, from: "toolbar" });
+    });
     setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : type === "combine" ? { param: "tools", kind: "body", multi: true } : undefined);
   };
 
@@ -334,7 +448,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     if (!entry || !a) return;
     const fresh = timeline(text, a, []).entries.find((e): e is FeatureEntry => e.kind === "feature" && e.name === entry.name);
     if (!fresh) return;
-    openFeature(undefined);
+    select(undefined, "dialog");
     apply(handle, deleteFeature(text, a, fresh));
   };
 
@@ -516,9 +630,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
   const focused = () => {
     const d = dragging() ?? (pickingVersion() ? undefined : hovered());
-    if (d !== undefined) return d;
-    const index = tl().entries.findIndex((e) => e === open());
-    return index < 0 ? undefined : index;
+    return d ?? selectedIndex();
   };
   const related = createMemo(() => {
     const index = focused();
@@ -693,10 +805,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   });
   const wrap = (index: number) => refactorEntry(index, wrapInBody, `Wrapping ${labelOf(tl().entries[index])} in body()`, true);
   const unwrap = (index: number) => refactorEntry(index, unwrapBody, `Unwrapping ${labelOf(tl().entries[index])}`);
-  const remove = (index: number) => {
+  const remove = async (index: number) => {
     const entry = tl().entries[index];
-    if (entry?.kind === "feature" && open() === entry) openFeature(undefined);
-    return refactorEntry(
+    // Selected, it closes once it is gone; a deletion that is refused leaves its dialog open, with why.
+    const selected = selectedIndex() === index ? selection() : undefined;
+    const why = await refactorEntry(
       index,
       (text, a, fresh, i) => {
         const e = fresh.entries[i]!;
@@ -704,6 +817,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       },
       `Deleting ${labelOf(entry)}`,
     );
+    if (!why && selected && selection() === selected) select(undefined, "timeline");
+    return why;
   };
 
   /** The entry in a fresh timeline that is entry `index` of the shown one. */
@@ -756,8 +871,13 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     analysis,
     timeline: tl,
     syntaxError,
+    selection,
+    select,
+    isSelected,
+    selectedIndex,
+    shared,
+    entryOf,
     open,
-    openFeature,
     pickTarget,
     setPickTarget,
     editOpen,

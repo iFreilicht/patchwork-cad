@@ -99,7 +99,8 @@ export function TimelineLanes(props: {
   picking: boolean;
   pickable: (version: string) => boolean;
   onHover: (target: LaneTarget | undefined) => void;
-  onClick: (target: LaneTarget) => void;
+  /** A click on a target, or on none: empty space, as in the rest of the timeline. */
+  onClick: (target: LaneTarget | undefined) => void;
 }) {
   const height = () => lanesHeight(props.lanes.rows);
   const id = `cad-lanes-${Math.random().toString(36).slice(2)}`;
@@ -153,10 +154,7 @@ export function TimelineLanes(props: {
         style={{ cursor: cursor() }}
         onPointerMove={(event) => props.onHover(at(event))}
         onPointerLeave={() => props.onHover(undefined)}
-        onClick={(event) => {
-          const target = at(event);
-          if (target) props.onClick(target);
-        }}
+        onClick={(event) => props.onClick(at(event))}
       />
     </svg>
   );

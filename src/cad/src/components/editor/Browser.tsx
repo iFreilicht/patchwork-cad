@@ -1,4 +1,4 @@
-import { createSignal, For, Index, Show } from "solid-js";
+import { createEffect, createSignal, For, Index, on, Show, untrack } from "solid-js";
 import type { AutomergeUrl } from "@automerge/automerge-repo";
 import { dragDocument } from "../embed.ts";
 import type { NamedViews } from "../namedViews.ts";
@@ -10,7 +10,7 @@ import type { Bodies, BodyRow } from "./bodies.ts";
 import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
 import { NameField } from "./NameField.tsx";
-import type { Editor } from "./state.ts";
+import type { Editor, Selectable } from "./state.ts";
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
 export const EyeIcon = (props: { open: boolean }) => (
@@ -32,12 +32,30 @@ export const EyeIcon = (props: { open: boolean }) => (
   </svg>
 );
 
-/** What the browser's rows share: the row being renamed, by its key, and opening a row's menu. */
+/** What the browser's rows share: the row being renamed, by its key, opening a row's menu, and collaborators' selections. */
 interface RowState {
   renaming: () => string | undefined;
   setRenaming(key: string | undefined): void;
   openMenu(row: BodyRow, x: number, y: number): void;
+  peers: () => BrowserPeer[];
 }
+
+/** A collaborator's selection, as the browser marks it: the timeline entry, view or configuration they selected. */
+export interface BrowserPeer {
+  color: string;
+  entry?: number;
+  view?: string;
+  configuration?: string;
+}
+
+/**
+ * Selects an item with a click, or closes it with a click on it if it is selected; not with a double
+ * click's second click, which renames it (research/19-selection.md, "The selection").
+ */
+const toggle = (editor: Editor, item: Selectable, event: MouseEvent, selected = editor.isSelected(item)) => {
+  if (!selected) editor.select(item, "browser");
+  else if (event.detail < 2) editor.select(undefined, "browser");
+};
 
 /** The named views the browser lists (research/18-named-views.md, "In the editor"), and the camera they come from and go to. */
 export interface ViewsSection {
@@ -57,7 +75,7 @@ export interface ViewsSection {
 }
 
 /**
- * One row: the eye and the name, which opens the body's last feature or picks it. Its context menu
+ * One row: the eye and the name, which selects the body's last feature, or picks it. Its context menu
  * (a right-click, the context-menu key or Shift+F10) renames it, also F2 or a double click: a
  * returned body's key, else its variable (research/15, "Output").
  */
@@ -73,13 +91,17 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow; state: RowSt
   const label = () => props.row.name;
   const detail = () => (props.row.version !== props.row.name ? props.row.version : undefined);
   const pickable = () => props.editor.pickingVersion() && props.editor.pickable(props.row.version);
-  const select = () => {
+  /** The timeline entry that made the row's version. */
+  const entry = () => props.editor.lanes()?.versions.get(props.row.version)?.entry;
+  const selected = () => entry() !== undefined && props.editor.selectedIndex() === entry();
+  const peer = () => props.state.peers().find((p) => p.entry !== undefined && p.entry === entry())?.color;
+  const select = (event: MouseEvent) => {
     if (props.editor.pickingVersion()) {
       props.editor.setNotice(props.editor.pickVersion(props.row.version));
       return;
     }
-    const entry = props.editor.timeline().entries.find((e) => e.kind === "feature" && e.names.includes(props.row.version));
-    if (entry?.kind === "feature" && entry.type !== "body") props.editor.openFeature(entry);
+    const index = entry();
+    if (index !== undefined) toggle(props.editor, { kind: "entry", index }, event, selected());
   };
   const hover = () => props.editor.setHoveredLane({ lane: props.row.lane, version: props.row.version });
   return (
@@ -94,6 +116,9 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow; state: RowSt
       data-pickable={props.editor.pickingVersion() ? (pickable() ? "true" : "false") : undefined}
       data-picked={props.editor.pickedVersions().includes(props.row.version) ? "true" : undefined}
       data-hovered={props.editor.highlightedLanes().has(props.row.lane) ? "true" : undefined}
+      data-selected={selected() ? "true" : undefined}
+      data-peer={peer() ? "true" : undefined}
+      style={peer() ? { "--peer-color": peer() } : {}}
       onPointerEnter={hover}
       onPointerLeave={() => props.editor.setHoveredLane(undefined)}
       onContextMenu={(event) => {
@@ -119,6 +144,7 @@ function Row(props: { editor: Editor; bodies: Bodies; row: BodyRow; state: RowSt
           class="cad-editor__browser-name"
           title={detail() ? `${label()}, as of ${detail()}` : label()}
           disabled={props.editor.pickingVersion() && !pickable()}
+          aria-pressed={selected()}
           onClick={select}
           onDblClick={() => !props.editor.pickingVersion() && setRenaming(true)}
           onKeyDown={(event) => {
@@ -162,15 +188,31 @@ function BodyList(props: { editor: Editor; bodies: Bodies; kind: "body" | "sketc
  * The browser (research/15, "The browser"): what exists at the timeline marker, with an eye that
  * shows or hides it for this user only. Before the return, that is every body and sketch that no
  * feature used yet; past it, what main returns. Hovering a row highlights the body, its lane and
- * its features; clicking it opens its last feature, or picks it. Its context menu renames it, and
- * hides or shows it.
+ * its features; clicking it selects its last feature, or picks it. Its context menu renames it, and
+ * hides or shows it. The rows of the selected item are marked, and scroll into view when it is
+ * selected elsewhere (research/19-selection.md).
  */
-export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSection; params: ParamsController; onHoverConfiguration: (hovered: boolean) => void; embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined }) {
+export function Browser(props: {
+  editor: Editor;
+  bodies: Bodies;
+  views: ViewsSection;
+  params: ParamsController;
+  peers: BrowserPeer[];
+  onHoverConfiguration: (hovered: boolean) => void;
+  embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined;
+}) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
   /** The open context menu: its items, and the key of the row it is for. */
   const [menu, setMenu] = createSignal<{ key: string; label: string; items: MenuItem[]; x: number; y: number }>();
-  const state: RowState = { renaming, setRenaming, openMenu: (row, x, y) => setMenu({ key: row.key, label: `Actions for ${row.name}`, items: menuItems(row), x, y }) };
+  const state: RowState = { renaming, setRenaming, openMenu: (row, x, y) => setMenu({ key: row.key, label: `Actions for ${row.name}`, items: menuItems(row), x, y }), peers: () => props.peers };
+  createEffect(
+    on(props.editor.selection, (s) => {
+      if (!s || s.from === "browser") return;
+      // Once the rows have followed it, e.g. a configuration chosen elsewhere.
+      requestAnimationFrame(() => untrack(props.editor.selection) === s && aside.isConnected && aside.querySelector('[data-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    }),
+  );
   const nameOf = (key: string) => aside.querySelector<HTMLElement>(`.cad-editor__browser-row[data-key="${CSS.escape(key)}"] .cad-editor__browser-name`);
   /** Closes the menu, and gives the focus back to its row if it was operated with the keyboard. */
   const closeMenu = (refocus: boolean) => {
@@ -199,8 +241,8 @@ export function Browser(props: { editor: Editor; bodies: Bodies; views: ViewsSec
           <h3 class="cad-editor__browser-heading">Sketches</h3>
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
-        <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
-        <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} />
+        <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
+        <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
       </aside>
       {/* In the editor, not the browser, which would clip it. */}
       <Show when={menu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={aside.parentElement!} down onClose={closeMenu} />}</Show>
@@ -213,7 +255,7 @@ type OpenMenu = (menu: { key: string; label: string; items: MenuItem[]; x: numbe
 
 /**
  * Named things of the model in the browser, named views and configurations (research/18-named-views.md,
- * "In the editor"): "+" adds one, a click picks it, and its context menu renames it (also F2 or a
+ * "In the editor"): "+" adds one, a click selects it, and its context menu renames it (also F2 or a
  * double click) and has the given actions. The grip drags it out as an embed.
  */
 function NamedList<T extends { id: string; name: string }>(props: {
@@ -225,7 +267,16 @@ function NamedList<T extends { id: string; name: string }>(props: {
   addLabel: string;
   onAdd(): T | string | undefined;
   current(item: T): boolean;
-  select(item: T): void;
+  /** As what it is selected (research/19-selection.md). */
+  selectable(item: T): Selectable;
+  /** Whether it is selected: as itself, or as what it stands for, e.g. the configuration the parameters are shown with. */
+  selected(item: T): boolean;
+  /** The colour of the first collaborator who has it selected. */
+  peer(item: T): string | undefined;
+  /** Selects it, beyond the selection, e.g. moving the camera to a view. */
+  onSelect(item: T): void;
+  /** What a click on it does while it is selected instead of closing it, if anything; whether it did. */
+  again?(item: T): boolean;
   selectTitle(item: T): string;
   rename(item: T, to: string): string | undefined;
   /** The model's own items, Home and Defaults, which keep their name. */
@@ -278,6 +329,9 @@ function NamedList<T extends { id: string; name: string }>(props: {
                 data-name={item.name}
                 data-fixed={props.fixed(item) ? "true" : undefined}
                 data-current={props.current(item) ? "true" : undefined}
+                data-selected={props.selected(item) ? "true" : undefined}
+                data-peer={props.peer(item) ? "true" : undefined}
+                style={props.peer(item) ? { "--peer-color": props.peer(item) } : {}}
                 onPointerEnter={() => props.onHover?.(item)}
                 onPointerLeave={() => props.onHover?.(undefined)}
                 onContextMenu={(event) => {
@@ -303,7 +357,13 @@ function NamedList<T extends { id: string; name: string }>(props: {
                   <button
                     class="cad-editor__browser-name"
                     title={props.selectTitle(item)}
-                    onClick={() => props.select(item)}
+                    aria-pressed={props.selected(item)}
+                    onClick={(event) => {
+                      const selected = props.selected(item);
+                      if (selected && props.again?.(item)) return;
+                      if (!selected) props.onSelect(item);
+                      toggle(props.editor, props.selectable(item), event, selected);
+                    }}
                     onDblClick={() => rename(item)}
                     onKeyDown={(event) => {
                       if (event.key === "F2") {
@@ -329,21 +389,70 @@ function NamedList<T extends { id: string; name: string }>(props: {
 }
 
 /** A named view or Home, whose camera is unset until it is changed (research/18, "Home"). */
-type ViewItem = { id: string; name: string; camera: CameraState | undefined };
+export type ViewItem = { id: string; name: string; camera: CameraState | undefined };
+
+/** Home and the named views, as the browser lists them. */
+export const viewItems = (views: NamedViews): ViewItem[] => [{ id: HOME, name: "Home", camera: views.home() }, ...views.views()];
+
+/** Moves the camera to a view. */
+const goToView = (section: ViewsSection, view: ViewItem) => (view.camera ? section.goTo({ ...view, camera: view.camera }) : section.goHome());
+
+/** What a view's dialog and context menu offer: updating it to the current camera, and deleting it, or for Home resetting it if it was changed. */
+function viewActions(section: ViewsSection, view: ViewItem): (MenuItem & { disabled?: boolean })[] {
+  const views = section.views;
+  const update = () => {
+    const camera = section.camera();
+    if (!camera) return;
+    if (view.id === HOME) views.setHome(camera);
+    else views.update(view.id, camera);
+  };
+  return [
+    { label: "Update to current view", run: update },
+    view.id !== HOME
+      ? { label: "Delete", danger: true, run: () => views.remove(view.id) }
+      : {
+          label: "Reset to default",
+          disabled: !view.camera,
+          run: () => {
+            views.setHome(undefined);
+            // Goes there, to show where that is, once the view knows Home moved.
+            queueMicrotask(() => section.goHome());
+          },
+        },
+  ];
+}
+
+/** A view's dialog (research/19-selection.md, "A view's dialog"): its name, and what its context menu offers. */
+export function ViewDialog(props: { section: ViewsSection; view: ViewItem; onClose: () => void }) {
+  return (
+    <section class="cad-editor__dialog" aria-label={`View ${props.view.name}`} data-feature="view" data-view={props.view.id}>
+      <header class="cad-editor__dialog-header">
+        <strong>View</strong> <span>{props.view.name}</span>
+        <button class="cad-editor__link" aria-label="close" onClick={() => props.onClose()}>
+          ×
+        </button>
+      </header>
+      <footer class="cad-editor__dialog-footer">
+        <For each={viewActions(props.section, props.view)}>
+          {(action) => (
+            <button class="cad-editor__button" classList={{ "cad-editor__button--danger": !!action.danger }} disabled={action.disabled} onClick={() => void action.run()}>
+              {action.label}
+            </button>
+          )}
+        </For>
+      </footer>
+    </section>
+  );
+}
 
 /**
  * The named views, Home first: "+" adds one from the current camera; a click goes to one; one can
  * be updated to the current camera, Home also reset to the ViewCube's framing.
  */
-function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
+function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement; peers: () => BrowserPeer[] }) {
   const views = props.section.views;
-  const items = (): ViewItem[] => [{ id: HOME, name: "Home", camera: views.home() }, ...views.views()];
-  const update = (view: ViewItem) => {
-    const camera = props.section.camera();
-    if (!camera) return;
-    if (view.id === HOME) views.setHome(camera);
-    else views.update(view.id, camera);
-  };
+  const items = () => viewItems(views);
+  const current = (view: ViewItem) => nearCamera(props.section.current(), view.id === HOME ? props.section.homeCamera() : view.camera);
   return (
     <NamedList<ViewItem>
       heading="Views"
@@ -354,28 +463,17 @@ function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () =
         const camera = props.section.camera();
         return camera ? views.add(camera) : "The view hasn't shown the model yet";
       }}
-      current={(view) => nearCamera(props.section.current(), view.id === HOME ? props.section.homeCamera() : view.camera)}
-      select={(view) => (view.camera ? props.section.goTo({ ...view, camera: view.camera }) : props.section.goHome())}
+      current={current}
+      selectable={(view) => ({ kind: "view", id: view.id })}
+      selected={(view) => props.editor.isSelected({ kind: "view", id: view.id })}
+      peer={(view) => props.peers().find((p) => p.view === view.id)?.color}
+      onSelect={(view) => goToView(props.section, view)}
+      // Back to the selected view once the camera has left it: going there is what its row is for.
+      again={(view) => !current(view) && (goToView(props.section, view), true)}
       selectTitle={(view) => `Look from ${view.name}`}
       rename={(view, to) => views.rename(view.id, to)}
       fixed={(view) => view.id === HOME}
-      actions={(view) => [
-        { label: "Update to current view", run: () => update(view) },
-        ...(view.id !== HOME
-          ? [{ label: "Delete", danger: true, run: () => views.remove(view.id) }]
-          : view.camera
-            ? [
-                {
-                  label: "Reset to default",
-                  run: () => {
-                    views.setHome(undefined);
-                    // Goes there, to show where that is, once the view knows Home moved.
-                    queueMicrotask(() => props.section.goHome());
-                  },
-                },
-              ]
-            : []),
-      ]}
+      actions={(view) => viewActions(props.section, view).filter((a) => !a.disabled)}
       onHover={(view) => props.section.setHomeHovered(view?.id === HOME)}
       embed={(view) => props.section.embed({ id: view.id, name: view.name })}
       editor={props.editor}
@@ -391,7 +489,17 @@ function ViewList(props: { section: ViewsSection; editor: Editor; renaming: () =
 const DEFAULTS: Configuration = { id: "", name: "Defaults", params: {} };
 
 /** The configurations (research/17-parameters.md), Defaults first: "+" keeps the shown values as one; a click shows the model with one, only for this user. */
-function ConfigurationList(props: { params: ParamsController; onHover: (hovered: boolean) => void; embed: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined; editor: Editor; renaming: () => string | undefined; setRenaming(key: string | undefined): void; openMenu: OpenMenu; dragFrom: () => HTMLElement }) {
+function ConfigurationList(props: {
+  params: ParamsController;
+  onHover: (hovered: boolean) => void;
+  embed: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined;
+  editor: Editor;
+  renaming: () => string | undefined;
+  setRenaming(key: string | undefined): void;
+  openMenu: OpenMenu;
+  dragFrom: () => HTMLElement;
+  peers: () => BrowserPeer[];
+}) {
   const configurations = props.params.configurations;
   return (
     <NamedList<Configuration>
@@ -401,7 +509,11 @@ function ConfigurationList(props: { params: ParamsController; onHover: (hovered:
       addLabel="New configuration from the values the model is shown with"
       onAdd={() => props.params.saveAs()}
       current={(c) => (props.params.selected()?.id ?? "") === c.id}
-      select={(c) => props.params.select(c.id || undefined)}
+      selectable={(c) => ({ kind: "configuration", id: c.id })}
+      // The parameters entry selects the shown configuration's row (research/19-selection.md, "The selection").
+      selected={(c) => props.editor.selection()?.kind === "params" ? (props.params.selected()?.id ?? "") === c.id : props.editor.isSelected({ kind: "configuration", id: c.id })}
+      peer={(c) => props.peers().find((p) => p.configuration === c.id)?.color}
+      onSelect={(c) => props.params.select(c.id || undefined)}
       selectTitle={(c) => `Show the model with ${c === DEFAULTS ? "its defaults" : c.name}, only for you`}
       rename={(c, to) => configurations.rename(c.id, to)}
       fixed={(c) => c === DEFAULTS}

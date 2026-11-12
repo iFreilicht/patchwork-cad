@@ -89,7 +89,12 @@ function popoverView(view: EditorView, popover: Popover, options: CodeCommentOpt
   dom.append(threadView(popover.url));
   const close = () => view.dispatch({ effects: closePopover.of(null) });
   const outside = (event: MouseEvent) => !dom.contains(event.target as Node) && close();
-  const escape = (event: KeyboardEvent) => event.key === "Escape" && close();
+  const escape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    // Closing it is all Escape does: not the dialog, too.
+    event.preventDefault();
+    close();
+  };
   const doc = view.dom.ownerDocument;
   // Armed after the click that opened it.
   const arm = setTimeout(() => {
@@ -190,6 +195,7 @@ export function codeComments(options: CodeCommentOptions): Extension {
         const state = view.state.field(field, false);
         if (!state || state.popover || !state.tooltip) return false;
         view.dispatch({ effects: dismissButton.of(null) });
+        event.preventDefault();
         return true;
       },
     }),

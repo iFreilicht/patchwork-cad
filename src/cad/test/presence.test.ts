@@ -53,14 +53,14 @@ test("two views of one tab are both visible, and closing one removes only it", a
   sb.join({ tool: "viewer" });
   const editor = sa.join({ tool: "editor" });
   const viewer = sa.join({ tool: "viewer" });
-  editor.set({ open: "extrude1" });
+  editor.set({ selection: { kind: "return", id: "" } });
   viewer.set({ pointer: [1, 2, 3] });
   await vi.advanceTimersByTimeAsync(50);
-  expect(states(sb)).toEqual(expect.arrayContaining([{ tool: "editor", open: "extrude1" }, { tool: "viewer", pointer: [1, 2, 3] }]));
+  expect(states(sb)).toEqual(expect.arrayContaining([{ tool: "editor", selection: { kind: "return", id: "" } }, { tool: "viewer", pointer: [1, 2, 3] }]));
   expect(sb.peers().every((p) => p.contactUrl === ALICE && p.color === presenceColor(ALICE))).toBe(true);
   viewer.leave();
   await vi.advanceTimersByTimeAsync(50);
-  expect(states(sb)).toEqual([{ tool: "editor", open: "extrude1" }]);
+  expect(states(sb)).toEqual([{ tool: "editor", selection: { kind: "return", id: "" } }]);
   editor.leave();
   await vi.advanceTimersByTimeAsync(50);
   expect(states(sb)).toEqual([]);
@@ -70,16 +70,16 @@ test("another tool's Presence on the same document stopping costs at most one re
   vi.useFakeTimers();
   const { a, sa, sb } = tabs();
   sb.join({ tool: "viewer" });
-  sa.join({ tool: "editor", open: "notch" });
+  sa.join({ tool: "editor", selection: { kind: "view", id: "v1" } });
   // Like doc-presence on the same document in tab A.
   const foreign = new Presence({ handle: a.handle() });
   foreign.start({ initialState: { name: "Alice" }, heartbeatMs: 100 });
   await vi.advanceTimersByTimeAsync(50);
-  expect(states(sb)).toEqual([{ tool: "editor", open: "notch" }]);
+  expect(states(sb)).toEqual([{ tool: "editor", selection: { kind: "view", id: "v1" } }]);
   foreign.stop();
   expect(states(sb)).toEqual([]);
   await vi.advanceTimersByTimeAsync(OPTIONS.resendMs + 10);
-  expect(states(sb)).toEqual([{ tool: "editor", open: "notch" }]);
+  expect(states(sb)).toEqual([{ tool: "editor", selection: { kind: "view", id: "v1" } }]);
 });
 
 test("an idle tab stays visible past the peer TTL", async () => {

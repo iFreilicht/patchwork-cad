@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch, untrack } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { bindUndo } from "@patchwork-cad/undo";
 import type { MeshedShape, ShownSketch } from "../../kernel/protocol.ts";
@@ -10,8 +10,8 @@ import { createModel, faceRefs, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
 import { Viewer, type Entity, type Highlight, type ViewerApi } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
-import { FeatureDialog } from "./FeatureDialog.tsx";
-import { createEditor } from "./state.ts";
+import { CodeDialog, FeatureDialog } from "./FeatureDialog.tsx";
+import { createEditor, type Selectable } from "./state.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Toolbar } from "./Toolbar.tsx";
 import { createUiState } from "../uiState.ts";
@@ -24,7 +24,8 @@ import { CommentsPopover } from "../CommentsPopover.tsx";
 import { createEntityComments, DetachedButton } from "../entityComments.tsx";
 import { createFeatureHighlights } from "../featureHighlights.ts";
 import { createBodies } from "./bodies.ts";
-import { Browser, ResultDialog, type ViewsSection } from "./Browser.tsx";
+import { Browser, ResultDialog, ViewDialog, viewItems, type BrowserPeer, type ViewsSection } from "./Browser.tsx";
+import { Menu, type MenuItem } from "./Menu.tsx";
 import { createConfigurations } from "../configurations.ts";
 import { createParams } from "./parameters.ts";
 import { ParamsDialog } from "./ParamsDialog.tsx";
@@ -52,14 +53,6 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const model = createModel(props.handle, params.shown);
   const editor = createEditor(props.handle, model, ui);
   const bodies = createBodies(editor, ui);
-  /** Whether the return entry's dialog is open; it, the parameters' and a feature's dialog take turns. */
-  const [resultOpen, setResultOpen] = createSignal(false);
-  const [paramsOpen, setParamsOpen] = createSignal(false);
-  createEffect(() => {
-    if (!editor.open()) return;
-    setResultOpen(false);
-    setParamsOpen(false);
-  });
   const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
@@ -100,6 +93,41 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setHomeHovered,
     embed: (view) => createEmbed(props.handle, { view }),
   };
+
+  // The selection (research/19-selection.md): a selected view or configuration that is deleted, e.g. by a collaborator, is no longer selected.
+  const selectedView = () => {
+    const s = editor.selection();
+    return s?.kind === "view" ? viewItems(views.views).find((v) => v.id === s.id) : undefined;
+  };
+  createEffect(() => {
+    const s = editor.selection();
+    if ((s?.kind === "view" && !selectedView()) || (s?.kind === "configuration" && s.id && !params.configurations.list().some((c) => c.id === s.id))) editor.select(undefined, "dialog");
+  });
+  // A configuration selected is the one the model is shown with, also when that changes in the dialog or by "+" in the browser.
+  createEffect(
+    on(
+      () => params.selected()?.id ?? "",
+      (id) => {
+        const s = untrack(editor.selection);
+        if (s?.kind === "configuration" && s.id !== id) editor.select({ kind: "configuration", id }, "dialog");
+      },
+    ),
+  );
+  /**
+   * What the open dialog shows, kept after it closes: a field's blur, which Chrome sends when the
+   * dialog is removed, reads it then, and Match's own accessor throws after the Match has switched.
+   */
+  const dialogEntry = createMemo<FeatureEntry | undefined>((previous) => editor.open() ?? previous);
+  /** The selected Custom Script or body(), which has no form, only its code's dialog. */
+  const codeEntry = () => {
+    const index = editor.selectedIndex();
+    const entry = index === undefined || editor.open() ? undefined : editor.timeline().entries[index];
+    return entry && index !== undefined ? { entry, index } : undefined;
+  };
+  const dialogCode = createMemo<ReturnType<typeof codeEntry>>((previous) => codeEntry() ?? previous);
+  const dialogView = createMemo<ReturnType<typeof selectedView>>((previous) => selectedView() ?? previous);
+  /** Which table of the Parameters dialog was used last: the code pane scrolls to its code. */
+  const [paramsSection, setParamsSection] = createSignal<"params" | "derived">("params");
   const [codeFocus, setCodeFocus] = createSignal<Span>();
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {
@@ -312,7 +340,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   createEffect(() => presence.set({ selected: selectedName.ref() }));
   createEffect(() => presence.set({ features: editor.hoveredFeatures() }));
   createEffect(() => presence.set({ marker: ui.marker() }));
-  createEffect(() => presence.set({ open: editor.open()?.name }));
+  createEffect(() => presence.set({ selection: editor.shared() }));
   const peers = presence.peers;
   const peerHighlights = createPeerHighlights(model, shown, peers, hidden);
   const entityComments = createEntityComments({
@@ -331,21 +359,89 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     complete: () => !rolledBack(),
   });
   let stage!: HTMLDivElement;
-  const timelinePeers = (): TimelinePeer[] => {
-    const entries = editor.timeline().entries;
-    return presence
+  /** Collaborators in the editor, with the timeline entry they selected, if they selected one. */
+  const editorPeers = createMemo(() =>
+    presence
       .peers()
       .filter((p) => p.state.tool === "editor")
-      .map((p) => {
-        const names = new Set(p.state.features ?? []);
-        const marked = new Set(entries.flatMap((e, i) => ((e.kind === "feature" && e.name === p.state.open) || ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
-        return { key: p.key, color: p.color, contactUrl: p.contactUrl, marker: editor.markerOf(p.state.marker), entries: marked };
-      });
+      .map((p) => ({ ...p, entry: editor.entryOf(p.state.selection) })),
+  );
+  const timelinePeers = (): TimelinePeer[] => {
+    const entries = editor.timeline().entries;
+    return editorPeers().map((p) => {
+      const names = new Set(p.state.features ?? []);
+      const marked = new Set(entries.flatMap((e, i) => (i === p.entry || ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
+      return { key: p.key, color: p.color, contactUrl: p.contactUrl, marker: editor.markerOf(p.state.marker), entries: marked };
+    });
   };
+  /** The colour of the first collaborator whose selection is of one of `kinds`. */
+  const peerOfKind = (...kinds: string[]) => editorPeers().find((p) => kinds.includes(p.state.selection?.kind ?? ""))?.color;
+  const browserPeers = (): BrowserPeer[] =>
+    editorPeers().map((p) => {
+      const s = p.state.selection;
+      return { color: p.color, ...(p.entry !== undefined ? { entry: p.entry } : {}), ...(s?.kind === "view" ? { view: s.id } : {}), ...(s?.kind === "configuration" ? { configuration: s.id } : {}) };
+    });
 
-  /** Opens the code pane at an entry's code: a Custom Script's or a body()'s, which have no dialog. */
+  /** The code of what is selected as `{ kind, id }`, by this user or a collaborator, if it has code. */
+  const codeOf = (kind: string | undefined, entry: number | undefined, section: "params" | "derived" = "params"): Span | undefined => {
+    if (editor.syntaxError()) return undefined;
+    const info = params.info();
+    if (entry !== undefined) return editor.timeline().entries[entry]?.span;
+    if (kind === "return") return editor.timeline().returned;
+    if (kind !== "params" && kind !== "configuration") return undefined;
+    const derived = info?.derived ?? [];
+    if (kind === "params" && section === "derived" && derived.length) return { start: derived[0]!.statement.start, end: derived[derived.length - 1]!.statement.end };
+    return info?.defaults?.statement ?? info?.mainStatement;
+  };
+  const peerItems = () => editorPeers().flatMap((p) => {
+    const span = codeOf(p.state.selection?.kind, p.entry);
+    return span ? [{ ...span, color: p.color }] : [];
+  });
+
+  /** The items in the code, with where each one's code is, from the start of its first line to the end of its last (research/19-selection.md, "The code pane"). */
+  const codeItems = createMemo(() => {
+    if (editor.syntaxError()) return [];
+    const text = editor.source();
+    const info = params.info();
+    const items: { item: Selectable; span: Span; section?: "params" | "derived" }[] = editor.timeline().entries.map((e, index) => ({ item: { kind: "entry", index }, span: e.span }));
+    const returned = editor.timeline().returned;
+    if (returned) items.push({ item: { kind: "return" }, span: returned });
+    if (info?.defaults) items.push({ item: { kind: "params" }, span: info.defaults.statement, section: "params" });
+    for (const d of info?.derived ?? []) items.push({ item: { kind: "params" }, span: d.statement, section: "derived" });
+    // main's head, `export default function main({ … } = defaultParams) {`, takes the parameters.
+    if (info?.mainStatement && info.mainBody) items.push({ item: { kind: "params" }, span: { start: info.mainStatement.start, end: info.mainBody.start + 1 }, section: "params" });
+    // Blanks before and after a statement on its lines are part of it: only lines without an item, e.g. blank ones, have none.
+    const blank = (from: number, to: number) => /^[ \t]*$/.test(text.slice(from, to));
+    return items.map((x) => {
+      const lineStart = text.lastIndexOf("\n", x.span.start - 1) + 1;
+      const next = text.indexOf("\n", x.span.end);
+      const lineEnd = next < 0 ? text.length : next;
+      return { ...x, from: blank(lineStart, x.span.start) ? lineStart : x.span.start, to: blank(x.span.end, lineEnd) ? lineEnd : x.span.end };
+    });
+  });
+  /** The selection follows the code pane's cursor while it has focus (research/19-selection.md, "The code pane"). */
+  const onCodeCursor = (offset: number | undefined) => {
+    editor.setCodeCursor(offset);
+    if (offset === undefined || editor.syntaxError()) return;
+    const hit = codeItems()
+      .filter((x) => x.from <= offset && offset <= x.to)
+      .sort((a, b) => a.span.end - a.span.start - (b.span.end - b.span.start))[0];
+    if (hit?.section) setParamsSection(hit.section);
+    if (hit ? editor.isSelected(hit.item) : !editor.selection()) return;
+    editor.select(hit?.item, "code");
+  };
+  /** Code to scroll to: the selection's, when it is made elsewhere, the code pane opens, or another table of the Parameters dialog is used. */
+  const [reveal, setReveal] = createSignal<Span>();
+  const revealSelection = () => {
+    const span = untrack(() => codeOf(editor.selection()?.kind, editor.selectedIndex(), paramsSection()));
+    if (span) setReveal({ ...span });
+  };
+  createEffect(on(editor.selection, (s) => s && s.from !== "code" && revealSelection()));
+  createEffect(on(codeOpen, (open) => open && revealSelection()));
+  createEffect(on(paramsSection, () => editor.selection()?.kind === "params" && revealSelection(), { defer: true }));
+
+  /** Opens the code pane at an entry's code, e.g. a Custom Script's or a body()'s, which have no dialog. */
   const openCode = (span: Span) => {
-    editor.openFeature(undefined);
     setCodeFocus({ ...span });
     setCodeOpen(true);
   };
@@ -377,14 +473,80 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     setCodeOpen(true);
   };
 
+  // Closing (research/19-selection.md, "Closing"): Escape, unless something used it first, and a
+  // click elsewhere, in the view or on empty space in the browser or the timeline. Before menus and
+  // popovers see the press, which closes them alone. Capturing, so that what is pressed can't stop it.
+  /** Whether a press on `target` is elsewhere: on no item or control. The lanes say so themselves. */
+  const elsewhere = (target: Element) =>
+    target.matches(".cad-model__viewer > canvas") ||
+    (!!target.closest(".cad-editor__browser, .cad-editor__timeline-wrap") && !target.closest("button, input, select, textarea, a, li, svg, [draggable], .cad-editor__actions, .cad-editor__marker-drawing"));
+  let press: { x: number; y: number } | undefined;
+  const onPress = (event: PointerEvent) => {
+    const target = event.target as Element;
+    const popup = props.element.querySelector(".cad-editor__menu, .cad-model__comments-popover, .cad-model__comment-popover");
+    press = event.button === 0 && !popup && props.element.contains(target) && elsewhere(target) ? { x: event.clientX, y: event.clientY } : undefined;
+  };
+  const onRelease = (event: PointerEvent) => {
+    const p = press;
+    press = undefined;
+    // As the ViewCube's click: a drag orbits or pans, and keeps the dialog. While a field picks, a click picks.
+    if (!p || Math.hypot(event.clientX - p.x, event.clientY - p.y) > 4 || editor.pickTarget()) return;
+    editor.select(undefined, "view");
+  };
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    const target = event.target as Node;
+    if (target !== document.body && !props.element.contains(target)) return;
+    // A field that picks stops picking first.
+    if (editor.pickTarget()) editor.setPickTarget(undefined);
+    else if (editor.selection()) editor.select(undefined, "dialog");
+    else return;
+    event.preventDefault();
+  };
+  document.addEventListener("pointerdown", onPress, true);
+  document.addEventListener("pointerup", onRelease, true);
+  document.addEventListener("keydown", onEscape);
+  onCleanup(() => {
+    document.removeEventListener("pointerdown", onPress, true);
+    document.removeEventListener("pointerup", onRelease, true);
+    document.removeEventListener("keydown", onEscape);
+  });
+
+  /** A face's context menu: "Edit ‹feature›" for the feature that created it, the base of its name (research/19-selection.md, "The selection"). */
+  const [viewMenu, setViewMenu] = createSignal<{ items: MenuItem[]; label: string; x: number; y: number }>();
+  const onViewMenu = (entity: Entity | undefined, at: { x: number; y: number }) => {
+    if (entity?.kind !== "face" || editor.pickTarget()) return;
+    model.engine.pick(entity.body, entity.kind, entity.index).then(
+      ({ code }) => {
+        const base = /^[A-Za-z_$][\w$]*/.exec(code)?.[0];
+        const index = base === undefined ? -1 : editor.timeline().entries.findIndex((e) => ownersOf(e).includes(base));
+        const entry = editor.timeline().entries[index];
+        if (!entry) return;
+        const label = entry.kind === "feature" ? entry.name : `the Custom Script at lines ${entry.lines.join("–")}`;
+        setViewMenu({ items: [{ label: `Edit ${label}`, run: () => editor.select({ kind: "entry", index }, "view") }], label: `Actions for ${code}`, ...at });
+      },
+      () => undefined,
+    );
+  };
+
+  /** Selects an item from the timeline, or closes it if it is selected. */
+  const toggle = (item: Selectable) => editor.select(editor.isSelected(item) ? undefined : item, "timeline");
+  /** The selection for tests and styles: its kind, and the entry's index or the item's id. */
+  const selectionKey = () => {
+    const s = editor.selection();
+    if (!s) return "";
+    if (s.kind === "feature" || s.kind === "script") return `${s.kind}:${editor.selectedIndex() ?? ""}`;
+    return s.kind === "configuration" || s.kind === "view" ? `${s.kind}:${s.id}` : s.kind;
+  };
+
   /** Why a body() failed: it has no dialog to say it (research/11), so the status bar does. */
   const undialogued = () => editor.timeline().entries.flatMap((e) => (e.kind === "feature" && e.type === "body" && e.trace && e.trace.status !== "ok" && e.trace.message ? [`body() ${e.names.join(", ")}: ${e.trace.message}`] : []));
 
   return (
-    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
+    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} params={params} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
+        <Browser editor={editor} bodies={bodies} views={views} params={params} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
       </Show>
       <div class="cad-editor__stage" ref={stage}>
         <Viewer
@@ -395,6 +557,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           pickable={editor.boundBody() === undefined ? undefined : (body) => body === editor.boundBody()}
           onHover={onHover}
           onSelect={onSelect}
+          onContextMenu={onViewMenu}
           onPointer={(pointer) => presence.set({ pointer })}
           highlight={[...peerHighlights(), ...entityComments.highlight(), ...references(), ...featureHighlight(), ...bodyHighlights()]}
           pins={entityComments.pins()}
@@ -410,20 +573,25 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           faceRefs={faceRefs(model)}
           homeHovered={homeHovered()}
         />
-        <Show when={editor.open()}>{(entry) => <FeatureDialog editor={editor} entry={entry()} onEditCode={editCode} promote={params.promote} />}</Show>
-        <Show when={paramsOpen() && !editor.open()}>
-          <ParamsDialog params={params} editor={editor} values={model.paramValues} onClose={() => setParamsOpen(false)} onEditCode={editParams} />
-        </Show>
-        <Show when={resultOpen() && !editor.open()}>
-          <ResultDialog
-            editor={editor}
-            onClose={() => {
-              if (editor.pickTarget()?.param === "return") editor.setPickTarget(undefined);
-              setResultOpen(false);
-            }}
-            onEditCode={editReturn}
-          />
-        </Show>
+        {/* The selected item's dialog (research/19-selection.md): every selected item has one. */}
+        <Switch>
+          <Match when={editor.open()}>
+            <FeatureDialog editor={editor} entry={dialogEntry()!} onEditCode={editCode} promote={params.promote} />
+          </Match>
+          <Match when={codeEntry()}>
+            <CodeDialog editor={editor} entry={dialogCode()!.entry} index={dialogCode()!.index} onEditCode={() => openCode(dialogCode()!.entry.span)} />
+          </Match>
+          <Match when={editor.isSelected({ kind: "params" })}>
+            <ParamsDialog params={params} editor={editor} values={model.paramValues} onClose={() => editor.select(undefined, "dialog")} onEditCode={editParams} onSection={setParamsSection} />
+          </Match>
+          <Match when={editor.selection()?.kind === "return"}>
+            <ResultDialog editor={editor} onClose={() => editor.select(undefined, "dialog")} onEditCode={editReturn} />
+          </Match>
+          <Match when={selectedView()}>
+            <ViewDialog section={views} view={dialogView()!} onClose={() => editor.select(undefined, "dialog")} />
+          </Match>
+        </Switch>
+        <Show when={viewMenu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={stage} down onClose={() => setViewMenu(undefined)} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
         <Show when={comments.enabled() && entityComments.detached().length}>
           <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
@@ -443,11 +611,13 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             onFocusDone={() => setCodeFocus(undefined)}
             past={pastMarker()}
             related={relatedCode()}
+            reveal={reveal()}
             onHover={editor.setCodeHover}
-            onCursor={editor.setCodeCursor}
+            onCursor={onCodeCursor}
             crossHover={viewHoveredCode()}
             onSelection={(code) => presence.set({ code })}
             peerSelections={presence.peers().flatMap((p) => (p.state.code ? [{ key: p.key, color: p.color, contactUrl: p.contactUrl, ...p.state.code }] : []))}
+            peerItems={peerItems()}
             comments={comments}
           />
         </div>
@@ -459,21 +629,22 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         comments={comments}
         result={{
           get open() {
-            return resultOpen() && !editor.open();
+            return editor.isSelected({ kind: "return" });
           },
           get count() {
             return returnCount();
           },
-          onOpen: () => {
-            const open = !resultOpen() || !!editor.open();
-            editor.openFeature(undefined);
-            setParamsOpen(false);
-            setResultOpen(open);
+          get peer() {
+            return peerOfKind("return");
           },
+          onOpen: () => toggle({ kind: "return" }),
         }}
         parameters={{
           get open() {
-            return paramsOpen() && !editor.open();
+            return editor.isSelected({ kind: "params" });
+          },
+          get peer() {
+            return peerOfKind("params", "configuration");
           },
           get count() {
             return (params.info()?.params.length ?? 0) + (params.info()?.derived.length ?? 0);
@@ -481,12 +652,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           get hovered() {
             return configurationHovered();
           },
-          onOpen: () => {
-            const open = !paramsOpen() || !!editor.open();
-            editor.openFeature(undefined);
-            setResultOpen(false);
-            setParamsOpen(open);
-          },
+          onOpen: () => toggle({ kind: "params" }),
         }}
       />
       <StatusBar model={model} notice={editor.notice()} problems={[...undialogued(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />

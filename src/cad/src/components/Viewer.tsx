@@ -82,6 +82,8 @@ export interface ViewerProps {
    * pointer, a click elsewhere in the view clears it. Called with the selection as it changes.
    */
   onSelect?: (entity: Entity | undefined) => void;
+  /** A right click, not a drag, which pans: the face or edge of a feature-library body under the pointer, if any, and where it was. */
+  onContextMenu?: (entity: Entity | undefined, at: { x: number; y: number }) => void;
   highlight?: Highlight[] | undefined;
   /** Outlines drawn over the model, e.g. of the open sketch, as a hovered edge is. */
   overlays?: Overlay[] | undefined;
@@ -1146,6 +1148,10 @@ export function Viewer(props: ViewerProps) {
       down = undefined;
       // A drag orbits the camera; only a click picks or selects.
       if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+      if (event.button === 2 && props.onContextMenu) {
+        const entity = props.pick ? undefined : hoverAt(event.clientX, event.clientY);
+        props.onContextMenu(isBody(entity) ? entity : undefined, { x: event.clientX, y: event.clientY });
+      }
       if (props.pick) {
         const entity = entityAt(event.clientX, event.clientY, props.pick);
         if (isBody(entity)) props.onPick?.(entity);

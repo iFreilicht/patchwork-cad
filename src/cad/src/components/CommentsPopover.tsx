@@ -38,7 +38,12 @@ export function CommentsPopover(props: {
   };
   const urls = () => [...new Set([...props.threads.map(props.comments.urlOf), ...fresh()])];
   const outside = (event: PointerEvent) => !el.contains(event.target as Node) && props.onClose();
-  const escape = (event: KeyboardEvent) => event.key === "Escape" && props.onClose();
+  const escape = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    // Closing it is all Escape does: not the dialog, too.
+    event.preventDefault();
+    props.onClose();
+  };
   onMount(() => {
     if (props.createNow) create();
     // After the click that opened it.

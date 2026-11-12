@@ -71,6 +71,29 @@ const peerSelections = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/** The code of the items collaborators selected (research/19-selection.md), in their colours. */
+const setPeerItems = StateEffect.define<PeerItem[]>();
+const peerItems = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setPeerItems)) continue;
+      const spans = effect.value.filter((s) => s.end <= tr.state.doc.length && s.start < s.end).sort((a, b) => a.start - b.start);
+      value = Decoration.set(spans.map((s) => Decoration.mark({ class: "cad-model__peer-item", attributes: { style: `--peer-color: ${s.color}` } }).range(s.start, s.end)));
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** A collaborator's selected item's code. */
+export interface PeerItem {
+  start: number;
+  end: number;
+  color: string;
+}
+
 const setErrorLine = StateEffect.define<number | undefined>();
 const errorLineClass = Decoration.line({ class: "cad-model__error-line" });
 const setFocus = StateEffect.define<{ from: number; to: number } | undefined>();
@@ -237,6 +260,11 @@ export function CodeEditor(props: {
    */
   focus?: { start: number; end: number } | undefined;
   onFocusDone?: () => void;
+  /**
+   * Code to scroll into view without moving the cursor, e.g. of an item selected elsewhere
+   * (research/19-selection.md, "Following the selection"); each new object scrolls again.
+   */
+  reveal?: { start: number; end: number } | undefined;
   /** The code past the timeline marker. */
   past?: { start: number; end: number } | undefined;
   /** Code to mark as related to the focused timeline entry. */
@@ -251,6 +279,8 @@ export function CodeEditor(props: {
   onSelection?: (selection: { anchor: string; head: string } | undefined) => void;
   /** Collaborators' selections. */
   peerSelections?: PeerSelection[];
+  /** The code of collaborators' selected items. */
+  peerItems?: PeerItem[];
   /** The model's comment threads; the pane marks their code and offers to comment on a selection. */
   comments?: CommentStore | undefined;
 }) {
@@ -347,6 +377,7 @@ export function CodeEditor(props: {
         if (update.docChanged) queueMicrotask(resolvePeers);
       }),
       peerSelections,
+      Prec.lowest(peerItems),
       commenting.of([]),
       EditorView.theme({ "&": { height: "100%" }, ".cm-scroller": { overflow: "auto" } }),
       automergeSyncPlugin({ handle: props.handle, path: ["content"] }),
@@ -391,6 +422,15 @@ export function CodeEditor(props: {
   createEffect(() => {
     const spans = props.crossHover ?? [];
     dispatchSoon({ effects: setCrossHover.of(spans) });
+  });
+  createEffect(() => {
+    const spans = props.peerItems ?? [];
+    dispatchSoon({ effects: setPeerItems.of(spans) });
+  });
+  createEffect(() => {
+    const span = props.reveal;
+    // Its start, so that a long statement doesn't scroll its first line out of view.
+    if (span) dispatchSoon({ effects: EditorView.scrollIntoView(Math.min(span.start, view.state.doc.length), { y: "nearest" }) });
   });
   /** Resolves collaborators' cursors against the document; one that doesn't resolve yet, e.g. ahead of sync, is skipped. */
   const resolvePeers = () => {

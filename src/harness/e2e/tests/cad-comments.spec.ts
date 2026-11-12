@@ -66,11 +66,12 @@ test("a comment on code shows for the other user, who opens its thread from the 
   const popover = a.locator(".cad-model__comment-popover");
   await writeComment(popover, "Too thin?");
   await expect(popover).toHaveCount(0);
-  await expect(a.locator(".cad-model__code .cad-model__comment")).toHaveText(/const extrude1/);
+  // The comment's mark may be split around the marks of the statement it starts in, which the cursor selected.
+  await expect(a.locator(".cad-model__code .cad-model__comment", { hasText: "const extrude1" })).toHaveCount(1);
 
   // B sees the commented code and opens the thread by clicking it.
-  const marked = b.locator(".cad-model__code .cad-model__comment");
-  await expect(marked).toHaveText(/const extrude1/, { timeout: 15_000 });
+  const marked = b.locator(".cad-model__code .cad-model__comment", { hasText: "const extrude1" });
+  await expect(marked).toHaveCount(1, { timeout: 15_000 });
   // At its start: in a narrow code pane, the middle of the long line is scrolled under the gutter.
   await marked.click({ position: { x: 4, y: 4 } });
   await expect(b.locator(".cad-model__comment-popover .comment-content")).toHaveText("Too thin?");
@@ -98,16 +99,20 @@ test("Patchwork's Comments panel lists threads on the model and focuses them in 
   const panel = await commentsPanel(b);
   const threads = panel.locator(".comments-thread");
   await expect(threads).toHaveCount(2, { timeout: 15_000 });
+  // A mark may be split around the marks of the statement the cursor selected.
   const focused = b.locator(".cad-model__code .cad-model__comment--focused");
+  const focusedOn = (text: string) => focused.filter({ hasText: text });
   await expect(focused).toHaveCount(0);
 
   // Clicking a thread in the panel focuses its code.
   await threads.filter({ hasText: "Bigger radius" }).locator(".comment-content").click();
-  await expect(focused).toHaveText(/const fillet1/);
+  await expect(focusedOn("const fillet1")).toHaveCount(1);
+  await expect(focusedOn("const extrude1")).toHaveCount(0);
 
   // Moving the cursor into the other commented code brings that thread up in the panel.
   await codeLine(b, "const extrude1").click({ position: { x: 60, y: 4 } });
-  await expect(focused).toHaveText(/const extrude1/);
+  await expect(focusedOn("const extrude1")).toHaveCount(1);
+  await expect(focusedOn("const fillet1")).toHaveCount(0);
 });
 
 /** Selects a timeline entry and opens its comments. */

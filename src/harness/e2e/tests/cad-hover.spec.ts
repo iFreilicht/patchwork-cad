@@ -214,9 +214,10 @@ test("a body() entry highlights all its bodies, and opening code highlights at i
   // Past the return, after the three entries.
   await expect(editorView(page)).toHaveAttribute("data-marker", "4");
 
-  // Selecting a body() entry opens its code with the cursor at its start: once the pointer leaves
-  // the timeline, the cursor highlights it, and moving the cursor moves the highlight.
-  await timelineEntry(page, "left").click();
+  // "Edit code" in a body() entry's context menu opens its code with the cursor at its start: once
+  // the pointer leaves the timeline, the cursor highlights it, and moving the cursor moves the highlight.
+  await timelineEntry(page, "left").click({ button: "right" });
+  await page.getByRole("menu").getByRole("menuitem", { name: "Edit code" }).click();
   await expect(page.locator(".cad-model__code .cm-content")).toBeFocused();
   await page.mouse.move(0, 0);
   await expect.poll(bodies).toEqual(expected);
@@ -227,7 +228,7 @@ test("a body() entry highlights all its bodies, and opening code highlights at i
   // An extrusion: its volume, the new body.
   await expect.poll(async () => [...new Set(await bodies())]).toEqual(["extrude1:changed:0"]);
 
-  // "Edit code" in the context menu puts the cursor at the feature, too.
+  // Again, from elsewhere in the code.
   await timelineEntry(page, "left").click({ button: "right" });
   await page.getByRole("menu").getByRole("menuitem", { name: "Edit code" }).click();
   await page.mouse.move(0, 0);

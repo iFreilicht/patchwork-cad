@@ -90,8 +90,11 @@ export interface ViewPresence {
   code?: { anchor: string; head: string };
   /** The timeline marker; absent at the end. */
   marker?: TimelineMarker;
-  /** The feature whose dialog is open. */
-  open?: string;
+  /**
+   * The selected item (research/19-selection.md): a timeline entry by an automerge cursor at the
+   * start of its code, a configuration or view by its id; the parameters and the return by kind.
+   */
+  selection?: { kind: "feature" | "script" | "params" | "configuration" | "return" | "view"; id: string };
 }
 
 export interface CadModelDoc {

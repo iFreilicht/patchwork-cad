@@ -104,7 +104,15 @@ function NameCell(props: { name: string; title: string | undefined; editable: bo
  * there are. With a configuration shown, it edits that configuration's overrides, next to each
  * parameter's default and final value; derived values follow from them and show their final value.
  */
-export function ParamsDialog(props: { params: ParamsController; editor: Editor; values: () => ParamValues | undefined; onClose: () => void; onEditCode: (section: "params" | "derived") => void }) {
+export function ParamsDialog(props: {
+  params: ParamsController;
+  editor: Editor;
+  values: () => ParamValues | undefined;
+  onClose: () => void;
+  onEditCode: (section: "params" | "derived") => void;
+  /** Which table was used last, whose code the code pane scrolls to (research/19-selection.md). */
+  onSection?: (section: "params" | "derived") => void;
+}) {
   const info = () => props.params.info();
   const readOnly = () => info()?.readOnly;
   const selected = () => props.params.selected();
@@ -120,7 +128,7 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
   const unit = (name: string, key: string) => info()?.config[key]?.unit ?? unitOf(props.params.quantities().get(name));
   /** A table's buttons: adding to it and its code with the defaults shown, else back to the defaults; its code. */
   const actions = (section: "params" | "derived") => (
-    <div class="cad-editor__params-actions">
+    <div class="cad-editor__params-actions" data-section={section}>
       <Show when={editable()}>
         <button class="cad-editor__button" onClick={() => (section === "params" ? add(props.params.add(), "param") : add(props.params.addDerived(), "derived"))}>
           {section === "params" ? "Add parameter" : "Add derived value"}
@@ -141,7 +149,16 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
     return analysis ? usesOf(analysis, name) : 0;
   };
   return (
-    <section class="cad-editor__dialog cad-editor__params" aria-label="Parameters" data-feature="parameters" data-configuration={selected()?.name ?? ""}>
+    <section
+      class="cad-editor__dialog cad-editor__params"
+      aria-label="Parameters"
+      data-feature="parameters"
+      data-configuration={selected()?.name ?? ""}
+      onFocusIn={(event) => {
+        const section = (event.target as Element).closest("[data-section]")?.getAttribute("data-section");
+        if (section === "params" || section === "derived") props.onSection?.(section);
+      }}
+    >
       <header class="cad-editor__dialog-header">
         <strong>Parameters</strong>
         <button class="cad-editor__link" aria-label="close" onClick={() => props.onClose()}>
@@ -152,7 +169,16 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
       <div class="cad-editor__params-shown">
         <label>
           <span class="cad-editor__muted">Configuration</span>{" "}
-          <select class="cad-editor__input" aria-label="Configuration" onChange={(event) => props.params.select(event.currentTarget.value || undefined)}>
+          <select
+            class="cad-editor__input"
+            aria-label="Configuration"
+            onChange={(event) => {
+              const id = event.currentTarget.value;
+              props.params.select(id || undefined);
+              // Its row in the browser is selected, so that the browser and the dialog agree.
+              props.editor.select({ kind: "configuration", id }, "dialog");
+            }}
+          >
             <option value="" selected={!selected()}>
               Defaults
             </option>
@@ -169,7 +195,7 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
           Save as new configuration
         </button>
       </div>
-      <table class="cad-editor__params-table" aria-label="Parameters">
+      <table class="cad-editor__params-table" aria-label="Parameters" data-section="params">
         <thead>
           <tr>
             <th class="cad-editor__param-name-column">Name</th>
@@ -237,7 +263,7 @@ export function ParamsDialog(props: { params: ParamsController; editor: Editor; 
       {actions("params")}
       <h3 class="cad-editor__params-heading">Derived values</h3>
       <Show when={(info()?.derived.length ?? 0) > 0}>
-        <table class="cad-editor__params-table cad-editor__params-table--derived" aria-label="Derived values">
+        <table class="cad-editor__params-table cad-editor__params-table--derived" aria-label="Derived values" data-section="derived">
           <thead>
             <tr>
               <th class="cad-editor__param-name-column">Name</th>

@@ -660,6 +660,23 @@
   background: var(--cad-model-cross-hover);
 }
 
+/* The rows of the selected item (research/19-selection.md): tinted, with a bar on the left. */
+.cad-editor__browser-row[data-selected="true"] {
+  background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
+  box-shadow: inset 3px 0 var(--cad-model-accent);
+}
+
+/* A collaborator's selected item: a bar on the right in their colour. */
+.cad-editor__browser-row[data-peer="true"] {
+  box-shadow: inset -3px 0 var(--peer-color);
+}
+
+.cad-editor__browser-row[data-selected="true"][data-peer="true"] {
+  box-shadow:
+    inset 3px 0 var(--cad-model-accent),
+    inset -3px 0 var(--peer-color);
+}
+
 /* A body this user hid, or a private one they don't show: its name fades, its controls stay. */
 .cad-editor__browser-row[data-visible="false"] .cad-editor__browser-name {
   color: var(--cad-model-muted);
@@ -1235,7 +1252,9 @@
   --contact-cursor-color: var(--peer-color);
 }
 
-.cad-editor__entry[data-peer="true"] {
+.cad-editor__entry[data-peer="true"],
+.cad-editor__params-entry[data-peer="true"],
+.cad-editor__return[data-peer="true"] {
   box-shadow: 0 0 0 2px var(--peer-color);
 }
 
@@ -1257,6 +1276,11 @@
 
 .cad-model__peer-selection {
   background: color-mix(in srgb, var(--peer-color) 25%, transparent);
+}
+
+/* The code of a collaborator's selected item: underlined in their colour, which leaves the background to selections and marks. */
+.cad-model__peer-item {
+  box-shadow: inset 0 -2px var(--peer-color);
 }
 
 .cad-model__caret {

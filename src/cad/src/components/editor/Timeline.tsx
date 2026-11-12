@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Index, Match, on, onCleanup, Show, Switch, type JSX } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Index, Match, on, onCleanup, Show, Switch, untrack, type JSX } from "solid-js";
 import { schemas } from "@patchwork-cad/features/schema";
 import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
@@ -34,14 +34,11 @@ const entryStatus = (entry: Entry) => {
 
 const UNUSED = "\nUnused: no later feature uses its result, and the model doesn't return it.";
 
-/** Attributes and handlers every timeline entry gets from the timeline: position, drag and highlight state. */
+/** Attributes and handlers every timeline entry gets from the timeline: position, selection, drag and highlight state. */
 type ItemProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined>;
 
-/**
- * A feature statement. Selecting it opens its dialog; a body() (research/11) has no form, so
- * selecting it opens its code.
- */
-function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemProps; onSelect: () => void }) {
+/** A feature statement. Selecting it opens its dialog; a body() (research/11) has no form. */
+function FeatureItem(props: { entry: FeatureEntry; item: ItemProps; onSelect: () => void }) {
   const label = () => schemas[props.entry.type].label;
   const names = () => props.entry.names.join(", ");
   return (
@@ -52,7 +49,6 @@ function FeatureItem(props: { editor: Editor; entry: FeatureEntry; item: ItemPro
       data-type={props.entry.type}
       data-name={props.entry.name}
       data-status={entryStatus(props.entry)}
-      aria-pressed={props.editor.open()?.name === props.entry.name}
       title={`${label()} ${names()}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
       onClick={() => props.onSelect()}
     >
@@ -130,16 +126,24 @@ interface Drop {
  */
 /** The return entry: what main returns, the end the lanes of the returned versions go to (research/15). */
 export interface ResultEntry {
+  /** Whether it is selected. */
   open: boolean;
+  /** Selects it, or closes it if it is. */
   onOpen(): void;
+  /** The colour of the first collaborator who has it selected. */
+  peer: string | undefined;
   /** How many values main returns, if it returns names. */
   count: number | undefined;
 }
 
 /** The parameters entry: main's input, as the return entry is its output (research/17-parameters.md). */
 export interface ParametersEntry {
+  /** Whether it, or a configuration, is selected. */
   open: boolean;
+  /** Selects it, or closes it if it is. */
   onOpen(): void;
+  /** The colour of the first collaborator who has it or a configuration selected. */
+  peer: string | undefined;
   /** How many parameters and derived ones the model has. */
   count: number;
   /** A configuration is hovered, e.g. in the browser. */
@@ -163,22 +167,12 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   const [menu, setMenu] = createSignal<{ index: number; x: number; y: number }>();
   /** The entry that has the keyboard focus. */
   const [keyboard, setKeyboard] = createSignal<number>();
-  /** The Custom Script or body() last selected, which has no dialog to show that it is. */
-  const [picked, setPicked] = createSignal<number>();
-  /**
-   * The selected entry, which shows the ⋯ button of its context menu: the one whose menu is open,
-   * that has the keyboard focus, or that was selected, a feature by its open dialog.
-   */
-  const active = () => {
-    const open = editor.timeline().entries.findIndex((e) => e === editor.open());
-    return menu()?.index ?? keyboard() ?? picked() ?? (open < 0 ? undefined : open);
-  };
-  // Using the pointer ends a selection by keyboard focus, and selecting anything else unselects a
-  // Custom Script or a body().
+  /** The entry that shows the ⋯ button of its context menu: the one whose menu is open, that has the keyboard focus, or the selected one. */
+  const active = () => menu()?.index ?? keyboard() ?? editor.selectedIndex();
+  // Using the pointer ends a selection by keyboard focus.
   const unpick = (event: PointerEvent) => {
     const target = event.target as Element | null;
     if (!target?.closest(".cad-editor__more, .cad-editor__menu")) setKeyboard(undefined);
-    if (!target?.closest(".cad-editor__entry, .cad-editor__more, .cad-editor__menu")) setPicked(undefined);
   };
   document.addEventListener("pointerdown", unpick, true);
   onCleanup(() => document.removeEventListener("pointerdown", unpick, true));
@@ -208,15 +202,13 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   const report = (action: Promise<string | undefined>) => void action.then(editor.setNotice);
   /**
    * Selects entry `index`, by its button or its node, or `version` of it by its node or its lane:
-   * picks it while a version is picked, else opens its dialog, which the button closes again, or the
-   * code of a Custom Script or a body(), which have none.
+   * picks it while a version is picked, else selects it, which the button or node closes again.
    */
   const selectEntry = (index: number, toggle: boolean, version?: string) => {
-    const e = entryAt(index);
-    if (!e) return;
+    if (!entryAt(index)) return;
     if (editor.pickingVersion()) return pickEntry(editor, index, version);
-    if (e.kind === "script" || e.type === "body") return props.onOpenCode(e.span);
-    editor.openFeature(toggle && editor.open()?.name === e.name ? undefined : e);
+    const item = { kind: "entry", index } as const;
+    editor.select(toggle && editor.isSelected(item) ? undefined : item, "timeline");
   };
   /** What a node or a lane in the lanes is under the pointer: hovering it hovers what it stands for, and clicking it selects that. */
   const [laneTarget, setLaneTarget] = createSignal<LaneTarget>();
@@ -231,7 +223,9 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     if (target?.kind === "lane") editor.setHoveredLane({ lane: target.lane, version: target.version });
     if (target?.kind === "return") editor.setResultHovered(true);
   };
-  const clickLanes = (target: LaneTarget) => {
+  const clickLanes = (target: LaneTarget | undefined) => {
+    // Empty space closes the selection, as elsewhere in the timeline (research/19-selection.md, "Closing").
+    if (!target) return editor.pickTarget() || editor.select(undefined, "timeline");
     if (target.kind === "entry") return selectEntry(target.entry, true, target.version);
     if (target.kind === "return") return props.result?.onOpen();
     const entry = editor.lanes()?.versions.get(target.version)?.entry;
@@ -244,7 +238,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       return e && entryStatus(e);
     },
     get "data-open"() {
-      return editor.open() && editor.open() === entryAt(index) ? "true" : undefined;
+      return editor.selectedIndex() === index ? "true" : undefined;
     },
     get "data-relation"() {
       return editor.related().get(index)?.relation;
@@ -314,7 +308,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     const e = entryAt(index);
     if (!e) return [];
     const items: MenuItem[] = [];
-    if (e.kind === "feature" && e.type !== "body") items.push({ label: "Edit", run: () => editor.openFeature(e) });
+    if (e.kind === "feature" && e.type !== "body") items.push({ label: "Edit", run: () => editor.select({ kind: "entry", index }, "timeline") });
     items.push({ label: "Edit code", run: () => props.onOpenCode(e.span) });
     items.push({ label: "Roll back to here", run: () => editor.setMarker(index + 1) });
     const m = menu();
@@ -396,6 +390,9 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       return peerColor(index) ? "true" : undefined;
     },
     "data-index": String(index),
+    get "aria-pressed"() {
+      return editor.selectedIndex() === index;
+    },
     get "data-past-marker"() {
       return index >= markerAt() ? "true" : undefined;
     },
@@ -454,8 +451,6 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       openMenu(index, event.clientX, event.clientY);
     },
     onPointerDown: (event) => {
-      const e = entryAt(index);
-      setPicked(e && (e.kind === "script" || e.type === "body") ? index : undefined);
       if (event.button !== 0) return;
       suppressClick = false;
       press = { index, x: event.clientX };
@@ -524,6 +519,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
   /** Where the entries are in the scrolling timeline, for the lanes beneath them. */
   const [columns, setColumns] = createSignal<Columns>();
   let returnEl: HTMLButtonElement | undefined;
+  let paramsEl: HTMLButtonElement | undefined;
   const centre = (el: HTMLElement | null | undefined) => (el ? el.offsetLeft + el.offsetWidth / 2 : 0);
   const place = () => {
     if (!markerEl || !nav || !wrap) return;
@@ -577,6 +573,18 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
       if (e) comments()?.select(e.span);
     }),
   );
+  // The selection made elsewhere scrolls into view (research/19-selection.md, "Following the selection").
+  createEffect(
+    on(editor.selection, (s) => {
+      if (!s || s.from === "timeline") return;
+      // Once the timeline has rendered what changed with it, e.g. a new entry.
+      requestAnimationFrame(() => {
+        const index = untrack(editor.selectedIndex);
+        const el = index !== undefined ? entryElement(index) : s.kind === "return" ? returnEl : s.kind === "params" || s.kind === "configuration" ? paramsEl : undefined;
+        if (el?.isConnected && untrack(editor.selection) === s) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
+    }),
+  );
   // An entry whose thread is focused elsewhere, e.g. in the Comments panel, scrolls into view.
   createEffect(
     on(
@@ -607,7 +615,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
               <Match when={renaming()?.index === index && renaming()} keyed>
                 {(r) => <RenameField editor={editor} index={index} from={r.from} onDone={() => endRename(index)} />}
               </Match>
-              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem editor={editor} entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
+              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
               <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
             </Switch>
           )}
@@ -653,11 +661,13 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
         <Show when={props.parameters}>
           {(parameters) => (
             <button
+              ref={paramsEl}
               class="cad-editor__params-entry"
               data-kind="parameters"
               aria-pressed={parameters().open}
               data-hovered={parameters().hovered ? "true" : undefined}
-              style={{ order: 0 }}
+              data-peer={parameters().peer ? "true" : undefined}
+              style={{ order: 0, ...(parameters().peer ? { "--peer-color": parameters().peer } : {}) }}
               title={`The model's parameters: ${parameters().count}`}
               onClick={() => parameters().onOpen()}
             >
@@ -678,7 +688,8 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
               data-past-marker={markerAt() <= count() ? "true" : undefined}
               data-hovered={editor.resultHovered() ? "true" : undefined}
               data-cross-hover={editor.returnCrossHovered() ? "true" : undefined}
-              style={{ order: ORDER.entry(count()) - 1 }}
+              data-peer={result().peer ? "true" : undefined}
+              style={{ order: ORDER.entry(count()) - 1, ...(result().peer ? { "--peer-color": result().peer } : {}) }}
               title={`What the model returns${result().count === undefined ? "" : `: ${result().count} value${result().count === 1 ? "" : "s"}`}`}
               onClick={() => result().onOpen()}
               onPointerEnter={() => editor.setResultHovered(true)}

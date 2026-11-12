@@ -5,7 +5,7 @@ import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
 import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setProp, usedFunctions } from "../../model/splice.ts";
-import type { FeatureEntry } from "../../model/timeline.ts";
+import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import { schemaOf, type Editor } from "./state.ts";
 
 /** Whether `text` is one expression that can replace a parameter's value, e.g. not `1,` or `1 // x`, which would break the code around it. */
@@ -23,8 +23,8 @@ function isExpression(text: string): boolean {
  * A text field holding a JS expression (research/02, "Parameters are JS expressions"). It commits
  * as it is typed, whenever the text is an expression, and follows remote changes only while it
  * isn't being edited. Other text is marked and never reaches the code; leaving the field drops it,
- * and Escape restores the value from before the edit. An empty field, only allowed with
- * `allowEmpty`, commits on Enter or blur.
+ * and so does closing its dialog. Escape restores the value from before the edit. An empty field,
+ * only allowed with `allowEmpty`, commits on Enter or blur.
  */
 export function ExpressionInput(props: { value: string; placeholder?: string; label: string; onCommit: (text: string) => boolean; disabled?: boolean; allowEmpty?: boolean }) {
   let input!: HTMLInputElement;
@@ -55,7 +55,9 @@ export function ExpressionInput(props: { value: string; placeholder?: string; la
       onInput={() => commit(input.value.trim(), true)}
       onKeyDown={(e) => {
         if (e.key === "Enter") commit(input.value.trim(), false);
-        if (e.key === "Escape") {
+        // Restoring the value is what Escape does here; with nothing to restore, it closes the dialog.
+        if (e.key === "Escape" && input.value !== before) {
+          e.preventDefault();
           input.value = before;
           commit(before, false);
         }
@@ -456,7 +458,7 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
     <section class="cad-editor__dialog" aria-label={`${schema().label} ${props.entry.name}`} data-feature={props.entry.name}>
       <header class="cad-editor__dialog-header">
         <strong>{schema().label}</strong> <code>{props.entry.name}</code> <OnBody editor={props.editor} entry={props.entry} />
-        <button class="cad-editor__link" aria-label="close" onClick={() => props.editor.openFeature(undefined)}>
+        <button class="cad-editor__link" aria-label="close" onClick={() => props.editor.select(undefined, "dialog")}>
           ×
         </button>
       </header>
@@ -538,6 +540,45 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
         >
           <button class="cad-editor__button cad-editor__button--danger" onClick={() => props.editor.deleteOpen()}>
             Delete {props.entry.name}
+          </button>
+        </Show>
+      </footer>
+    </section>
+  );
+}
+
+/**
+ * The dialog of an entry that has no form, a Custom Script or a body() (research/11): every selected
+ * item has a dialog (research/19-selection.md, "The selection"); this one opens the code or deletes it.
+ */
+export function CodeDialog(props: { editor: Editor; entry: ScriptEntry | FeatureEntry; index: number; onEditCode: () => void }) {
+  const [confirmDelete, setConfirmDelete] = createSignal(false);
+  const label = () => (props.entry.kind === "feature" ? props.entry.names.join(", ") : `the Custom Script at lines ${props.entry.lines.join("–")}`);
+  return (
+    <section class="cad-editor__dialog" aria-label={props.entry.kind === "feature" ? `body() ${label()}` : "Custom Script"} data-feature={props.entry.kind === "feature" ? props.entry.name : "script"}>
+      <header class="cad-editor__dialog-header">
+        <Show when={props.entry.kind === "feature"} fallback={<strong>Custom Script</strong>}>
+          <strong>body()</strong> <code>{label()}</code>
+        </Show>
+        <Show when={props.entry.kind === "script" && props.entry}>{(script) => <span class="cad-editor__muted">lines {script().lines.join("–")}</span>}</Show>
+        <button class="cad-editor__link" aria-label="close" onClick={() => props.editor.select(undefined, "dialog")}>
+          ×
+        </button>
+      </header>
+      <footer class="cad-editor__dialog-footer">
+        <button class="cad-editor__button" onClick={() => props.onEditCode()}>
+          Edit code
+        </button>
+        <Show
+          when={confirmDelete()}
+          fallback={
+            <button class="cad-editor__button" disabled={props.editor.syntaxError() !== undefined} onClick={() => setConfirmDelete(true)}>
+              Delete
+            </button>
+          }
+        >
+          <button class="cad-editor__button cad-editor__button--danger" onClick={() => void props.editor.remove(props.index).then(props.editor.setNotice)}>
+            Delete {label()}
           </button>
         </Show>
       </footer>

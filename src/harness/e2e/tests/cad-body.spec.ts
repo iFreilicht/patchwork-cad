@@ -59,9 +59,12 @@ test("a join onto a replicad shape fails alone, and its fix wraps the shape in b
   await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok");
   await expect.poll(() => names(page)).toEqual(["cut_plate", "sketch1", "extrude1"]);
   await expect(timelineEntry(page, "cut_plate")).toHaveAttribute("data-type", "body");
-  // A body() has no dialog: selecting it opens its code.
+  // A body() has no form: its dialog opens its code, or deletes it.
   await timelineEntry(page, "cut_plate").click();
-  await expect(editorView(page)).toHaveAttribute("data-open", "");
+  await expect(timelineEntry(page, "cut_plate")).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog(page)).toHaveAttribute("data-feature", "cut_plate");
+  await expect(dialog(page).getByRole("button")).toHaveText(["×", "Edit code", "Delete"]);
+  await dialog(page).getByRole("button", { name: "Edit code" }).click();
   await expect(page.locator(".cad-model__code .cad-model__focus").first()).toContainText("const cut_plate = body(() => {");
   // The editor has the focus, with the cursor at the start of the code; the next key removes the mark.
   const code = page.locator(".cad-model__code");
