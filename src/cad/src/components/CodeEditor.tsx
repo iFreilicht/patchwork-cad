@@ -235,6 +235,87 @@ const errorLine = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+/** A document an import in the code names, as the code pane shows it after the specifier (research/21, "The documents list"). */
+export interface CodeDocument {
+  /** The specifier as the code has it. */
+  specifier: string;
+  title: string;
+  /** Its state, e.g. "held", and the state's tooltip. */
+  state: string;
+  label: string;
+}
+
+/** A document's title after its specifier: the stored text stays the URL; a click opens the document. */
+class DocumentTitleWidget extends WidgetType {
+  constructor(
+    readonly document: CodeDocument,
+    readonly open: (specifier: string) => void,
+  ) {
+    super();
+  }
+  override eq(other: DocumentTitleWidget) {
+    const [a, b] = [this.document, other.document];
+    return a.specifier === b.specifier && a.title === b.title && a.state === b.state && a.label === b.label;
+  }
+  toDOM() {
+    const title = document.createElement("span");
+    title.className = "cad-model__document-title";
+    title.dataset["state"] = this.document.state;
+    title.textContent = this.document.title;
+    title.title = `Open ${this.document.title}: ${this.document.label}`;
+    title.setAttribute("role", "link");
+    title.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      this.open(this.document.specifier);
+    });
+    return title;
+  }
+  override ignoreEvent() {
+    return true;
+  }
+}
+
+/** The documents' titles by specifier, and what opens one. */
+const setDocumentTitles = StateEffect.define<{ titles: Map<string, CodeDocument>; open: (specifier: string) => void }>();
+/** Specifiers of documents in import and export statements: `from "automerge:…"`, `import "automerge:…"`. */
+const SPECIFIER = /\b(?:from|import)\s*(["'])(automerge:[^"'\n]*)\1/g;
+const documentTitles = StateField.define<{ titles: Map<string, CodeDocument>; open: (specifier: string) => void; decorations: DecorationSet }>({
+  create: () => ({ titles: new Map(), open: () => {}, decorations: Decoration.none }),
+  update(value, tr) {
+    let { titles, open } = value;
+    let changed = tr.docChanged;
+    for (const effect of tr.effects) {
+      if (!effect.is(setDocumentTitles)) continue;
+      ({ titles, open } = effect.value);
+      changed = true;
+    }
+    if (!changed) return value;
+    const text = tr.state.doc.toString();
+    const widgets = [...text.matchAll(SPECIFIER)].flatMap((m) => {
+      const document = titles.get(m[2]!);
+      return document ? [Decoration.widget({ widget: new DocumentTitleWidget(document, open), side: 1 }).range(m.index + m[0].length)] : [];
+    });
+    return { titles, open, decorations: Decoration.set(widgets) };
+  },
+  provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
+});
+
+/** Lines marked like the error's, e.g. the imports of documents that are held back. */
+const setMarkedLines = StateEffect.define<number[]>();
+const markedLines = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    value = value.map(tr.changes);
+    for (const effect of tr.effects) {
+      if (!effect.is(setMarkedLines)) continue;
+      const lines = [...new Set(effect.value)].filter((n) => n >= 1 && n <= tr.state.doc.lines).sort((a, b) => a - b);
+      value = Decoration.set(lines.map((n) => Decoration.line({ class: "cad-model__error-line", attributes: { "data-marked": "true" } }).range(tr.state.doc.line(n).from)));
+    }
+    return value;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 type CodemirrorExtensionDescription = PluginDescription & { supportedDatatypes?: "*" | string[] };
 
 /**
@@ -283,6 +364,11 @@ export function CodeEditor(props: {
   peerItems?: PeerItem[];
   /** The model's comment threads; the pane marks their code and offers to comment on a selection. */
   comments?: CommentStore | undefined;
+  /** The documents the code imports, whose titles show after their specifiers, and what opens one. */
+  documents?: CodeDocument[];
+  onOpenDocument?: (specifier: string) => void;
+  /** Lines to mark as the error line is, e.g. the imports of documents that are held back. */
+  markedLines?: number[];
 }) {
   let hovered: number | undefined;
   const hover = (offset: number | undefined) => {
@@ -351,6 +437,8 @@ export function CodeEditor(props: {
       // Only applies when no theme provides a highlighter, e.g. outside Patchwork.
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       errorLine,
+      markedLines,
+      documentTitles,
       focus,
       past,
       // Lowest precedence: its marks wrap the syntax tokens, so that greying the tokens past the marker keeps their colours.
@@ -411,6 +499,14 @@ export function CodeEditor(props: {
   // Both follow the source, which changes inside CodeMirror's own update when the user types here
   // (the sync plugin writes to the document then), and a dispatch during an update throws: dispatch after it.
   const dispatchSoon = (spec: Parameters<typeof view.dispatch>[0]) => queueMicrotask(() => disposed || view.dispatch(spec));
+  createEffect(() => {
+    const lines = props.markedLines ?? [];
+    dispatchSoon({ effects: setMarkedLines.of(lines) });
+  });
+  createEffect(() => {
+    const titles = new Map((props.documents ?? []).map((d) => [d.specifier, d]));
+    dispatchSoon({ effects: setDocumentTitles.of({ titles, open: (specifier) => props.onOpenDocument?.(specifier) }) });
+  });
   createEffect(() => {
     const span = props.past;
     dispatchSoon({ effects: setPast.of(span ? { from: span.start, to: span.end } : undefined) });

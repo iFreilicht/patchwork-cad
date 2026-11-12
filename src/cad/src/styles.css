@@ -1603,3 +1603,134 @@
 .cad-model__context {
   color: var(--cad-model-accent-text);
 }
+
+/* Documents the model refers to (research/21, "The documents list"): the datatype's icon, the title, and the state. */
+.cad-editor__document-icon,
+.cad-editor__document-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__document-row[data-role="indirect"],
+.cad-editor__document-row[data-role="link"] {
+  padding-left: 1.25rem;
+}
+
+.cad-editor__document-row[data-role="indirect"] .cad-editor__browser-name {
+  color: var(--cad-model-muted);
+}
+
+.cad-editor__document-row .cad-editor__browser-name {
+  font-family: var(--cad-model-family);
+}
+
+.cad-editor__document-state[data-state="newer"] {
+  color: var(--cad-model-accent-text);
+}
+
+.cad-editor__document-state[data-state="unavailable"],
+.cad-editor__document-state[data-state="held"] {
+  color: var(--cad-model-danger);
+}
+
+.cad-editor__document-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+}
+
+.cad-editor__document-open {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cad-editor__document-open > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The dialog is narrow next to an open code pane: its choices wrap, each a button of its own. */
+.cad-editor__dialog[data-feature="document"] .cad-editor__segmented {
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.cad-editor__dialog[data-feature="document"] .cad-editor__segment {
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+}
+
+.cad-editor__document-field .cad-editor__input {
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-family: var(--cad-model-family-code);
+  color: var(--cad-model-muted);
+}
+
+/* What the model gets of a document, kept small: a tree, the first lines, the size and picture. */
+.cad-editor__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.cad-editor__tree {
+  margin: 0;
+  padding-left: 1rem;
+  list-style: none;
+  font-family: var(--cad-model-family-code);
+}
+
+.cad-editor__preview > .cad-editor__tree {
+  padding-left: 0;
+}
+
+.cad-editor__tree summary {
+  cursor: pointer;
+}
+
+.cad-editor__tree-key {
+  color: var(--cad-model-accent-text);
+}
+
+.cad-editor__preview-text {
+  margin: 0;
+  font-family: var(--cad-model-family-code);
+  white-space: pre;
+}
+
+.cad-editor__preview-image {
+  max-width: 100%;
+  max-height: 8rem;
+  object-fit: contain;
+  align-self: flex-start;
+}
+
+/* A document's title after its specifier in the code; the text stays the URL. */
+.cad-model__document-title {
+  margin-left: 0.5ch;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--cad-model-panel);
+  color: var(--cad-model-accent-text);
+  font-family: var(--cad-model-family);
+  cursor: pointer;
+}
+
+.cad-model__document-title[data-state="held"],
+.cad-model__document-title[data-state="unavailable"] {
+  color: var(--cad-model-danger);
+}

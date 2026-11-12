@@ -22,6 +22,8 @@ export const CadModelDatatype = {
     doc.title = "CAD Model";
     doc.content = DEFAULT_SOURCE;
     doc.mimeType = MODEL_MIME_TYPE;
+    // Created here, so that two editors never create it at once, which would keep only one's views, configurations or locks.
+    doc.cad = {};
   },
   getTitle(doc: CadModelDoc) {
     return doc.title || "CAD Model";

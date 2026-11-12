@@ -92,9 +92,10 @@ export interface ViewPresence {
   marker?: TimelineMarker;
   /**
    * The selected item (research/19-selection.md): a timeline entry by an automerge cursor at the
-   * start of its code, a configuration or view by its id; the parameters and the return by kind.
+   * start of its code, a configuration or view by its id, a document by its URL without heads and
+   * the type it is imported with; the parameters and the return by kind.
    */
-  selection?: { kind: "feature" | "script" | "params" | "configuration" | "return" | "view"; id: string };
+  selection?: { kind: "feature" | "script" | "params" | "configuration" | "return" | "view" | "document"; id: string };
 }
 
 export interface CadModelDoc {
@@ -118,6 +119,11 @@ export interface CadData {
   /** Where the Home view looks from, if the model's users changed it; else the ViewCube's Home framing (research/18, "Home"). */
   home?: StoredCamera;
   configurations?: Configuration[];
+  /**
+   * The version of each document the model follows that it last built with, by the document's URL
+   * without a path or heads (research/21, "Following and pinning"); written by the editor only.
+   */
+  locks?: Record<string, string[]>;
 }
 
 /** A value of a parameter, as JSON. */

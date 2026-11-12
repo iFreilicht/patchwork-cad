@@ -76,6 +76,13 @@ export interface RefData {
   near?: readonly [number, number, number];
 }
 
+/** A feature of a build that is broken or failed, by its name. */
+export interface Failure {
+  name: string;
+  status: "broken" | "failed";
+  message: string | undefined;
+}
+
 export interface ModelError {
   message: string;
   /** 1-based line in the model source, when it can be determined. */
@@ -124,6 +131,6 @@ export type WorkerResponse =
   | { type: "located"; id: number; found: { body: string; indices: number[] }[][] }
   | { type: "resultMeshed"; id: number; shape: MeshedShape | undefined }
   | { type: "differenceMeshed"; id: number; shapes: MeshedShape[] }
-  /** The trial build's error, or how many of its features are broken or failed. */
-  | { type: "checked"; id: number; error: ModelError | undefined; problems: number }
+  /** The trial build's error, or how many of its features are broken or failed, and which. */
+  | { type: "checked"; id: number; error: ModelError | undefined; problems: number; failures: Failure[] }
   | { type: "requestFailed"; id: number; message: string };

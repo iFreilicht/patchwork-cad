@@ -150,7 +150,16 @@ export interface ParametersEntry {
   hovered: boolean;
 }
 
-export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => void; peers?: TimelinePeer[]; comments?: CommentStore | undefined; result?: ResultEntry; parameters?: ParametersEntry }) {
+export function Timeline(props: {
+  editor: Editor;
+  onOpenCode: (span: Span) => void;
+  peers?: TimelinePeer[];
+  comments?: CommentStore | undefined;
+  result?: ResultEntry;
+  parameters?: ParametersEntry;
+  /** The documents entry `index` uses, with their titles, for "Edit ‹document›" (research/21, "The documents list"). */
+  documentsOf?: (index: number) => { id: string; title: string }[];
+}) {
   let nav!: HTMLElement;
   let wrap!: HTMLDivElement;
   let markerEl!: HTMLButtonElement;
@@ -310,6 +319,7 @@ export function Timeline(props: { editor: Editor; onOpenCode: (span: Span) => vo
     const items: MenuItem[] = [];
     if (e.kind === "feature" && e.type !== "body") items.push({ label: "Edit", run: () => editor.select({ kind: "entry", index }, "timeline") });
     items.push({ label: "Edit code", run: () => props.onOpenCode(e.span) });
+    for (const d of props.documentsOf?.(index) ?? []) items.push({ label: `Edit ${d.title}`, run: () => editor.select({ kind: "document", id: d.id }, "timeline") });
     items.push({ label: "Roll back to here", run: () => editor.setMarker(index + 1) });
     const m = menu();
     if (comments() && m) items.push({ label: "Comment", run: () => void openComments(index, m.x, m.y, true) });

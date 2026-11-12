@@ -1,6 +1,6 @@
-import { parse, type Program } from "acorn";
+import { parse, type ImportAttribute, type Program } from "acorn";
 import { analyze, derivedStatements, FEATURES_MODULE } from "../model/analyze.ts";
-import { isDocumentSpecifier } from "./imports.ts";
+import { importType, isDocumentSpecifier, type ImportType } from "./imports.ts";
 
 /** Modules a model may import, and the global the worker provides each as. */
 export const PROVIDED: Record<string, string> = {
@@ -26,7 +26,8 @@ export class PrepareError extends Error {
  * Turns model source into code that replicad-evaluator's browser evaluator runs unchanged, keeping
  * every line where it was, so that line numbers in stack traces stay correct:
  * - Imports of the provided modules become destructured globals, and imports of documents
- *   (`automerge:` URLs) import the module `resolve` made of each (see `rewriteImports`). Any other
+ *   (`automerge:` URLs) import the module `resolve` made of each, for the type of their attribute,
+ *   which is dropped (see `rewriteImports`). Any other
  *   static import is rejected: the browser would fetch it (the module is evaluated from a blob URL),
  *   and every import must go through our loader (research/02, "Verdict: imports in code").
  *   Dynamic import() and fetch() stay possible: model code is not sandboxed.
@@ -64,8 +65,8 @@ export function prepare(source: string, resolve: Resolve = noDocuments): string 
   return applyEdits(source, edits);
 }
 
-/** The module an imported document's specifier stands for, as a URL; throws with why there is none. */
-export type Resolve = (specifier: string) => string;
+/** The module an imported document's specifier stands for, imported with attribute type `type`, as a URL; throws with why there is none. */
+export type Resolve = (specifier: string, type: ImportType | undefined) => string;
 
 const noDocuments: Resolve = () => {
   throw new Error("documents can only be imported in Patchwork");
@@ -82,7 +83,8 @@ function applyEdits(source: string, edits: Edit[]): string {
 /**
  * The edits that make a module's imports loadable from a blob URL, keeping every line where it was:
  * provided modules become destructured globals, and a document's specifier becomes the URL of its
- * module, which `export … from` may re-export too.
+ * module, which `export … from` may re-export too. The URL is a module of what the attribute asked
+ * for, so the attribute goes (research/21, "Files as modules"); its line breaks stay.
  */
 function rewriteImports(source: string, program: Program, resolve: Resolve): Edit[] {
   const edits: Edit[] = [];
@@ -92,17 +94,20 @@ function rewriteImports(source: string, program: Program, resolve: Resolve): Edi
     if (!from) continue;
     const specifier = String(from.value);
     const line = node.loc?.start.line ?? 1;
+    const attributes = (node as { attributes?: ImportAttribute[] }).attributes ?? [];
     if (isDocumentSpecifier(specifier)) {
       let url;
       try {
-        url = resolve(specifier);
+        url = resolve(specifier, importType(attributes));
       } catch (error) {
         throw new PrepareError(`${specifier} can't be imported: ${String((error as Error)?.message ?? error)}`, "import", line);
       }
-      edits.push({ start: from.start, end: from.end, text: JSON.stringify(url) });
+      const clause = /^\s*(?:with|assert)\s*\{[^}]*\}/.exec(source.slice(from.end, node.end))?.[0] ?? "";
+      edits.push({ start: from.start, end: from.end + clause.length, text: JSON.stringify(url) + "\n".repeat(clause.split("\n").length - 1) });
       continue;
     }
     const global = PROVIDED[specifier];
+    if (attributes.length) throw new PrepareError(`Only documents (automerge: URLs) can be imported with attributes, not ${JSON.stringify(specifier)}`, "import", line);
     if (!global || node.type !== "ImportDeclaration") {
       throw new PrepareError(`Only ${Object.keys(PROVIDED).map((m) => JSON.stringify(m)).join(", ")} and documents (automerge: URLs) can be imported, not ${JSON.stringify(specifier)}`, "import", line);
     }

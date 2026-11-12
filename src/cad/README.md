@@ -35,9 +35,9 @@ export default function main({ size }) {
 }
 ```
 
-`main` returns a shape or body, an array of them, or `{ shape, name, color }` entries ([replicad-evaluator](https://github.com/sgenoud/replicad/tree/main/packages/replicad-evaluator) conventions). Only `replicad`, `replicad/shape-functions`, `@patchwork-cad/features` and documents (`automerge:` URLs of data documents and JS files, see [research/02](../../research/02-model-storage.md#imports-in-the-prototype)) can be imported. The editor recognizes `const x = feature({…})` statements of `main` as timeline entries; everything else is a Custom Script.
+`main` returns a shape or body, an array of them, or `{ shape, name, color }` entries ([replicad-evaluator](https://github.com/sgenoud/replicad/tree/main/packages/replicad-evaluator) conventions). Only `replicad`, `replicad/shape-functions`, `@patchwork-cad/features` and documents (`automerge:` URLs of data documents, JS files and any file `with { type: "text" }` or `with { type: "bytes" }`, see [research/02](../../research/02-model-storage.md#imports-in-the-prototype)) can be imported; the editor lists them in its browser, with a dialog each, and holds back a newer version of a followed one that breaks the model ([research/21](../../research/21-embedding.md#the-documents-list)). The editor recognizes `const x = feature({…})` statements of `main` as timeline entries; everything else is a Custom Script.
 
-`main` takes its parameters from `defaultParams`; `const`s at its start that only compute values are derived parameters, and an optional `export const paramConfig = { w: { title, minimum, maximum, unit } }` describes them in JSON Schema's terms ([research/17](../../research/17-parameters.md)). The editor's first timeline entry, "params", edits them; configurations (named sets of values) and named views are kept in the model document next to the code.
+`main` takes its parameters from `defaultParams`; `const`s at its start that only compute values are derived parameters, and an optional `export const paramConfig = { w: { title, minimum, maximum, unit } }` describes them in JSON Schema's terms ([research/17](../../research/17-parameters.md)). The editor's first timeline entry, "params", edits them; configurations (named sets of values), named views and the locks of followed documents are kept in the model document next to the code.
 
 ## Layout
 
@@ -45,5 +45,5 @@ export default function main({ size }) {
 - `src/datatype.ts`: `{ title, content, mimeType, cad }` and the seed model; `src/embedDatatype.ts`: embeds
 - `src/tools/`: one mount function per tool
 - `src/kernel/`: the OCCT worker (`worker.ts`), its main-thread facade (`engine.ts`) and the source preparation (`prepare.ts`), which also names features in memory
-- `src/model/`: reading the source (`analyze.ts`, `timeline.ts`) and editing it with minimal splices (`splice.ts`)
+- `src/model/`: reading the source (`analyze.ts`, `timeline.ts`, `documents.ts`) and editing it with minimal splices (`splice.ts`), and the locks of followed documents (`locks.ts`)
 - `src/components/`: the shared model (`createModel.ts`), code editor, 3D view and status bar; `editor/` holds the WYSIWYG editor

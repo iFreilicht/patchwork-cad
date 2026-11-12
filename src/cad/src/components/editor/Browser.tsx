@@ -11,6 +11,8 @@ import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
 import { NameField } from "./NameField.tsx";
 import type { Editor, Selectable } from "./state.ts";
+import type { DocumentRow, Documents } from "./documents.ts";
+import { Icon } from "../icons.tsx";
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
 export const EyeIcon = (props: { open: boolean }) => (
@@ -46,6 +48,7 @@ export interface BrowserPeer {
   entry?: number;
   view?: string;
   configuration?: string;
+  document?: string;
 }
 
 /**
@@ -197,6 +200,7 @@ export function Browser(props: {
   bodies: Bodies;
   views: ViewsSection;
   params: ParamsController;
+  documents: Documents;
   peers: BrowserPeer[];
   onHoverConfiguration: (hovered: boolean) => void;
   embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined;
@@ -240,6 +244,9 @@ export function Browser(props: {
         <Show when={props.bodies.rows().some((r) => r.kind === "sketch")}>
           <h3 class="cad-editor__browser-heading">Sketches</h3>
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
+        </Show>
+        <Show when={props.documents.rows().length > 0}>
+          <DocumentList documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} />
         </Show>
         <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
         <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
@@ -606,5 +613,103 @@ export function ResultDialog(props: { editor: Editor; onClose: () => void; onEdi
         </button>
       </footer>
     </section>
+  );
+}
+
+/** What a document row's context menu and the document dialog offer (research/21, "The documents list"). */
+export function documentActions(documents: Documents, row: DocumentRow): (MenuItem & { disabled?: boolean })[] {
+  const state = documents.state(row).state;
+  const own = row.role === "import";
+  return [
+    { label: "Open", disabled: !row.doc, run: () => documents.open(row) },
+    row.pinned ? { label: "Follow", disabled: !own, run: () => documents.follow(row) } : { label: "Pin to this version", disabled: !own || !documents.builtWith(row), run: () => documents.pin(row) },
+    { label: "Update", disabled: !own || state !== "newer", run: () => documents.update(row) },
+    { label: "Remove", danger: true, disabled: !documents.removable(row), run: () => documents.remove(row) },
+  ];
+}
+
+/**
+ * The documents the model refers to (research/21, "The documents list"): a row each, with its
+ * datatype's icon, its title and the path it names, and its state; a click selects it, which opens
+ * its dialog. Hovering or selecting a row highlights the features that use it, and hovering or
+ * selecting a feature the rows of the documents it uses.
+ */
+function DocumentList(props: { documents: Documents; editor: Editor; openMenu: OpenMenu; peers: () => BrowserPeer[] }) {
+  const open = (row: DocumentRow, x: number, y: number) => {
+    const items = documentActions(props.documents, row).filter((a) => !a.disabled);
+    if (items.length) props.openMenu({ key: `document:${row.id}`, label: `Actions for ${props.documents.title(row)}`, items, x, y });
+  };
+  return (
+    <>
+      <h3 class="cad-editor__browser-heading">Documents</h3>
+      <ul class="cad-editor__browser-list" aria-label="Documents">
+        {/* By position, as the bodies: rows are new objects after every edit, and their buttons should stay, e.g. while clicked. */}
+        <Index each={props.documents.rows()}>
+          {(row) => {
+            const item = () => ({ kind: "document", id: row().id }) as const;
+            const selected = () => props.editor.isSelected(item());
+            const focused = () => props.editor.focused();
+            const hovered = () => props.editor.hoveredDocument() === row().id || (focused() !== undefined && row().users.entries.includes(focused()!));
+            const peer = () => props.peers().find((p) => p.document === row().id)?.color;
+            const state = () => props.documents.state(row());
+            const info = () => props.documents.info(row());
+            const via = () => {
+              const parent = props.documents.rows().find((r) => r.id === row().via);
+              return parent && props.documents.title(parent);
+            };
+            return (
+              <li
+                class="cad-editor__browser-row cad-editor__document-row"
+                data-kind="document"
+                data-key={`document:${row().id}`}
+                data-role={row().role}
+                data-name={info().title}
+                data-state={state().state}
+                data-selected={selected() ? "true" : undefined}
+                data-hovered={hovered() ? "true" : undefined}
+                data-peer={peer() ? "true" : undefined}
+                style={peer() ? { "--peer-color": peer() } : {}}
+                onPointerEnter={() => props.editor.setHoveredDocument(row().id)}
+                onPointerLeave={() => props.editor.setHoveredDocument(undefined)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  open(row(), event.clientX, event.clientY);
+                }}
+              >
+                <span class="cad-editor__document-icon" title={info().datatype}>
+                  <Icon name={info().icon} />
+                </span>
+                <button
+                  class="cad-editor__browser-name"
+                  title={`${props.documents.title(row())}${row().path ?? ""}${row().role === "indirect" ? `, imported by ${via() ?? "an imported file"}` : row().role === "link" ? ", linked to by a configuration" : ""}`}
+                  aria-pressed={selected()}
+                  onClick={(event) => toggle(props.editor, item(), event, selected())}
+                  onKeyDown={(event) => {
+                    if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                      event.preventDefault();
+                      const r = event.currentTarget.getBoundingClientRect();
+                      open(row(), r.left, r.bottom);
+                    }
+                  }}
+                  onFocus={() => props.editor.setHoveredDocument(row().id)}
+                  onBlur={() => props.editor.setHoveredDocument(undefined)}
+                >
+                  <span>{props.documents.title(row())}</span>
+                  <Show when={row().path}>
+                    <span class="cad-editor__muted">{row().path}</span>
+                  </Show>
+                  <Show when={row().type}>
+                    <span class="cad-editor__muted">{row().type}</span>
+                  </Show>
+                </button>
+                <span class="cad-editor__document-state" data-state={state().state} title={state().label} aria-label={state().label} role="img">
+                  <Icon name={state().icon} size={12} />
+                </span>
+              </li>
+            );
+          }}
+        </Index>
+      </ul>
+    </>
   );
 }

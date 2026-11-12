@@ -29,6 +29,10 @@ import { Menu, type MenuItem } from "./Menu.tsx";
 import { createConfigurations } from "../configurations.ts";
 import { createParams } from "./parameters.ts";
 import { ParamsDialog } from "./ParamsDialog.tsx";
+import { createDocumentInfo } from "../documentInfo.ts";
+import { createDocuments, type DocumentRow } from "./documents.ts";
+import { DocumentDialog } from "./DocumentDialog.tsx";
+import { UNDO_IGNORE } from "../../model/locks.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -50,14 +54,17 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   props.handle.on("change", onCode);
   onCleanup(() => props.handle.off("change", onCode));
   const params = createParams(props.handle, code, createConfigurations(props.handle), ui);
-  const model = createModel(props.handle, params.shown);
+  // The editor alone writes locks of the documents the model follows (research/21, "Following and pinning").
+  const model = createModel(props.handle, params.shown, { writeLocks: true });
   const editor = createEditor(props.handle, model, ui);
+  const documentInfo = createDocumentInfo();
+  const documents = createDocuments({ handle: props.handle, editor, model, configurations: params.configurations.list, info: documentInfo, element: props.element });
   const bodies = createBodies(editor, ui);
   const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
-  // Comments and Patchwork's metadata (`@…`) aren't undone (research/16-undo-redo.md).
-  const undo = bindUndo(props.element, props.handle, { ignore: (path) => String(path[0]).startsWith("@") });
+  // Comments, Patchwork's metadata (`@…`) and the locks aren't undone (research/16-undo-redo.md).
+  const undo = bindUndo(props.element, props.handle, { ignore: UNDO_IGNORE });
   onCleanup(undo.unbind);
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
@@ -99,9 +106,16 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const s = editor.selection();
     return s?.kind === "view" ? viewItems(views.views).find((v) => v.id === s.id) : undefined;
   };
+  const selectedDocument = () => {
+    const s = editor.selection();
+    return s?.kind === "document" ? documents.rows().find((r) => r.id === s.id) : undefined;
+  };
   createEffect(() => {
     const s = editor.selection();
     if ((s?.kind === "view" && !selectedView()) || (s?.kind === "configuration" && s.id && !params.configurations.list().some((c) => c.id === s.id))) editor.select(undefined, "dialog");
+    // A document no longer imported, e.g. removed by a collaborator; not while the code doesn't parse, when the list is its last valid state,
+    // nor before the list has followed an edit of the code.
+    if (s?.kind === "document" && !selectedDocument() && !editor.syntaxError() && editor.source() === (props.handle.doc()?.content ?? "")) editor.select(undefined, "dialog");
   });
   // A configuration selected is the one the model is shown with, also when that changes in the dialog or by "+" in the browser.
   createEffect(
@@ -126,6 +140,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   };
   const dialogCode = createMemo<ReturnType<typeof codeEntry>>((previous) => codeEntry() ?? previous);
   const dialogView = createMemo<ReturnType<typeof selectedView>>((previous) => selectedView() ?? previous);
+  const dialogDocument = createMemo<DocumentRow | undefined>((previous) => selectedDocument() ?? previous);
+  /** The documents an entry uses, with their titles, for "Edit ‹document›". */
+  const documentsOf = (index: number) => editor.documentsOf(index).flatMap((id) => {
+    const row = documents.rows().find((r) => r.id === id);
+    return row ? [{ id, title: documents.title(row) }] : [];
+  });
   /** Which table of the Parameters dialog was used last: the code pane scrolls to its code. */
   const [paramsSection, setParamsSection] = createSignal<"params" | "derived">("params");
   const [codeFocus, setCodeFocus] = createSignal<Span>();
@@ -289,7 +309,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** The code of the features hovered in the 3D view: their statements, or in a Custom Script the lines that ran them. */
   const viewHoveredCode = (): Span[] => {
     const names = new Set(viewFeatures());
-    if (names.size === 0 || editor.syntaxError()) return [];
+    if (editor.syntaxError()) return [];
+    // The code of the features that use the hovered or selected document (research/21, "The documents list").
+    const focused = editor.documents().find((d) => d.id === editor.focusedDocument());
+    if (focused) return focused.users.entries.flatMap((i) => (editor.timeline().entries[i] ? [editor.timeline().entries[i]!.span] : []));
+    if (names.size === 0) return [];
     const text = editor.source();
     const lineStarts = [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
     return editor.timeline().entries.flatMap((e): Span[] => {
@@ -379,22 +403,23 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const browserPeers = (): BrowserPeer[] =>
     editorPeers().map((p) => {
       const s = p.state.selection;
-      return { color: p.color, ...(p.entry !== undefined ? { entry: p.entry } : {}), ...(s?.kind === "view" ? { view: s.id } : {}), ...(s?.kind === "configuration" ? { configuration: s.id } : {}) };
+      return { color: p.color, ...(p.entry !== undefined ? { entry: p.entry } : {}), ...(s?.kind === "view" ? { view: s.id } : {}), ...(s?.kind === "configuration" ? { configuration: s.id } : {}), ...(s?.kind === "document" ? { document: s.id } : {}) };
     });
 
   /** The code of what is selected as `{ kind, id }`, by this user or a collaborator, if it has code. */
-  const codeOf = (kind: string | undefined, entry: number | undefined, section: "params" | "derived" = "params"): Span | undefined => {
+  const codeOf = (kind: string | undefined, entry: number | undefined, section: "params" | "derived" = "params", id?: string): Span | undefined => {
     if (editor.syntaxError()) return undefined;
     const info = params.info();
     if (entry !== undefined) return editor.timeline().entries[entry]?.span;
     if (kind === "return") return editor.timeline().returned;
+    if (kind === "document") return editor.documents().find((d) => d.id === id)?.statements[0]?.span;
     if (kind !== "params" && kind !== "configuration") return undefined;
     const derived = info?.derived ?? [];
     if (kind === "params" && section === "derived" && derived.length) return { start: derived[0]!.statement.start, end: derived[derived.length - 1]!.statement.end };
     return info?.defaults?.statement ?? info?.mainStatement;
   };
   const peerItems = () => editorPeers().flatMap((p) => {
-    const span = codeOf(p.state.selection?.kind, p.entry);
+    const span = codeOf(p.state.selection?.kind, p.entry, "params", p.state.selection?.id);
     return span ? [{ ...span, color: p.color }] : [];
   });
 
@@ -410,6 +435,8 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     for (const d of info?.derived ?? []) items.push({ item: { kind: "params" }, span: d.statement, section: "derived" });
     // main's head, `export default function main({ … } = defaultParams) {`, takes the parameters.
     if (info?.mainStatement && info.mainBody) items.push({ item: { kind: "params" }, span: { start: info.mainStatement.start, end: info.mainBody.start + 1 }, section: "params" });
+    // An import of a document selects the document (research/21, "The documents list").
+    for (const d of editor.documents()) for (const statement of d.statements) items.push({ item: { kind: "document", id: d.id }, span: statement.span });
     // Blanks before and after a statement on its lines are part of it: only lines without an item, e.g. blank ones, have none.
     const blank = (from: number, to: number) => /^[ \t]*$/.test(text.slice(from, to));
     return items.map((x) => {
@@ -433,7 +460,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** Code to scroll to: the selection's, when it is made elsewhere, the code pane opens, or another table of the Parameters dialog is used. */
   const [reveal, setReveal] = createSignal<Span>();
   const revealSelection = () => {
-    const span = untrack(() => codeOf(editor.selection()?.kind, editor.selectedIndex(), paramsSection()));
+    const span = untrack(() => codeOf(editor.selection()?.kind, editor.selectedIndex(), paramsSection(), editor.selection()?.id));
     if (span) setReveal({ ...span });
   };
   createEffect(on(editor.selection, (s) => s && s.from !== "code" && revealSelection()));
@@ -536,7 +563,22 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const s = editor.selection();
     if (!s) return "";
     if (s.kind === "feature" || s.kind === "script") return `${s.kind}:${editor.selectedIndex() ?? ""}`;
-    return s.kind === "configuration" || s.kind === "view" ? `${s.kind}:${s.id}` : s.kind;
+    return s.kind === "configuration" || s.kind === "view" || s.kind === "document" ? `${s.kind}:${s.id}` : s.kind;
+  };
+
+  /** Documents held back at their locks, with what their newer version brings (research/21, "Following and pinning"). */
+  const heldBack = () =>
+    documents.rows().flatMap((r) => (r.held ? [`${documents.title(r)} is held back at the version the model last built with: ${r.held.errors.join("; ")}`] : []));
+  /** The documents the code imports, for their titles in the code pane, and the lines of the held-back ones. */
+  const codeDocuments = () =>
+    documents.rows().flatMap((r) => {
+      const state = documents.state(r);
+      return r.statements.map((s) => ({ specifier: s.specifier, title: documents.title(r) + (r.path ?? ""), state: state.state, label: state.label }));
+    });
+  const heldLines = () => documents.rows().flatMap((r) => (r.held ? r.statements.map((s) => s.line) : []));
+  const openDocument = (specifier: string) => {
+    const row = documents.rows().find((r) => r.statements.some((s) => s.specifier === specifier));
+    if (row) documents.open(row);
   };
 
   /** Why a body() failed: it has no dialog to say it (research/11), so the status bar does. */
@@ -546,7 +588,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} params={params} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
+        <Browser editor={editor} bodies={bodies} views={views} params={params} documents={documents} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
       </Show>
       <div class="cad-editor__stage" ref={stage}>
         <Viewer
@@ -576,10 +618,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         {/* The selected item's dialog (research/19-selection.md): every selected item has one. */}
         <Switch>
           <Match when={editor.open()}>
-            <FeatureDialog editor={editor} entry={dialogEntry()!} onEditCode={editCode} promote={params.promote} />
+            <FeatureDialog editor={editor} entry={dialogEntry()!} onEditCode={editCode} promote={params.promote} documents={documentsOf(editor.timeline().entries.indexOf(dialogEntry()!))} />
           </Match>
           <Match when={codeEntry()}>
-            <CodeDialog editor={editor} entry={dialogCode()!.entry} index={dialogCode()!.index} onEditCode={() => openCode(dialogCode()!.entry.span)} />
+            <CodeDialog editor={editor} entry={dialogCode()!.entry} index={dialogCode()!.index} onEditCode={() => openCode(dialogCode()!.entry.span)} documents={documentsOf(dialogCode()!.index)} />
           </Match>
           <Match when={editor.isSelected({ kind: "params" })}>
             <ParamsDialog params={params} editor={editor} values={model.paramValues} onClose={() => editor.select(undefined, "dialog")} onEditCode={editParams} onSection={setParamsSection} />
@@ -589,6 +631,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           </Match>
           <Match when={selectedView()}>
             <ViewDialog section={views} view={dialogView()!} onClose={() => editor.select(undefined, "dialog")} />
+          </Match>
+          <Match when={selectedDocument()}>
+            <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
         </Switch>
         <Show when={viewMenu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={stage} down onClose={() => setViewMenu(undefined)} />}</Show>
@@ -619,6 +664,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             peerSelections={presence.peers().flatMap((p) => (p.state.code ? [{ key: p.key, color: p.color, contactUrl: p.contactUrl, ...p.state.code }] : []))}
             peerItems={peerItems()}
             comments={comments}
+            documents={codeDocuments()}
+            onOpenDocument={openDocument}
+            markedLines={heldLines()}
           />
         </div>
       </Show>
@@ -626,6 +674,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         editor={editor}
         onOpenCode={openCode}
         peers={timelinePeers()}
+        documentsOf={documentsOf}
         comments={comments}
         result={{
           get open() {
@@ -655,7 +704,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onOpen: () => toggle({ kind: "params" }),
         }}
       />
-      <StatusBar model={model} notice={editor.notice()} problems={[...undialogued(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }

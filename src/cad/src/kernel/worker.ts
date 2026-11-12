@@ -6,7 +6,7 @@ import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
-import { dataModule, type Imports } from "./imports.ts";
+import { dataModule, moduleKey, textModule, type ImportedModule, type Imports } from "./imports.ts";
 import { DERIVED, prepare, prepareImported, PrepareError, PROVIDED, type Resolve } from "./prepare.ts";
 import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
@@ -124,22 +124,49 @@ let buildModule: { code: string; module: Promise<Record<string, unknown>> } | un
 const importUrls = new Map<string, string>();
 const isImportUrl = new Set<string>();
 
+/**
+ * The bytes of imported files by their id (a document at its heads), which their modules read: the
+ * module's code names the id, not the bytes, so that a file that didn't change stays one module.
+ */
+const BYTES = "patchworkCadBytes";
+const bytes = new Map<string, Uint8Array>();
+(globalThis as Record<string, unknown>)[BYTES] = (id: string) => bytes.get(id);
+
+/** The code of an imported document's module; JS documents import their own documents through `resolve`. */
+function moduleCode(imported: Exclude<ImportedModule, { kind: "problem" }>, resolve: Resolve): string {
+  switch (imported.kind) {
+    case "data":
+      return dataModule(imported.value, imported.json);
+    case "text":
+      return textModule(imported.text);
+    case "bytes":
+      if (!bytes.has(imported.id)) bytes.set(imported.id, imported.bytes);
+      return `export default globalThis.${BYTES}(${JSON.stringify(imported.id)});`;
+    case "js":
+      return prepareImported(imported.code, resolve);
+  }
+}
+
 /** Makes the documents of `imports` modules, each after the documents it imports itself. */
 function resolver(imports: Imports): Resolve {
+  // Bytes no longer imported go: a module evaluated with them keeps its own, and one that comes back is given them again.
+  const ids = new Set(Object.values(imports).flatMap((m) => (m.kind === "bytes" ? [m.id] : [])));
+  for (const id of bytes.keys()) if (!ids.has(id)) bytes.delete(id);
   const resolving = new Set<string>();
-  const resolve: Resolve = (specifier) => {
-    const imported = imports[specifier];
+  const resolve: Resolve = (specifier, type) => {
+    const key = moduleKey(specifier, type);
+    const imported = imports[key];
     if (!imported) throw new Error("it wasn't loaded");
     if (imported.kind === "problem") throw new Error(imported.problem);
-    if (resolving.has(specifier)) throw new Error("it imports itself, through the documents it imports");
-    resolving.add(specifier);
+    if (resolving.has(key)) throw new Error("it imports itself, through the documents it imports");
+    resolving.add(key);
     let code;
     try {
-      code = imported.kind === "data" ? dataModule(imported.value) : prepareImported(imported.code, resolve);
+      code = moduleCode(imported, resolve);
     } catch (error) {
       throw error instanceof PrepareError ? new Error(`${error.message} (its line ${error.line})`) : error;
     } finally {
-      resolving.delete(specifier);
+      resolving.delete(key);
     }
     let url = importUrls.get(code);
     if (!url) {
@@ -314,6 +341,7 @@ async function check(id: number, source: string, buildParams: BuildParams | unde
   params = buildParams;
   resolve = resolver(imports);
   const problems = () => currentTrace().filter((t) => t.status !== "ok").length;
+  const failures = () => currentTrace().flatMap((t) => (t.status === "ok" ? [] : [{ name: t.name, status: t.status, message: t.message }]));
   try {
     const code = prepare(source, resolve);
     await kernel;
@@ -322,11 +350,11 @@ async function check(id: number, source: string, buildParams: BuildParams | unde
     const module = await browserEvaluator.evaluateModule<Record<string, unknown>>(code, { filename: "__entry__.ts", globals: { replicad, replicadShapeFns: undefined, oc: (await kernel).oc } });
     const main = module["default"];
     if (typeof main === "function") (main as (p: unknown) => unknown)(withParams(module["defaultParams"] ?? {}));
-    post({ type: "checked", id, error: undefined, problems: problems() });
+    post({ type: "checked", id, error: undefined, problems: problems(), failures: failures() });
   } catch (error) {
     const kind = error instanceof PrepareError ? error.kind : "runtime";
     const line = error instanceof PrepareError ? error.line : lineFromStack((error as Error)?.stack);
-    post({ type: "checked", id, error: { message: String((error as Error)?.message ?? error), line, kind }, problems: problems() });
+    post({ type: "checked", id, error: { message: String((error as Error)?.message ?? error), line, kind }, problems: problems(), failures: failures() });
   }
 }
 

@@ -18,13 +18,15 @@ import { createEntityComments, DetachedButton } from "../components/entityCommen
 import type { Entity } from "../components/Viewer.tsx";
 import { analyze } from "../model/analyze.ts";
 import { timeline } from "../model/timeline.ts";
+import { createDocumentInfo, heldProblems } from "../components/documentInfo.ts";
 import "../styles.css";
 
 const VIEWER_TOOL_ID = "cad-model-viewer";
 
 /**
  * The model's 3D view alone, read-only: for embedding a model in other documents and as a building
- * block. It also shows embeds (`cad-model-embed`), a model seen from one of its named views.
+ * block. It also shows embeds (`cad-model-embed`), a model seen from one of its named views. Both
+ * read the locks of followed documents and never write them (research/21, "Following and pinning").
  */
 export default function mount(handle: DocHandle<CadModelDoc | CadModelEmbedDoc>, element: HTMLElement): () => void {
   return render(() => {
@@ -110,12 +112,13 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   const ui = createUiState(props.element, props.handle.url);
   const views = createNamedViews(props.handle);
   const { props: presence, popover } = viewerPresence(props.element, props.handle, model);
+  const info = createDocumentInfo();
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
       <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
       {popover(() => root)}
-      <StatusBar model={model} />
+      <StatusBar model={model} problems={heldProblems(model, info)} />
     </div>
   );
 }
@@ -157,6 +160,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   const model = createModel(props.model, params);
   const views = createNamedViews(props.model);
   const { props: presence, popover } = viewerPresence(props.element, props.model, model);
+  const info = createDocumentInfo();
   let stage!: HTMLDivElement;
   /** The model's views, Home first, whose camera is unset until it is changed (research/18, "Home"). */
   const all = () => [{ id: HOME, name: "Home", camera: views.home() }, ...views.views()];
@@ -258,7 +262,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
         </button>
         {popover(() => stage)}
       </div>
-      <StatusBar model={model} problems={configured().problems} />
+      <StatusBar model={model} problems={[...heldProblems(model, info), ...configured().problems]} />
     </div>
   );
 }

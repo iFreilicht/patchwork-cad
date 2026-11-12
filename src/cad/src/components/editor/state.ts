@@ -40,6 +40,7 @@ import {
 import { lanes as lanesOf, type Lanes } from "../../model/lanes.ts";
 import { deleteScript, rename, renameOutput, unwrapBody, wrapInBody, type Refactoring } from "../../model/refactor.ts";
 import { markerPosition, ownerNames, ownersOf, timeline, type Entry, type FeatureEntry, type Timeline } from "../../model/timeline.ts";
+import { documentStatements, usersOf, type DocumentStatement } from "../../model/documents.ts";
 import type { CadModelDoc, TimelineMarker } from "../../types.ts";
 import type { Model } from "../createModel.ts";
 import type { UiState } from "../uiState.ts";
@@ -63,14 +64,16 @@ export interface LaneHover {
   version: string;
 }
 
-export type SelectionKind = "feature" | "script" | "params" | "configuration" | "return" | "view";
+export type SelectionKind = "feature" | "script" | "params" | "configuration" | "return" | "view" | "document";
 /** Where a selection was made: that pane doesn't scroll to it. */
 export type SelectionFrom = "browser" | "timeline" | "code" | "view" | "dialog" | "toolbar";
 
 /**
  * The selected item (research/19-selection.md, "The selection"). A timeline entry's `id` is an
  * automerge cursor at the start of its code; a configuration's or a view's is its own (`""` is
- * Defaults); the parameters and the return have none.
+ * Defaults); a document's is its URL without heads and the type it is imported with
+ * (`documentId`), or for a linked value's document its URL as a link; the parameters and the return
+ * have none.
  */
 export interface Selection {
   kind: SelectionKind;
@@ -79,7 +82,16 @@ export interface Selection {
 }
 
 /** What can be selected: a timeline entry by its index, or another item. */
-export type Selectable = { kind: "entry"; index: number } | { kind: "params" | "return" } | { kind: "configuration" | "view"; id: string };
+export type Selectable = { kind: "entry"; index: number } | { kind: "params" | "return" } | { kind: "configuration" | "view" | "document"; id: string };
+
+/** A document the model's code imports (research/21, "The documents list"): its import statements, and what uses them. */
+export interface ModelDocument {
+  /** `documentId`: its URL without heads and the type it is imported with. */
+  id: string;
+  statements: DocumentStatement[];
+  /** The timeline entries that use it, and whether the parameters do. */
+  users: { entries: number[]; params: boolean };
+}
 
 export interface Editor {
   source: Accessor<string>;
@@ -196,6 +208,15 @@ export interface Editor {
   crossHovered: Accessor<Set<number>>;
   /** Whether the return is hovered in the code or has its cursor. */
   returnCrossHovered: Accessor<boolean>;
+  /** The documents the code imports, from its last valid state. */
+  documents: Accessor<ModelDocument[]>;
+  /** The document hovered in the documents list or the dialog, by id. */
+  hoveredDocument: Accessor<string | undefined>;
+  setHoveredDocument(id: string | undefined): void;
+  /** The document whose users are highlighted: the hovered one, else the selected one (research/21, "The documents list"). */
+  focusedDocument: Accessor<string | undefined>;
+  /** The documents entry `index` uses, by id. */
+  documentsOf(index: number): string[];
   /** Why the last action in the timeline didn't happen, e.g. a drop or a rename; the status bar shows it. */
   notice: Accessor<string | undefined>;
   setNotice(message: string | undefined): void;
@@ -666,11 +687,30 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     [],
     { equals: sameNames },
   );
+  // The documents the code imports (research/21, "The documents list"), from the last valid code, as the timeline is.
+  const documents = createMemo<ModelDocument[]>(() => {
+    const a = analysis();
+    if (!a || !lastGood) return [];
+    const statements = documentStatements(lastGood.source, a.program);
+    const t = tl();
+    return [...new Set(statements.map((s) => s.id))].map((id) => {
+      const own = statements.filter((s) => s.id === id);
+      return { id, statements: own, users: usersOf(a, t, own) };
+    });
+  });
+  const [hoveredDocument, setHoveredDocument] = createSignal<string>();
+  const focusedDocument = () => {
+    const s = selection();
+    return hoveredDocument() ?? (s?.kind === "document" ? s.id : undefined);
+  };
   const hoveredFeatures = createMemo(
     () => {
       if (pickingVersion()) return [];
       const index = dragging() ?? hovered();
-      return index !== undefined ? ownersOf(tl().entries[index]) : codeFeatures();
+      if (index !== undefined) return ownersOf(tl().entries[index]);
+      // A hovered document: what the features that use it made.
+      const users = documents().find((d) => d.id === hoveredDocument())?.users.entries;
+      return users ? users.flatMap((i) => ownersOf(tl().entries[i])) : codeFeatures();
     },
     [],
     { equals: sameNames },
@@ -678,7 +718,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   const [viewHover, setViewHover] = createSignal<string[]>([], { equals: sameNames });
   const crossHovered = createMemo(() => {
     const names = new Set([...viewHover(), ...codeFeatures()]);
-    return new Set(tl().entries.flatMap((e, i) => (ownersOf(e).some((n) => names.has(n)) ? [i] : [])));
+    const users = documents().find((d) => d.id === focusedDocument())?.users.entries ?? [];
+    return new Set([...users, ...tl().entries.flatMap((e, i) => (ownersOf(e).some((n) => names.has(n)) ? [i] : []))]);
   });
   /** Whether the code under the pointer or at the cursor is the return. */
   const codeOnReturn = createMemo(() => {
@@ -934,6 +975,11 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     setViewHover,
     crossHovered,
     returnCrossHovered: codeOnReturn,
+    documents,
+    hoveredDocument,
+    setHoveredDocument,
+    focusedDocument,
+    documentsOf: (index) => documents().flatMap((d) => (d.users.entries.includes(index) ? [d.id] : [])),
     blocked,
     notice,
     setNotice,

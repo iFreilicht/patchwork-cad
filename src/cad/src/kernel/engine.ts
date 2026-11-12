@@ -1,9 +1,10 @@
 import type { Imports } from "./imports.ts";
-import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildParams, BuildTimings, Failure, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, RefData, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
+/** A build's outcome; `imports` are the documents it was given, the same object, e.g. to tell which version of them it built with. */
 export type BuildResult =
-  | { ok: true; source: string; params: BuildParams | undefined; paramValues: ParamValues; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
-  | { ok: false; source: string; params: BuildParams | undefined; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
+  | { ok: true; source: string; params: BuildParams | undefined; imports: Imports; paramValues: ParamValues; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings }
+  | { ok: false; source: string; params: BuildParams | undefined; imports: Imports; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
 type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" | "refsMade" }>;
@@ -55,7 +56,7 @@ export class Engine {
   /** Whether the worker has loaded OCCT; the watchdog doesn't count the load. */
   #loaded = false;
   #watchdog: ReturnType<typeof setTimeout> | undefined;
-  #running: { id: number; source: string; params: BuildParams | undefined; started: number } | undefined;
+  #running: { id: number; source: string; params: BuildParams | undefined; imports: Imports; started: number } | undefined;
   #waiting: { source: string; params: BuildParams | undefined; imports: Imports } | undefined;
   #nextId = 1;
   readonly #pending = new Map<number, { resolve: (answer: Answer) => void; reject: (error: Error) => void }>();
@@ -110,10 +111,10 @@ export class Engine {
     return answer.type === "differenceMeshed" ? answer.shapes : [];
   }
 
-  /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed. */
-  async check(source: string, params?: BuildParams, imports: Imports = {}): Promise<{ error: ModelError | undefined; problems: number }> {
+  /** Builds `source` on trial, without showing it: whether it throws, and how many features are broken or failed, and which. */
+  async check(source: string, params?: BuildParams, imports: Imports = {}): Promise<{ error: ModelError | undefined; problems: number; failures: Failure[] }> {
     const answer = await this.#request({ type: "check", id: this.#nextId++, source, imports, ...(params ? { params } : {}) });
-    return answer.type === "checked" ? { error: answer.error, problems: answer.problems } : { error: undefined, problems: 0 };
+    return answer.type === "checked" ? { error: answer.error, problems: answer.problems, failures: answer.failures } : { error: undefined, problems: 0, failures: [] };
   }
 
   dispose(): void {
@@ -184,7 +185,7 @@ export class Engine {
     if (!running) return;
     const ms = performance.now() - running.started;
     const error: ModelError = { kind: "kernel", line: undefined, message: `the build didn't finish within ${this.#timeoutMs / 1000} s, so the kernel was restarted` };
-    this.#callbacks.onResult({ ok: false, source: running.source, params: running.params, error, trace: [], timings: { build: ms, total: ms } });
+    this.#callbacks.onResult({ ok: false, source: running.source, params: running.params, imports: running.imports, error, trace: [], timings: { build: ms, total: ms } });
   }
 
   #start(source: string, params: BuildParams | undefined, imports: Imports): void {
@@ -192,7 +193,7 @@ export class Engine {
     // shown shapes alive until a new build replaces them.
     if (this.#heapBytes > this.#heapLimit) this.#restart();
     this.stats.executed++;
-    this.#running = { id: this.#nextId++, source, params, started: performance.now() };
+    this.#running = { id: this.#nextId++, source, params, imports, started: performance.now() };
     // A new worker runs it as soon as OCCT has loaded.
     this.#worker.postMessage({ type: "build", id: this.#running.id, source, imports, ...(params ? { params } : {}) });
     this.#watch();
@@ -209,7 +210,7 @@ export class Engine {
       this.#start(next.source, next.params, next.imports);
     }
     const { onResult } = this.#callbacks;
-    if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, paramValues: message.paramValues, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
-    else onResult({ ok: false, source: running.source, params: running.params, error: message.error, trace: message.trace, timings: message.timings });
+    if (message.type === "built") onResult({ ok: true, source: running.source, params: running.params, imports: running.imports, paramValues: message.paramValues, shapes: message.shapes, sketches: message.sketches, dropped: message.dropped, trace: message.trace, timings: message.timings });
+    else onResult({ ok: false, source: running.source, params: running.params, imports: running.imports, error: message.error, trace: message.trace, timings: message.timings });
   }
 }

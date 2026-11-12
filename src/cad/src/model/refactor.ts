@@ -32,7 +32,7 @@ const statementsOf = (analysis: Analysis, span: Span) => (analysis.main?.stateme
  * Every name the model declares or refers to (imports, parameters, variables, globals such as
  * `Math`), but not property names. A new name must be none of them.
  */
-function namesIn(analysis: Analysis): Set<string> {
+export function namesIn(analysis: Analysis): Set<string> {
   const out = new Set<string>();
   const visit = (node: AnyNode, parent: AnyNode | undefined) => {
     const key = (parent?.type === "Property" || parent?.type === "MethodDefinition" || parent?.type === "PropertyDefinition") && parent.key === node && !parent.computed && !(parent.type === "Property" && parent.shorthand);

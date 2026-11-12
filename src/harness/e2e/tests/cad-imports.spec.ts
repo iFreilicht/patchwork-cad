@@ -68,3 +68,39 @@ test("a model imports a JS file and a data document, followed or pinned", async 
   await setModelSource(page, model, "replace");
   await expect(page.locator(".cad-model__status").first()).toContainText(/import error on line 2: .*imports itself/);
 });
+
+test("a model uses a file's text and bytes, and JS and JSON files uploaded as bytes", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+
+  // As the sidebar uploads files: bytes, with the browser's type or none it knows.
+  const files = await page.evaluate(() => {
+    const repo = (window as unknown as { repo: { create(d: unknown): { url: string } } }).repo;
+    const file = (name: string, extension: string, mimeType: string, content: Uint8Array) => repo.create({ "@patchwork": { type: "file" }, name, extension, mimeType, content }).url;
+    const utf8 = (text: string) => new TextEncoder().encode(text);
+    return {
+      note: file("note", "txt", "text/plain", utf8("12345")),
+      pixel: file("pixel", "png", "image/png", new Uint8Array(7)),
+      lib: file("lib", "js", "application/octet-stream", utf8("export const w = 30;\n")),
+      dims: file("dims", "json", "application/octet-stream", utf8('{ "h": 4 }')),
+    };
+  });
+  const model = (imports: string) =>
+    `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";\n${imports}\nexport default function main() {\n  const width = w + note.length + (pixel instanceof Uint8Array ? pixel.length : 1000);\n  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [width, h] }) });\n  return { plate: extrude({ sketch: sketch1, distance: 1 }) };\n}\n`;
+  const imports = `import note from "${files.note}" with { type: "text" };\nimport pixel from "${files.pixel}" with { type: "bytes" };\nimport { w } from "${files.lib}";\nimport { h } from "${files.dims}";`;
+  await setModelSource(page, model(imports), "replace");
+  await expect.poll(() => extentX(page)).toBeCloseTo(42);
+
+  // An image isn't text, and an attribute names what it supports, on the import's line.
+  await setModelSource(page, model(imports.replace(`"${files.pixel}" with { type: "bytes" }`, `"${files.pixel}" with { type: "text" }`)), "replace");
+  await expect(page.locator(".cad-model__status").first()).toContainText(/import error on line 3: .*can't be imported with \{ type: "text" \}/);
+  await setModelSource(page, model(imports.replace('with { type: "text" }', 'with { type: "css" }')), "replace");
+  await expect(page.locator(".cad-model__status").first()).toContainText(/import error on line 2: .*the type "css" isn't supported, only \{ type: "text" \}, \{ type: "bytes" \}, \{ type: "json" \}/);
+  // Without the attribute it needs, the error says how to import it.
+  await setModelSource(page, model(imports.replace(' with { type: "text" }', "")), "replace");
+  await expect(page.locator(".cad-model__status").first()).toContainText(/import error on line 2: .*import it with \{ type: "text" \} or with \{ type: "bytes" \}/);
+});

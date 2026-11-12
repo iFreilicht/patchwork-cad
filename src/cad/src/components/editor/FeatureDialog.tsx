@@ -439,7 +439,20 @@ function OnBody(props: { editor: Editor; entry: FeatureEntry }) {
 }
 
 /** The form of the open feature, generated from its schema (research/02, "Feature types"). */
-export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEditCode: () => void; promote?: FieldProps["promote"] }) {
+/** "Edit ‹document›" for each document an entry uses, which selects it (research/21, "The documents list"). */
+function EditDocuments(props: { editor: Editor; documents: { id: string; title: string }[] | undefined }) {
+  return (
+    <For each={props.documents ?? []}>
+      {(d) => (
+        <button class="cad-editor__button" data-document={d.id} onClick={() => props.editor.select({ kind: "document", id: d.id }, "dialog")}>
+          Edit {d.title}
+        </button>
+      )}
+    </For>
+  );
+}
+
+export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEditCode: () => void; promote?: FieldProps["promote"]; documents?: { id: string; title: string }[] }) {
   const schema = () => schemaOf(props.entry.type);
   const disabled = () => props.editor.syntaxError() !== undefined;
   const [confirmDelete, setConfirmDelete] = createSignal(false);
@@ -530,6 +543,7 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
         <button class="cad-editor__button" onClick={() => props.onEditCode()}>
           Edit code
         </button>
+        <EditDocuments editor={props.editor} documents={props.documents} />
         <Show
           when={confirmDelete()}
           fallback={
@@ -551,7 +565,7 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
  * The dialog of an entry that has no form, a Custom Script or a body() (research/11): every selected
  * item has a dialog (research/19-selection.md, "The selection"); this one opens the code or deletes it.
  */
-export function CodeDialog(props: { editor: Editor; entry: ScriptEntry | FeatureEntry; index: number; onEditCode: () => void }) {
+export function CodeDialog(props: { editor: Editor; entry: ScriptEntry | FeatureEntry; index: number; onEditCode: () => void; documents?: { id: string; title: string }[] }) {
   const [confirmDelete, setConfirmDelete] = createSignal(false);
   const label = () => (props.entry.kind === "feature" ? props.entry.names.join(", ") : `the Custom Script at lines ${props.entry.lines.join("–")}`);
   return (
@@ -569,6 +583,7 @@ export function CodeDialog(props: { editor: Editor; entry: ScriptEntry | Feature
         <button class="cad-editor__button" onClick={() => props.onEditCode()}>
           Edit code
         </button>
+        <EditDocuments editor={props.editor} documents={props.documents} />
         <Show
           when={confirmDelete()}
           fallback={
