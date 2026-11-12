@@ -21,6 +21,7 @@
 | [18-named-views.md](18-named-views.md) | Named views in the model document: a "Views" section in the browser with a resettable Home, embeds (`cad-model-embed`) dragged out of it, which can save their camera as the view; the ViewCube orbits when dragged | Done. Open: orphan embeds of cancelled drags |
 | [19-selection.md](19-selection.md) | One selection shared by browser, timeline, code pane and dialogs: a click opens every item's dialog (views get one), panes scroll to the selection, the cursor in the code selects, a click elsewhere closes; presence shares the selection | Done. Open: many collaborators' selections; touch, with touch interactions in general |
 | [20-view-framing.md](20-view-framing.md) | Keeping a camera's intent across viewport sizes and geometry changes: stored regions fitted with `meet`, margins to the model for cameras that show all of it, close-ups that follow their faces, an exact fit, when to reframe | Done (cameras stored before are converted when read) |
+| [21-embedding.md](21-embedding.md) | What a model takes from other Patchwork documents: values, code, sketch geometry, decals, canvases, annotations; prior art; text and binary imports, drops, a document dialog, a documents list, following and pinning | Report with suggestions; nothing implemented, see [Suggested order](21-embedding.md#suggested-order) |
 
 ## Not started
 
@@ -28,7 +29,9 @@
 - A build timer and an abort button in the status bar, in place of the fixed 10 s kernel timeout ([08](08-module-evaluation.md#conclusions)), for very complex models
 - Per-feature caching ([review, risk 4](01-basic-idea-and-literature.md#problems-and-risks)); not needed for PoC 2's parts ([07](07-poc-modelling-ui.md#rebuild-performance)). With it, caching of [imported documents](02-model-storage.md#imports-in-the-prototype), whose JS the worker prepares again in every build
 - Licensing obligations for the OCCT wasm build (risk 6)
-- Embedding: decal, reference in a sketch, annotation (item 7)
+- Embedding ([21](21-embedding.md#suggested-order)): text and binary imports, the documents list and dialog, drops, annotations, canvases, sketches from SVG, decals
+- Manipulators in the view: handles that drag a feature's arguments, as Fusion's ("Use the manipulators or enter values in the Decal dialog", [Decal](https://help.autodesk.com/cloudhelp/ENU/Fusion-Model/files/SLD-INS-DECAL.htm)); a research document of its own, then for all features together
+- Sketch profiles: curves, several loops and holes in a profile, and extruding one of a sketch's profiles or several; needed for sketches from SVG ([21](21-embedding.md#sketch-from-a-drawing)), before constraints
 - Sketches: constraints, e.g. with PlaneGCS (stable segment ids: [07](07-poc-modelling-ui.md#the-feature-library))
 - Assemblies and joints
 - Code editor niceties, e.g. renaming a variable with F2 ([17](17-parameters.md#kinds-units-ranges))
