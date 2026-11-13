@@ -46,6 +46,8 @@ import type { Canvas, DocumentCamera } from "../../types.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
+/** Experiment: a view of tldraw documents without UI or background, for canvases (research/22-document-canvases/tldraw-view). */
+const CANVAS_VIEW_TOOL_ID = "tldraw-canvas-view";
 
 /** The source span of a feature's parameter value, or an empty span. */
 const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
@@ -539,10 +541,14 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       const highlight = editor.isSelected({ kind: "document", id: row }) ? "accent" : editor.hoveredDocument() === row ? "hover" : undefined;
       if (image.status === "document") {
         // Experiment: read-only at the document's current version, as tools are at fixed heads, unless shown live.
+        const camera = canvas.view ?? fittedView(canvas);
+        // A tldraw drawing in the CAD canvas view of tldraw, if it is installed (research/22): shapes alone, live, read-only by itself.
+        if (!canvas.tool && isTldraw(documentInfo(withoutHeads(canvas.image)).value) && getRegistry<ToolDescription>("patchwork:tool").get(CANVAS_VIEW_TOOL_ID)) {
+          return [{ id: canvas.id, document: { url: canvas.image, tool: CANVAS_VIEW_TOOL_ID, camera, cameraAttribute: true }, corners: canvasCorners(canvas, frame, canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT), opacity: canvas.opacity, through: canvas.through, highlight }];
+        }
         // While it is edited in place, the URL stays, so that the canvas's own view isn't mounted again for every edit.
         const heads = documentInfo(withoutHeads(canvas.image)).heads;
         const url = canvas.live || editing() === canvas.id || headsOf(canvas.image) || !heads ? canvas.image : withHeads(canvas.image, heads);
-        const camera = canvas.view ?? fittedView(canvas);
         return [{ id: canvas.id, document: { url, tool: canvas.tool, bare: canvas.bare, camera }, corners: canvasCorners(canvas, frame, canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT), opacity: canvas.opacity, through: canvas.through, highlight }];
       }
       return [{ id: canvas.id, image: image.image, corners: canvasCorners(canvas, frame, image.aspect), opacity: canvas.opacity, through: canvas.through, highlight }];

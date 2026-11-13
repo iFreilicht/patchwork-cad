@@ -92,7 +92,16 @@ export interface ShownCanvas {
   /** The image, drawn once, which the view makes a texture of. */
   image?: HTMLCanvasElement | undefined;
   /** Experiment: any other document, shown live by its tool in a `<patchwork-view>` placed on the plane. */
-  document?: { url: string; tool?: string | undefined; bare?: boolean | undefined; camera?: DocumentCamera | undefined } | undefined;
+  document?:
+    | {
+        url: string;
+        tool?: string | undefined;
+        bare?: boolean | undefined;
+        camera?: DocumentCamera | undefined;
+        /** The tool takes its camera from the view's `data-camera` and follows it, as the CAD canvas view of tldraw does; else it is set in `localStorage` before the tool mounts. */
+        cameraAttribute?: boolean | undefined;
+      }
+    | undefined;
   /** Its corners in world coordinates, counterclockwise from the image's bottom left. */
   corners: [number, number, number][];
   opacity: number;
@@ -1142,7 +1151,8 @@ export function Viewer(props: ViewerProps) {
       }
       for (const c of list) {
         const doc = c.document!;
-        const key = JSON.stringify(doc);
+        // A camera the tool follows by itself changes no more than an attribute.
+        const key = JSON.stringify(doc.cameraAttribute ? { ...doc, camera: undefined } : doc);
         let d = documentViews.get(c.id);
         if (d?.key !== key) {
           if (d) {
@@ -1154,7 +1164,7 @@ export function Viewer(props: ViewerProps) {
           frame.className = `${DOCUMENT_FRAME}${doc.bare ? " cad-model__document-canvas--bare" : ""}`;
           const view = document.createElement("patchwork-view");
           // The part of a tldraw drawing it shows, which the tool reads as it mounts.
-          if (doc.camera) presetCamera(doc.url, doc.camera);
+          if (doc.camera && !doc.cameraAttribute) presetCamera(doc.url, doc.camera);
           view.style.display = "block";
           view.style.width = "100%";
           view.style.height = "100%";
@@ -1162,6 +1172,11 @@ export function Viewer(props: ViewerProps) {
           // The pointer goes to the 3D view, which orbits, picks and takes the wheel; CSS3DObject sets it to `auto`.
           frame.style.pointerEvents = "none";
           documentViews.set(c.id, d);
+        }
+        if (doc.cameraAttribute) {
+          const camera = doc.camera ? JSON.stringify(doc.camera) : null;
+          if (camera === null) d.view.removeAttribute("data-camera");
+          else if (d.view.getAttribute("data-camera") !== camera) d.view.setAttribute("data-camera", camera);
         }
         d.corners = c.corners.map((p) => new THREE.Vector3(...p));
         const [a, b, , top] = d.corners as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];

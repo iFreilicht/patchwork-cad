@@ -3,13 +3,16 @@
  * its tool in a `<patchwork-view>` that three's CSS3DRenderer places on the plane, read-only at its
  * current heads or editable. Screenshots only; nothing here is a claim the tool keeps.
  */
+import { join } from "node:path";
 import type { Page } from "@playwright/test";
 import { CAD_MODULES, clickHome, hideSidebars, clickViewCube, createModel, docUrl, editorView, setModelSource, timelineEntry } from "../cad.ts";
 import { sidebarDocuments, type Repo } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
+import { HARNESS_DIR } from "../stack.ts";
 import { bootToFrame, createViaMenu, pressMod } from "../ui.ts";
 
-test.use({ siteModules: CAD_MODULES });
+// With the CAD canvas view of tldraw (research/22-document-canvases/tldraw-view), which the editor uses for tldraw drawings.
+test.use({ siteModules: { ...CAD_MODULES, "tldraw-view": join(HARNESS_DIR, "..", "..", "research", "22-document-canvases", "tldraw-view") } });
 // tldraw loads its fonts and icons from its CDN, which the egress proxy refuses.
 test.use({ pageErrorsAllowed: ["cdn.tldraw.com", "A network error occurred.", "Failed to load", "font"] });
 test.setTimeout(240_000);
@@ -251,4 +254,63 @@ test("documents in front of the model fade into it by their opacity", async ({ u
   await zoomOut(page, 3);
   await page.waitForTimeout(4000);
   await page.screenshot({ path: `${shots}/experiment-opacity-front.png` });
+});
+
+test("a tldraw drawing in the CAD canvas view: no UI, no background, and changes without mounting again", async ({ users }) => {
+  const [a] = await users(1);
+  const page = a!.page;
+  await bootToFrame(page);
+  const drawing = await tldraw(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await hideSidebars(page);
+  await setModelSource(page, PLATE, "replace");
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+  // Count the tools that mount on canvases.
+  await page.evaluate(() => {
+    const w = window as unknown as { canvasMounts: string[] };
+    w.canvasMounts = [];
+    document.addEventListener("patchwork:mounted", (e) => {
+      const from = e.composedPath()[0] as Element;
+      if (from.closest?.(".cad-model__document-canvas")) w.canvasMounts.push((e as CustomEvent<{ toolId: string }>).detail.toolId);
+    }, true);
+  });
+  // Behind the plate and through it, no tool given: the editor picks the canvas view.
+  await setCanvases(page, [{ angle: 0, opacity: 1, through: false, id: "t", name: "sketch", image: drawing, plane: { origin: [0, 6, 0], normal: [0, -1, 0], xDir: [1, 0, 0] }, center: [10, 2.5], width: 34 }]);
+  const view = page.locator(".cad-model__document-canvas patchwork-view");
+  await expect(view).toHaveAttribute("tool-id", "tldraw-canvas-view");
+  await expect(view.locator(".tl-canvas")).toHaveCount(1, { timeout: 30_000 });
+  await expect(view.locator(".tlui-layout")).toHaveCount(0);
+  await expect(view).toHaveAttribute("data-camera", /"z"/);
+  await zoomOut(page, 3);
+  await page.waitForTimeout(3000);
+  await page.screenshot({ path: `${shots}/experiment-canvas-view-home.png` });
+  await page.evaluate(() => ((document.querySelector(".cad-model__document-canvas patchwork-view") as HTMLElement & { marked?: boolean }).marked = true));
+
+  // Edited in place with the full tldraw: a rectangle drawn there shows on the canvas, in the same view.
+  await page.getByRole("list", { name: "Canvases", exact: true }).locator(".cad-editor__browser-name").click();
+  const before = await shapeCount(page, drawing);
+  await page.getByRole("button", { name: "Edit in place", exact: true }).click();
+  const overlay = page.locator(".cad-model__document-edit");
+  await overlay.locator(".tl-canvas").waitFor({ timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  const box = (await overlay.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.keyboard.press("o");
+  const from = [box.x + box.width * 0.55, box.y + box.height * 0.2];
+  await page.mouse.move(from[0]!, from[1]!);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(from[0]! + i * box.width * 0.02, from[1]! + i * box.height * 0.025);
+  await page.mouse.up();
+  await expect.poll(() => shapeCount(page, drawing)).toBe(before + 1);
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(overlay).toHaveCount(0);
+  await expect.poll(() => view.locator(".tl-shape").count()).toBe(before + 1);
+  expect(await page.evaluate(() => (document.querySelector(".cad-model__document-canvas patchwork-view") as HTMLElement & { marked?: boolean }).marked)).toBe(true);
+  expect(await page.evaluate(() => (window as unknown as { canvasMounts: string[] }).canvasMounts)).toEqual(["tldraw-canvas-view"]);
+  await clickHome(page);
+  await page.waitForTimeout(800);
+  await zoomOut(page, 3);
+  await page.waitForTimeout(2000);
+  await page.screenshot({ path: `${shots}/experiment-canvas-view-after.png` });
 });
