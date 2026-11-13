@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape, RefData, ShownSketch } from "../kernel/protocol.ts";
@@ -87,7 +88,9 @@ export interface Pin {
 export interface ShownCanvas {
   id: string;
   /** The image, drawn once, which the view makes a texture of. */
-  image: HTMLCanvasElement;
+  image?: HTMLCanvasElement | undefined;
+  /** Experiment: any other document, shown live by its tool in a `<patchwork-view>` placed on the plane. */
+  document?: { url: string; tool?: string | undefined; bare?: boolean | undefined } | undefined;
   /** Its corners in world coordinates, counterclockwise from the image's bottom left. */
   corners: [number, number, number][];
   opacity: number;
@@ -448,6 +451,20 @@ export function Viewer(props: ViewerProps) {
     const peerGroup = new THREE.Group();
     peerGroup.renderOrder = 3;
     const canvasGroup = new THREE.Group();
+    // Documents on canvases (experiment): DOM placed in 3D, below the WebGL canvas, which punches
+    // transparent holes where they lie so that the model hides them where it is in front; or, drawn
+    // through the model, above it.
+    const cssLayers = (["below", "above"] as const).map((where) => {
+      const css = new CSS3DRenderer();
+      css.domElement.className = `cad-model__documents cad-model__documents--${where}`;
+      css.domElement.style.position = "absolute";
+      css.domElement.style.inset = "0";
+      css.domElement.style.pointerEvents = "none";
+      css.domElement.style.zIndex = where === "below" ? "0" : "1";
+      return { css, scene: new THREE.Scene() };
+    });
+    container.insertBefore(cssLayers[0]!.css.domElement, canvas);
+    canvas.after(cssLayers[1]!.css.domElement);
     scene.add(group, canvasGroup, sketchGroup, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
@@ -809,6 +826,7 @@ export function Viewer(props: ViewerProps) {
       height = container.clientHeight || 1;
       updateProjection();
       renderer.setSize(width, height, false);
+      for (const layer of cssLayers) layer.css.setSize(width, height);
       follow();
     };
     resize();
@@ -877,6 +895,8 @@ export function Viewer(props: ViewerProps) {
       placeMarkers();
       placeFloating();
       renderer.render(scene, camera);
+      for (const layer of cssLayers) if (layer.scene.children.length) layer.css.render(layer.scene, camera);
+      connectDocuments();
       if (!collapsed()) renderCube();
       frameId = requestAnimationFrame(tick);
     };
@@ -1022,6 +1042,68 @@ export function Viewer(props: ViewerProps) {
     /** A texture per drawn image, kept while a canvas shows it. */
     const textures = new Map<HTMLCanvasElement, THREE.CanvasTexture>();
     let drawnCanvases: { canvas: ShownCanvas; mesh: THREE.Mesh }[] = [];
+    /** The width in CSS pixels a document is laid out at, before it is scaled to the canvas's width. */
+    const DOCUMENT_PX = 900;
+    /** The documents shown, by canvas id: kept while their URL and tool stay, so that the tool isn't mounted again. */
+    const documentViews = new Map<string, { key: string; object: CSS3DObject; frame: HTMLDivElement; view: HTMLElement }>();
+    /** Puts each view into its frame once the renderer has put the frame into the page: a `<patchwork-view>` connected before that never mounts its tool. */
+    const connectDocuments = () => {
+      for (const d of documentViews.values()) {
+        if (!d.frame.isConnected || d.view.isConnected) continue;
+        d.frame.append(d.view);
+        // Experiment: one that stays empty is connected again, which mounts its tool.
+        setTimeout(() => {
+          if (!d.view.isConnected || d.view.querySelector(".patchwork-view-content")?.childElementCount) return;
+          console.warn("[cad] document canvas: reconnecting an empty <patchwork-view>");
+          d.view.remove();
+          d.frame.append(d.view);
+        }, 2000);
+      }
+    };
+    const placeDocuments = (list: ShownCanvas[]) => {
+      for (const [id, d] of documentViews) {
+        if (list.some((c) => c.id === id)) continue;
+        d.object.removeFromParent();
+        d.frame.remove();
+        documentViews.delete(id);
+      }
+      for (const c of list) {
+        const doc = c.document!;
+        const key = JSON.stringify(doc);
+        let d = documentViews.get(c.id);
+        if (d?.key !== key) {
+          if (d) {
+            d.object.removeFromParent();
+            d.frame.remove();
+          }
+          const frame = document.createElement("div");
+          frame.className = `cad-model__document-canvas${doc.bare ? " cad-model__document-canvas--bare" : ""}`;
+          const view = document.createElement("patchwork-view");
+          view.setAttribute("doc-url", doc.url);
+          if (doc.tool) view.setAttribute("tool-id", doc.tool);
+          view.style.display = "block";
+          view.style.width = "100%";
+          view.style.height = "100%";
+          d = { key, object: new CSS3DObject(frame), frame, view };
+          documentViews.set(c.id, d);
+        }
+        const [a, b, , top] = c.corners.map((p) => new THREE.Vector3(...p)) as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+        const x = b.clone().sub(a);
+        const y = top.clone().sub(a);
+        const width = x.length();
+        const height = y.length();
+        d.frame.style.width = `${DOCUMENT_PX}px`;
+        d.frame.style.height = `${Math.round((DOCUMENT_PX * height) / width)}px`;
+        d.frame.style.opacity = String(c.opacity);
+        const scale = width / DOCUMENT_PX;
+        const basis = new THREE.Matrix4().makeBasis(x.clone().normalize(), y.clone().normalize(), x.clone().cross(y).normalize());
+        d.object.matrixAutoUpdate = false;
+        d.object.matrix.copy(basis).scale(new THREE.Vector3(scale, scale, scale)).setPosition(a.clone().addScaledVector(x, 0.5).addScaledVector(y, 0.5));
+        d.object.matrixWorldNeedsUpdate = true;
+        const layer = cssLayers[c.through ? 1 : 0]!;
+        if (d.object.parent !== layer.scene) layer.scene.add(d.object);
+      }
+    };
     /** Removes the drawn canvases: their geometries and own materials; the outlines' materials are the highlights'. */
     const clearCanvases = () => {
       for (const child of canvasGroup.children) if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -1032,12 +1114,28 @@ export function Viewer(props: ViewerProps) {
     createEffect(() => {
       const list = props.canvases ?? [];
       clearCanvases();
+      placeDocuments(list.filter((c) => c.document));
       for (const [image, texture] of textures) {
         if (list.some((c) => c.image === image)) continue;
         texture.dispose();
         textures.delete(image);
       }
       drawnCanvases = list.map((c) => {
+        if (!c.image) {
+          // A document's quad only punches its hole: transparent, but in the depth buffer.
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.Float32BufferAttribute(c.corners.flat(), 3));
+          geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+          geometry.setIndex([0, 1, 2, 0, 2, 3]);
+          const material = new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0, blending: THREE.NoBlending, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, colorWrite: !c.through, depthWrite: !c.through });
+          const mesh = new THREE.Mesh(geometry, material);
+          canvasGroup.add(mesh);
+          if (c.highlight) {
+            const { line } = highlightMaterials[c.highlight];
+            canvasGroup.add(...[line.halo, line.core].map((m, i) => Object.assign(new LineSegments2(segments({ points: c.corners, closed: true }), m), { renderOrder: 2 + i })));
+          }
+          return { canvas: c, mesh };
+        }
         let texture = textures.get(c.image);
         if (!texture) {
           texture = new THREE.CanvasTexture(c.image);

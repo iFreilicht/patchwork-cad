@@ -155,6 +155,14 @@ export interface Canvas {
   opacity: number;
   /** Drawn over the model, as Fusion's "Display Through". */
   through: boolean;
+  /** Experiment: a document that isn't an image is laid out this much higher than wide (default 0.75). */
+  aspect?: number;
+  /** Experiment: a document that isn't an image is shown by this tool, its default if not given. */
+  tool?: string;
+  /** Experiment: a document that isn't an image is shown editable, at its URL as stored, not at its current heads. */
+  live?: boolean;
+  /** Experiment: our stylesheet hides the tool's own chrome, for tools we know (tldraw). */
+  bare?: boolean;
 }
 
 /** A document shown as a pin on a face, edge or feature, or on the model as a whole (research/21, "Annotation"). */

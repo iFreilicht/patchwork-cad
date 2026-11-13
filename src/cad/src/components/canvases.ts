@@ -223,7 +223,7 @@ async function drawImage(bytes: Uint8Array, mimeType: string, svg: string | unde
 export const isImage = (value: unknown): boolean => isFile(value) && (fileKind(value) === "image" || fileKind(value) === "svg");
 
 /** A canvas's image as it is now: loading, drawn, or why it can't be shown. */
-export type ImageState = { status: "loading" } | ({ status: "ready" } & CanvasImage) | { status: "unavailable"; problem: string };
+export type ImageState = { status: "loading" } | ({ status: "ready" } & CanvasImage) | { status: "unavailable"; problem: string } | { status: "document" };
 
 /**
  * The images of canvases, by their documents' URLs (with heads for a version), each drawn once per
@@ -251,8 +251,9 @@ export function createCanvasImages(info: (url: string) => DocumentInfo, urls: Ac
         continue;
       }
       const value = i.value;
+      // Experiment: any other document is shown live by its tool.
       if (!isImage(value) || !isFile(value)) {
-        set(url, heads, { status: "unavailable", problem: "it isn't an image" });
+        set(url, heads, { status: "document" });
         continue;
       }
       const bytes = fileBytes(value);

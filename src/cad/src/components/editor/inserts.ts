@@ -45,7 +45,7 @@ export interface Role {
 
 export const ROLES: readonly Role[] = [
   // An image on a plane, drawn in the view only (research/21, "Canvas").
-  { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && isImage(value) },
+  { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && (isImage(value) || (value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type !== "cad-model") },
   { id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 },
   // A view of the whole document, which the embed frame shows (research/21, "Annotation").
   { id: "annotation", label: "Annotation", title: "Show it at a place on the model", allows: (_, path) => !path },

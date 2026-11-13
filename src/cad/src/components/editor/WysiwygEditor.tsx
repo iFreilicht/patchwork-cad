@@ -39,6 +39,7 @@ import { createAnnotationStore, placeAnnotations } from "../annotations.tsx";
 import { HOME } from "../../model/views.ts";
 import { createCanvasImages, createCanvasStore, onFace, placeCanvases, placeNewCanvas } from "../canvases.ts";
 import { canvasCorners } from "../../model/canvases.ts";
+import { headsOf, withHeads, withoutHeads } from "../imports.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -496,11 +497,17 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   });
   /** The canvases this user shows, with their images drawn: the selected one is outlined, a hovered row's too. */
   const shownCanvases = createMemo((): ShownCanvas[] =>
-    placedCanvases().flatMap(({ canvas, frame }) => {
+    placedCanvases().flatMap(({ canvas, frame }): ShownCanvas[] => {
       const image = canvasImage(canvas.image);
-      if (!frame || image.status !== "ready" || !canvasVisible(canvas.id)) return [];
+      if (!frame || (image.status !== "ready" && image.status !== "document") || !canvasVisible(canvas.id)) return [];
       const row = canvasRowId(canvas.id);
       const highlight = editor.isSelected({ kind: "document", id: row }) ? "accent" : editor.hoveredDocument() === row ? "hover" : undefined;
+      if (image.status === "document") {
+        // Experiment: read-only at the document's current version, as tools are at fixed heads, unless shown live.
+        const heads = documentInfo(withoutHeads(canvas.image)).heads;
+        const url = canvas.live || headsOf(canvas.image) || !heads ? canvas.image : withHeads(canvas.image, heads);
+        return [{ id: canvas.id, document: { url, tool: canvas.tool, bare: canvas.bare }, corners: canvasCorners(canvas, frame, canvas.aspect ?? 0.75), opacity: canvas.opacity, through: canvas.through, highlight }];
+      }
       return [{ id: canvas.id, image: image.image, corners: canvasCorners(canvas, frame, image.aspect), opacity: canvas.opacity, through: canvas.through, highlight }];
     }),
   );

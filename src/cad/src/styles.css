@@ -1880,3 +1880,13 @@
 .cad-model__viewer[data-canvas-pick] > canvas {
   cursor: crosshair;
 }
+
+/* Experiment: a document on a canvas without its tool's chrome, for tools whose class names we know (tldraw). */
+.cad-model__document-canvas--bare .tlui-layout,
+.cad-model__document-canvas--bare .tl-background {
+  display: none !important;
+}
+
+.cad-model__document-canvas--bare .tl-container {
+  background: transparent !important;
+}

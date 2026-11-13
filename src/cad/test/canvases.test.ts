@@ -131,12 +131,14 @@ test("a new canvas is about as wide as the model, in round numbers", () => {
   expect(defaultWidth(0.7)).toBe(0.7);
 });
 
-test("Canvas is offered for images and SVGs only, and no drop preselects it", () => {
+test("Canvas is offered for any document but a CAD model, and no drop preselects it", () => {
   const canvas = ROLES.find((r) => r.id === "canvas")!;
   expect(canvas.allows(png, false)).toBe(true);
   expect(canvas.allows(svg, false)).toBe(true);
-  expect(canvas.allows(text, false)).toBe(false);
-  expect(canvas.allows({ title: "data" }, false)).toBe(false);
+  // Experiment: other documents are shown live by their tools.
+  expect(canvas.allows(text, false)).toBe(true);
+  expect(canvas.allows({ title: "data" }, false)).toBe(true);
+  expect(canvas.allows({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "x" }, false)).toBe(false);
   expect(canvas.allows(png, true)).toBe(false);
   expect(preselects({ kind: "face" }, png)).toBeUndefined();
   expect(preselects({ kind: "insert" }, png)).toBeUndefined();
