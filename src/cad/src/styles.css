@@ -1902,3 +1902,13 @@
   outline: 2px solid var(--cad-model-accent);
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
 }
+
+/* The model over a document edited in place, see-through, to draw along it; the pointer goes to the document. */
+.cad-model__document-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  opacity: 0.35;
+  pointer-events: none;
+}

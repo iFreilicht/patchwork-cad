@@ -221,3 +221,30 @@ test("a tldraw drawing fitted to its canvas, and edited in place; a markdown doc
   await page.waitForTimeout(4000);
   await page.screenshot({ path: `${shots}/experiment-markdown-done.png` });
 });
+
+test("documents in front of the model fade into it by their opacity", async ({ users }) => {
+  const [a] = await users(1);
+  const page = a!.page;
+  await bootToFrame(page);
+  const drawing = await tldraw(page);
+  const docs = await sidebarDocuments(page, { "Bracket notes": { data: { "@patchwork": { type: "markdown" }, content: NOTES } } });
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await hideSidebars(page);
+  await setModelSource(page, PLATE, "replace");
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+  const base = { angle: 0, through: false };
+  // In front of the plate seen from the front (XZ at y = -4) and from the right (YZ at x = 26).
+  await setCanvases(page, [
+    { ...base, id: "t", name: "sketch", image: drawing, tool: "tldraw5", bare: true, opacity: 0.5, plane: { origin: [0, -4, 0], normal: [0, -1, 0], xDir: [1, 0, 0] }, center: [10, 2.5], width: 30 },
+    { ...base, id: "m", name: "notes", image: docs["Bracket notes"], opacity: 0.6, plane: { origin: [26, 0, 0], normal: [1, 0, 0], xDir: [0, 1, 0] }, center: [5, 3], width: 16, aspect: 0.8 },
+  ]);
+  await zoomOut(page, 4);
+  await page.waitForTimeout(6000);
+  await page.screenshot({ path: `${shots}/experiment-opacity-home.png` });
+  await clickViewCube(page, [0, -1, 0]);
+  await page.waitForTimeout(800);
+  await zoomOut(page, 3);
+  await page.waitForTimeout(4000);
+  await page.screenshot({ path: `${shots}/experiment-opacity-front.png` });
+});

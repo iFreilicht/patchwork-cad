@@ -104,3 +104,32 @@ export function storedCamera(url: string): DocumentCamera | undefined {
     return undefined;
   }
 }
+
+/** The class of a document's frame on a canvas, laid out at `DOCUMENT_PX` and placed in 3D. */
+export const DOCUMENT_FRAME = "cad-model__document-canvas";
+
+let measuring = false;
+/**
+ * Makes elements inside a document's frame measure as laid out, before the 3D transform: their box
+ * relative to the frame at the frame's own size. A tool sizes and culls by its container's box on the
+ * screen, which the projection distorts, in Firefox to tens of thousands of pixels for a face-on frame,
+ * which makes tldraw's overlay canvas larger than allowed and crashes it. Elements elsewhere measure as
+ * they always do. Installed once per page.
+ */
+export function measureFramesAsLaidOut(): void {
+  if (measuring) return;
+  measuring = true;
+  const original = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const frame = this instanceof HTMLElement ? this.closest(`.${DOCUMENT_FRAME}`) : null;
+    if (!frame || !(this instanceof HTMLElement)) return original.call(this);
+    let x = 0;
+    let y = 0;
+    for (let at: HTMLElement | null = this; at && at !== frame; at = at.offsetParent as HTMLElement | null) {
+      x += at.offsetLeft;
+      y += at.offsetTop;
+      if (!frame.contains(at.offsetParent)) break;
+    }
+    return new DOMRect(x, y, this.offsetWidth, this.offsetHeight);
+  };
+}
