@@ -13,13 +13,13 @@ import { HOME } from "../model/views.ts";
 import type { CadModelDoc, CadModelEmbedDoc, CameraState } from "../types.ts";
 import type { Model } from "../components/createModel.ts";
 import { createComments } from "../components/comments.ts";
-import { CommentsPopover } from "../components/CommentsPopover.tsx";
-import { createEntityComments, DetachedButton } from "../components/entityComments.tsx";
+import { createEntityComments } from "../components/entityComments.tsx";
+import { createPins } from "../components/pins.tsx";
 import type { Entity } from "../components/Viewer.tsx";
 import { analyze } from "../model/analyze.ts";
 import { timeline } from "../model/timeline.ts";
 import { createDocumentInfo, heldProblems, type DocumentInfo } from "../components/documentInfo.ts";
-import { AnnotationList, AnnotationPopover, ANNOTATION_PIN, createAnnotationStore, placeAnnotations } from "../components/annotations.tsx";
+import { createAnnotationStore, placeAnnotations } from "../components/annotations.tsx";
 import "../styles.css";
 
 const VIEWER_TOOL_ID = "cad-model-viewer";
@@ -42,7 +42,7 @@ export default function mount(handle: DocHandle<CadModelDoc | CadModelEmbedDoc>,
  * Faces and edges are named by the worker only while someone else is there to see them. Comments
  * and annotations (research/21, "Annotation") show as pins, which open them.
  */
-function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, model: Model, info: (url: string) => DocumentInfo, goToView: (id: string) => void): { props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "selectionAction">; popover: (wrap: () => HTMLElement) => JSX.Element } {
+function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, model: Model, info: (url: string) => DocumentInfo, goToView: (id: string) => void): { props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "onPinHover">; popover: (wrap: () => HTMLElement) => JSX.Element } {
   const presence = joinPresence(element, handle, "viewer");
   const hover = createEntityName(model, 100);
   const selected = createEntityName(model, 0);
@@ -70,11 +70,12 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
     current: () => true,
     complete: () => true,
   });
-  const annotations = placeAnnotations({ store: createAnnotationStore(handle), model, shown: () => model.shapes() ?? [], entries, source: comments.source, info, complete: () => true, goToView });
+  const annotations = placeAnnotations({ store: createAnnotationStore(handle), model, shown: () => model.shapes() ?? [], entries, source: comments.source, complete: () => true });
+  const pins = createPins({ comments, entityComments, annotations, info, goToView });
   createEffect(() => presence.set({ hover: hover.ref() }));
   createEffect(() => presence.set({ selected: selected.ref() }));
   const highlights = createPeerHighlights(model, () => model.shapes() ?? [], presence.peers);
-  const props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "selectionAction"> = {
+  const props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "onPinHover"> = {
     onHover: (entity) => hover.set(alone() ? undefined : entity),
     onSelect: (entity) => {
       setSelectedEntity(entity);
@@ -82,35 +83,19 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
     },
     onPointer: (pointer) => presence.set({ pointer }),
     get highlight() {
-      const open = annotations.popover()?.id;
-      return [...highlights(), ...entityComments.highlight(), ...annotations.highlight(open ? [open] : [])];
+      return [...highlights(), ...pins.highlight()];
     },
     get peers() {
       return peerMarkers(presence.peers());
     },
     get pins() {
-      return [...entityComments.pins(), ...annotations.pins()];
+      return pins.pins();
     },
-    onPin: (key, at) => (key.startsWith(ANNOTATION_PIN) ? annotations.open(key.slice(ANNOTATION_PIN.length), at) : entityComments.onPin(key, at)),
-    get selectionAction() {
-      return entityComments.selectionAction();
-    },
+    onPin: pins.onPin,
+    onPinHover: pins.onPinHover,
   };
   // Not part of the props object, whose getters a rest pattern would read once.
-  const popover = (wrap: () => HTMLElement) => (
-    <>
-      <Show when={comments.enabled() && entityComments.detached().length}>
-        <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
-      </Show>
-      <AnnotationList annotations={annotations} info={info} />
-      <Show when={annotations.popover()} keyed>
-        {(p) => <AnnotationPopover annotations={annotations} popover={p} wrap={wrap()} />}
-      </Show>
-      <Show when={entityComments.popover()} keyed>
-        {(p) => <CommentsPopover comments={comments} threads={p.threads} create={p.create} createNow={p.createNow} caption={p.caption} actions={p.actions} label={p.label} at={p.at} wrap={wrap()} above={!!p.above} onClose={entityComments.close} />}
-      </Show>
-    </>
-  );
+  const popover = (wrap: () => HTMLElement) => pins.view(wrap);
   return { props, popover };
 }
 

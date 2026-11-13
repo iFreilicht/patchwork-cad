@@ -57,21 +57,30 @@ export interface PeerMarker {
 }
 
 /**
- * A pin on faces or edges: comments (research/13-collaboration.md, "Comments"), labelled with how
- * many threads, or an annotation (research/21, "Annotation"), drawn as its document's icon.
+ * A pin on a face or edge (`createPins`): what is pinned there, comments (research/13-collaboration.md,
+ * "Comments") and annotations (research/21, "Annotation"), drawn as their icons, and how many there
+ * are if more than one of a kind.
  */
 export interface Pin {
   key: string;
   body: string;
   kind: EntityKind;
   indices: number[];
+  /** Its tooltip and accessible name, e.g. "2 comments, notes". */
   label: string;
-  /** One of its threads is focused, e.g. in the Comments panel, or its annotation selected. */
+  icons: string[];
+  count: number | undefined;
+  /** How many threads and annotations it has, for tests and styles. */
+  threads: number;
+  annotations: number;
+  /** One of its threads is focused, e.g. in the Comments panel, or one of its annotations selected or it is open. */
   focused: boolean;
-  /** An annotation's: its document's icon in place of the label, which is then its tooltip. */
-  icon?: string;
-  /** An annotation's document's state, e.g. `unavailable`. */
-  state?: string;
+  /** One of its annotations' documents is unavailable. */
+  state?: string | undefined;
+  /** It is on the selected face or edge. */
+  selected?: boolean;
+  /** It is new: to comment on the selected face or edge, which has no pin. */
+  new?: boolean;
 }
 
 export interface ViewerProps {
@@ -115,11 +124,10 @@ export interface ViewerProps {
   onApi?: (api: ViewerApi) => void;
   /** Starts with the ViewCube collapsed to its toggle. The state is local to this mount. */
   collapseViewCube?: boolean;
-  /** Comment pins, and what clicking one does, with the pin's position on the screen. */
+  /** Pins of comments and annotations, what clicking one does, with the pin's position on the screen, and hovering one. */
   pins?: Pin[] | undefined;
   onPin?: (key: string, at: { x: number; y: number }) => void;
-  /** A button at the selected face or edge, e.g. to comment on it. */
-  selectionAction?: { label: string; run: (at: { x: number; y: number }) => void } | undefined;
+  onPinHover?: (key: string | undefined) => void;
 }
 
 export interface FaceRefs {
@@ -1031,7 +1039,7 @@ export function Viewer(props: ViewerProps) {
       }
     };
 
-    // ---------- comment pins and the selection's action ----------
+    // ---------- pins of comments and annotations ----------
 
     /** Where a pin on entities goes: on their biggest triangle or longest segment. */
     const anchorOf = (body: string, kind: EntityKind, indices: number[]) => {
@@ -1050,6 +1058,8 @@ export function Viewer(props: ViewerProps) {
           const r = el.getBoundingClientRect();
           created.onClick({ x: r.left, y: r.bottom });
         });
+        el.addEventListener("pointerenter", () => props.onPinHover?.(el.dataset["key"]));
+        el.addEventListener("pointerleave", () => props.onPinHover?.(undefined));
         container.append(el);
         floating.set(key, created);
         f = created;
@@ -1061,6 +1071,8 @@ export function Viewer(props: ViewerProps) {
     const unfloat = (keep: (key: string) => boolean) => {
       for (const [key, f] of floating) {
         if (keep(key)) continue;
+        // Gone under the pointer: it is hovered no more.
+        if (f.el.matches(":hover")) props.onPinHover?.(undefined);
         f.el.remove();
         floating.delete(key);
       }
@@ -1071,32 +1083,25 @@ export function Viewer(props: ViewerProps) {
       const keys = new Set(pins.map((p) => `pin:${p.key}`));
       unfloat((key) => !key.startsWith("pin:") || keys.has(key));
       for (const pin of pins) {
-        const f = float(`pin:${pin.key}`, pin.icon ? "cad-model__pin cad-model__pin--annotation" : "cad-model__pin", (at) => props.onPin?.(pin.key, at));
-        if (pin.icon) {
-          if (f.el.firstElementChild?.getAttribute("data-icon") !== pin.icon) f.el.replaceChildren(iconElement(pin.icon, 12));
-          f.el.title = pin.label;
-          f.el.setAttribute("aria-label", pin.label);
-          if (pin.state) f.el.dataset["state"] = pin.state;
-          else delete f.el.dataset["state"];
-        } else {
-          f.el.textContent = pin.label;
-          f.el.title = "Comments";
-          f.el.setAttribute("aria-label", `Comments (${pin.label})`);
+        const f = float(`pin:${pin.key}`, "cad-model__pin", (at) => props.onPin?.(pin.key, at));
+        const drawn = JSON.stringify([pin.icons, pin.count]);
+        if (f.el.dataset["drawn"] !== drawn) {
+          f.el.dataset["drawn"] = drawn;
+          f.el.replaceChildren(...pin.icons.map((icon) => iconElement(icon, 12)), ...(pin.count === undefined ? [] : [String(pin.count)]));
         }
+        f.el.title = pin.label;
+        f.el.setAttribute("aria-label", pin.label);
+        f.el.dataset["threads"] = String(pin.threads);
+        f.el.dataset["annotations"] = String(pin.annotations);
+        if (pin.state) f.el.dataset["state"] = pin.state;
+        else delete f.el.dataset["state"];
         f.el.dataset["key"] = pin.key;
         f.el.dataset["focused"] = pin.focused ? "true" : "false";
+        f.el.dataset["selected"] = pin.selected ? "true" : "false";
+        if (pin.new) f.el.dataset["new"] = "true";
+        else delete f.el.dataset["new"];
         f.point = anchorOf(pin.body, pin.kind, pin.indices);
       }
-    });
-    createEffect(() => {
-      props.shapes;
-      const entity = selected();
-      const action = props.selectionAction;
-      unfloat((key) => key !== "action" || (!!entity && !!action));
-      if (!entity || !action) return;
-      const f = float("action", "cad-model__selection-action", action.run);
-      f.el.textContent = action.label;
-      f.point = anchorOf(entity.body, entity.kind, [entity.index]);
     });
     const placeFloating = () => {
       if (!floating.size) return;

@@ -4,13 +4,15 @@
  * the document in Patchwork's embed frame, which keeps its tool; the dialog moving one to a face, a
  * feature or the model; one whose feature is gone; removing one; and the viewer tool showing them.
  */
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { CAD_MODULES, cameraDirection, clickEntity, clickHome, clickViewCube, createModel, dialog, docUrl, editorView, entities, openWithTool, setModelSource, timelineEntry, type Entity } from "../cad.ts";
 import { drag, sidebarDocuments, type Repo } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, pressMod } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
+
+const shots = process.env["CAD_SHOTS"];
 
 const PLATE = `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
 export default function main() {
@@ -41,7 +43,11 @@ async function faceNamed(page: Page, name: string): Promise<{ face: Entity; at: 
   for (const face of await entities(page, "face")) {
     const at = await screenPoint(page, face);
     if (!at) continue;
-    await clickEntity(page, face);
+    // Selected, so that the name read is this face's: WebKit drops the first click after a drag and drop.
+    await expect(async () => {
+      await clickEntity(page, face);
+      await expect(viewer(page)).toHaveAttribute("data-selected", `${face.body}:face:${face.index}`, { timeout: 1_000 });
+    }).toPass({ timeout: 10_000 });
     const reference = page.locator(".cad-model__reference code");
     await expect(reference).toHaveCount(1);
     if (((await reference.textContent()) ?? "").startsWith(name)) return { face, at };
@@ -57,8 +63,14 @@ const annotationsOf = (page: Page) =>
   }, docUrl(page));
 
 const status = (page: Page) => page.locator(".cad-model__status").first();
-const pins = (page: Page) => page.locator(".cad-model__pin--annotation");
-const popover = (page: Page) => page.locator(".cad-model__annotation-popover");
+/** The pins on faces and edges, the model's at the bottom left, and the open one's popover. */
+const pins = (page: Page) => page.locator(".cad-model__pin:not(.cad-model__pin--model):not([data-new])");
+/** The pin to comment on the selected face or edge, which has none. */
+const newPin = (page: Page) => page.locator('.cad-model__pin[data-new="true"]');
+const highlighted = (page: Page, style: "accent" | "hover") => viewer(page).evaluate((el, s) => (el as unknown as { cadViewer: { highlighted(style: string): unknown[] } }).cadViewer.highlighted(s).length, style);
+const modelPin = (page: Page) => page.locator(".cad-model__pin--model");
+/** An open pin: the editor's dialog, or elsewhere a popover. */
+const popover = (page: Page) => page.locator(".cad-editor__pin-dialog, .cad-model__comments-popover");
 
 test("a document dropped on a face is pinned there at once; its pin opens it in the embed frame, which keeps its tool", async ({ users }) => {
   const [a] = await users(1);
@@ -86,7 +98,8 @@ test("a document dropped on a face is pinned there at once; its pin opens it in 
 
   // A pin with the file's icon, titled as the file datatype titles it; it opens the document in Patchwork's embed frame.
   await expect(pins(page)).toHaveCount(1);
-  await expect(pins(page)).toHaveAttribute("aria-label", /^notes on extrude1\.end/);
+  await expect(pins(page)).toHaveAttribute("aria-label", "notes");
+  await expect(pins(page)).toHaveAttribute("data-annotations", "1");
   await pins(page).click();
   await expect(popover(page).locator('patchwork-view[tool-id="embed"]')).toHaveAttribute("doc-url", docs["notes.txt"]!);
   await expect(popover(page).locator(".embed-frame")).toBeVisible({ timeout: 30_000 });
@@ -134,31 +147,35 @@ test("an image dropped on a face waits for its role; the dialog moves its annota
   expect(await annotationsOf(page)).toHaveLength(0);
   await insert.getByRole("radio", { name: "Annotation" }).click();
   await expect.poll(() => annotationsOf(page).then((l) => l[0]?.anchor?.entityName)).toMatch(/^extrude1\.end/);
-  await expect(pins(page)).toHaveAttribute("aria-label", /^logo on extrude1\.end/);
+  await expect(pins(page)).toHaveAttribute("aria-label", "logo");
 
   // On a feature: its pin is on what the feature made.
   const on = dialog(page).getByLabel("On", { exact: true });
   await on.selectOption("extrude1");
   await expect.poll(() => annotationsOf(page).then((l) => l[0]?.anchor)).toEqual({ feature: "extrude1", statement: expect.stringContaining("extrude1 = extrude(") as unknown as string });
-  await expect(pins(page)).toHaveAttribute("aria-label", "logo on extrude1");
+  await expect(pins(page)).toHaveAttribute("aria-label", "logo");
 
-  // On the model: no pin, a button at the bottom right of the view.
+  // On the model: on the model's pin at the bottom left of the view.
   await on.selectOption("");
   await expect.poll(() => annotationsOf(page).then((l) => l[0]?.anchor)).toBeUndefined();
   await expect(pins(page)).toHaveCount(0);
-  const listed = page.locator(".cad-model__annotation");
-  await expect(listed).toHaveAttribute("aria-label", "logo");
+  const listed = modelPin(page);
+  await expect(listed).toHaveAttribute("aria-label", "On the model: logo");
   await listed.click();
-  await expect(popover(page).locator('patchwork-view[tool-id="embed"]')).toHaveCount(1);
-  await page.keyboard.press("Escape");
+  const onModel = page.getByRole("dialog", { name: "Annotations on the model" });
+  await expect(onModel.locator('patchwork-view[tool-id="embed"]')).toHaveCount(1);
+  // The pin's dialog replaced the annotation's; Edit annotation brings it back.
+  await expect(on).toHaveCount(0);
+  await onModel.getByRole("button", { name: "Edit annotation" }).click();
 
-  // Back on the feature, which a rename of its variable removes: it is listed as not found.
+  // Back on the feature, which a rename of its variable removes: on the model's pin, as not found.
   await on.selectOption("extrude1");
   await expect(pins(page)).toHaveCount(1);
   await setModelSource(page, PLATE.replaceAll("extrude1", "slab"), "replace");
   await expect(pins(page)).toHaveCount(0);
   await expect(listed).toHaveAttribute("data-detached", "true");
-  await expect(listed).toHaveAttribute("aria-label", "logo: feature extrude1 not found");
+  await listed.click();
+  await expect(popover(page).locator(".cad-model__comment-caption")).toHaveText("Feature extrude1 deleted");
 });
 
 test("Select face pins an annotation to the picked face; Remove deletes it; the viewer tool shows its pin", async ({ users }) => {
@@ -220,7 +237,14 @@ test("a view chosen for an annotation is shown, and opening the annotation goes 
   expect(await direction()).not.toEqual([0, 0, 1]);
   await pins(page).click();
   await expect.poll(direction).toEqual([0, 0, 1]);
-  // Opened before the camera moved there, it follows its pin; and as the camera orbits.
+  await expect(page.locator(".cad-editor__pin-dialog")).toHaveCount(1);
+
+  // In the viewer tool, a popover: opened before the camera moved there, it follows its pin; and as the camera orbits.
+  await openWithTool(page, "cad-model-viewer");
+  await expect(pins(page)).toHaveCount(1, { timeout: 60_000 });
+  await clickHome(page);
+  await pins(page).click();
+  await expect.poll(direction).toEqual([0, 0, 1]);
   await expect.poll(() => offset(page)).toEqual({ x: 0, y: 0 });
   const box = (await viewer(page).boundingBox())!;
   await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.9);
@@ -232,15 +256,18 @@ test("a view chosen for an annotation is shown, and opening the annotation goes 
 });
 
 /**
- * How far the open annotation is from below its pin's left edge, in whole pixels: the 4px is its
- * margin, and it is kept within the view, 380px wide.
+ * How far the viewer tool's open popover is from below its pin's left edge, or from above it where
+ * there is more room, in whole pixels: 4px is its margin, the pin is 22px above the point it hangs
+ * from, and it is kept within the view, 360px wide.
  */
 async function offset(page: Page): Promise<{ x: number; y: number }> {
   const pin = (await pins(page).boundingBox())!;
   const open = (await popover(page).boundingBox())!;
-  const view = (await page.locator(".cad-editor__stage").boundingBox())!;
-  const left = view.x + Math.max(0, Math.min(pin.x - view.x, view.width - 380));
-  return { x: Math.round(open.x - left) + 0, y: Math.round(open.y - 4 - (pin.y + pin.height)) + 0 };
+  const view = (await page.locator(".cad-model--viewer").boundingBox())!;
+  const left = view.x + Math.max(0, Math.min(pin.x - view.x, view.width - 360));
+  const pinBottom = pin.y + pin.height;
+  const y = open.y > pin.y ? open.y - 4 - pinBottom : pinBottom - 22 - 4 - (open.y + open.height);
+  return { x: Math.round(open.x - left) + 0, y: Math.round(y) + 0 };
 }
 
 test("a document the model imports, dropped in the view, can be an annotation; a CAD model is one in the viewer, and this model none", async ({ users }) => {
@@ -278,4 +305,186 @@ test("a document the model imports, dropped in the view, can be an annotation; a
   await drag(page, own.trim(), (await faceNamed(page, "extrude1.end")).at);
   await expect(status(page)).toContainText("A model can't annotate itself.");
   expect(await annotationsOf(page)).toHaveLength(2);
+});
+
+/** Writes and saves the draft in an open thread popover. */
+async function writeComment(popover: Locator, text: string) {
+  const draft = popover.locator(".comment-draft-editor .cm-content").last();
+  await draft.click();
+  await draft.pressSequentially(text);
+  await popover.getByRole("button", { name: "Save" }).click();
+}
+
+test("what is on one face is one pin: its icons, how many, its threads then its annotations; on the model when the face is gone", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await open(page);
+  await sidebarDocuments(page, { "notes.txt": { file: "notes.txt", mimeType: "text/plain", text: "Anodize black" }, "todo.txt": { file: "todo.txt", mimeType: "text/plain", text: "Deburr" } });
+  await clickViewCube(page, [0, 0, 1]);
+  await page.getByRole("button", { name: "New view from the current camera" }).click();
+  const rename = page.locator(".cad-editor__browser .cad-editor__rename");
+  await rename.fill("Above");
+  await rename.press("Enter");
+  await clickHome(page);
+  const direction = async () => (await cameraDirection(page)).map((x) => Math.round(x * 100) / 100 + 0); // + 0: -0 is 0
+
+  // A comment on the face, then two text files dropped on it, the second with a view.
+  // The selected face has no pin: a new one, only the comment icon, starts a thread there.
+  await faceNamed(page, "extrude1.end");
+  await expect(newPin(page).locator("svg")).toHaveAttribute("data-icon", "MessageSquare");
+  await expect(newPin(page)).toHaveText("");
+  await newPin(page).click();
+  await writeComment(page.getByRole("dialog", { name: /^Comments on extrude1\.end/ }), "Polish this");
+  await page.keyboard.press("Escape");
+  await drag(page, "notes.txt", (await faceNamed(page, "extrude1.end")).at);
+  await expect.poll(() => annotationsOf(page).then((l) => l.length)).toBe(1);
+  await drag(page, "todo.txt", (await faceNamed(page, "extrude1.end")).at);
+  await expect.poll(() => annotationsOf(page).then((l) => l.length)).toBe(2);
+  await dialog(page).getByLabel("View", { exact: true }).selectOption({ label: "Above" });
+  await expect.poll(direction).toEqual([0, 0, 1]);
+  await clickHome(page);
+
+  // One pin: the comment's icon and the files', counted, as two are of one kind.
+  await expect(pins(page)).toHaveCount(1);
+  const pin = pins(page);
+  await expect(pin).toHaveAttribute("data-threads", "1");
+  await expect(pin).toHaveAttribute("data-annotations", "2");
+  expect(await pin.locator("svg").evaluateAll((icons) => icons.map((i) => i.getAttribute("data-icon")))).toEqual(["MessageSquare", "FileText"]);
+  await expect(pin).toHaveText("3");
+  await expect(pin).toHaveAttribute("aria-label", "1 comment, notes, todo");
+  // The selected face's pin is marked, and no new one is offered.
+  await expect(pin).toHaveAttribute("data-selected", "true");
+  await expect(newPin(page)).toHaveCount(0);
+  const box = (await viewer(page).boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await expect(pin).toHaveAttribute("data-selected", "false");
+
+  // Hovered, its face is.
+  await pin.hover();
+  await expect.poll(() => highlighted(page, "hover")).toBeGreaterThan(0);
+
+  // Opened, it is the selection, a dialog within the view: the thread, then both documents, each an item of its own, and New comment below them;
+  // its face is highlighted, and the feature that made it, as if the face were hovered.
+  const home = await direction();
+  await pin.click();
+  await expect(editorView(page)).toHaveAttribute("data-selection", /^pin:/);
+  const list = page.getByRole("dialog", { name: "Comments and annotations on extrude1.end" });
+  await expect(list.locator(".comment-content")).toHaveText("Polish this");
+  await expect(list.locator('patchwork-view[tool-id="embed"]')).toHaveCount(2);
+  expect(await list.locator(".cad-model__pin-item").evaluateAll((items) => items.map((i) => (i.hasAttribute("data-annotation") ? "annotation" : "thread")))).toEqual(["thread", "annotation", "annotation"]);
+  await expect(list.locator(".cad-model__pin-item").first().getByRole("button", { name: "Resolve" })).toHaveCount(1);
+  await expect(list.locator(".cad-model__pin-item").nth(1).getByRole("button", { name: "Edit annotation" })).toHaveCount(1);
+  await expect(list.locator("footer").getByRole("button", { name: "New comment" })).toHaveCount(1);
+  await expect(list.locator(".cad-model__pin-list footer")).toHaveCount(0);
+  const [dialogBox, stageBox] = [(await list.boundingBox())!, (await page.locator(".cad-editor__stage").boundingBox())!];
+  expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(stageBox.y + stageBox.height);
+  await expect.poll(() => highlighted(page, "accent")).toBeGreaterThan(0);
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-cross-hover", "true");
+  await expect(pin).toHaveAttribute("data-focused", "true");
+  // An annotation hovered there marks its row in the documents list.
+  await list.locator('.cad-model__pin-item[data-annotation]').first().hover();
+  await expect(page.locator('.cad-editor__document-row[data-role="annotation"][data-hovered="true"]')).toHaveCount(1);
+  await page.waitForTimeout(500);
+  expect(await direction()).toEqual(home);
+  await list.getByRole("button", { name: "Go to view" }).click();
+  await expect.poll(direction).toEqual([0, 0, 1]);
+  await page.keyboard.press("Escape");
+  await expect(list).toHaveCount(0);
+  await expect(timelineEntry(page, "extrude1")).not.toHaveAttribute("data-cross-hover", "true");
+
+  // The face gone, all of it is on the model's pin, marked so, with what each was on.
+  await setModelSource(page, PLATE.replaceAll("extrude1", "slab"), "replace");
+  await expect(pins(page)).toHaveCount(0);
+  const model = modelPin(page);
+  await expect(model).toHaveAttribute("data-threads", "1");
+  await expect(model).toHaveAttribute("data-annotations", "2");
+  await expect(model).toHaveAttribute("data-detached", "true");
+  await model.click();
+  const detached = page.getByRole("dialog", { name: "Comments and annotations on the model" });
+  await expect(detached.locator(".cad-model__comment-caption")).toHaveText([/^Face not found: extrude1\.end/, /^Face not found: extrude1\.end/, /^Face not found: extrude1\.end/]);
+  // The dialog ends above the model's pin, which covers none of it, and its list always has a scrollbar beside the embeds, which may scroll themselves.
+  const [dialogBottom, pinTop] = [await detached.evaluate((el) => el.getBoundingClientRect().bottom), await model.evaluate((el) => el.getBoundingClientRect().top)];
+  expect(dialogBottom).toBeLessThan(pinTop);
+  await expect(detached.locator(".cad-model__scrollbar")).toBeVisible();
+});
+
+test("a tool picked in one annotation's frame changes that frame alone, every time; a face with only annotations offers New comment", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await open(page);
+  await sidebarDocuments(page, { "notes.txt": { file: "notes.txt", mimeType: "text/plain", text: "Anodize black" }, "todo.txt": { file: "todo.txt", mimeType: "text/plain", text: "Deburr" } });
+  await drag(page, "notes.txt", (await faceNamed(page, "extrude1.end")).at);
+  await drag(page, "todo.txt", (await faceNamed(page, "extrude1.end")).at);
+  await expect.poll(() => annotationsOf(page).then((l) => l.length)).toBe(2);
+  const box = (await viewer(page).boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  await pins(page).click();
+  const list = page.getByRole("dialog", { name: "Annotations on extrude1.end" });
+  const frames = list.locator(".embed-frame");
+  await expect(frames).toHaveCount(2, { timeout: 30_000 });
+  /** Marks the frames, and says for each whether it was marked before, i.e. not mounted anew, and its tool. */
+  const frameState = () =>
+    frames.evaluateAll((all) =>
+      all.map((f) => {
+        const kept = (f as { mark?: true }).mark === true;
+        (f as { mark?: true }).mark = true;
+        return `${kept ? "kept" : "new"} ${f.querySelector(".tool-btn")?.textContent}`;
+      }),
+    );
+  expect(await frameState()).toEqual(["new File", "new File"]);
+  for (const tool of ["Raw", "File", "Raw"]) {
+    await frames.first().locator(".tool-btn").click();
+    await page.locator(".tool-menu .item", { hasText: new RegExp(`^${tool}$`) }).click();
+    await expect.poll(() => annotationsOf(page).then((l) => l[0]?.tool)).toBe(tool.toLowerCase());
+    expect(await frameState()).toEqual([`kept ${tool}`, "kept File"]);
+  }
+
+  // Without a thread there, New comment starts one on the face.
+  await list.locator("footer").getByRole("button", { name: "New comment" }).click();
+  await writeComment(page.getByRole("dialog", { name: /^Comments and annotations on extrude1\.end/ }), "And a comment");
+  await expect(pins(page)).toHaveAttribute("data-threads", "1");
+});
+
+test("a long pin dialog has a scrollbar of its own, always shown, whose track scrolls it; it covers the pins under it", async ({ users }, info) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await open(page);
+  await sidebarDocuments(page, { "notes.txt": { file: "notes.txt", mimeType: "text/plain", text: "Anodize black" }, "todo.txt": { file: "todo.txt", mimeType: "text/plain", text: "Deburr" }, "more.txt": { file: "more.txt", mimeType: "text/plain", text: "More" } });
+  for (const name of ["notes.txt", "todo.txt", "more.txt"]) await drag(page, name, (await faceNamed(page, "extrude1.end")).at);
+  await expect.poll(() => annotationsOf(page).then((l) => l.length)).toBe(3);
+  const box = (await viewer(page).boundingBox())!;
+  await page.mouse.click(box.x + box.width - 30, box.y + box.height - 30);
+  const pin = pins(page);
+  await pin.click();
+  const list = page.getByRole("dialog", { name: "Annotations on extrude1.end" });
+  await expect(list.locator(".embed-frame")).toHaveCount(3, { timeout: 30_000 });
+
+  // The scrollbar is there without hovering it, beside the embeds, with a thumb as long as the part shown.
+  await page.mouse.move(box.x + box.width - 10, box.y + 10);
+  const track = list.locator(".cad-model__scrollbar");
+  const area = list.locator(".cad-model__scrolled-area");
+  const trackBox = (await track.boundingBox())!;
+  const areaBox = (await area.boundingBox())!;
+  expect(trackBox.width).toBeGreaterThanOrEqual(12);
+  expect(trackBox.x).toBeGreaterThanOrEqual(areaBox.x + areaBox.width);
+  const thumb = (await list.locator(".cad-model__scrollbar-thumb").boundingBox())!;
+  expect(thumb.height).toBeGreaterThan(0);
+  expect(thumb.height).toBeLessThan(trackBox.height);
+  if (shots) await page.screenshot({ path: `${shots}/annotations-scrollbar-${info.project.name}.png` });
+  // The wheel over the track scrolls the list, and the thumb follows.
+  await page.mouse.move(trackBox.x + trackBox.width / 2, trackBox.y + trackBox.height / 2);
+  await page.mouse.wheel(0, 300);
+  await expect.poll(() => area.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  await expect.poll(async () => (await list.locator(".cad-model__scrollbar-thumb").boundingBox())!.y).toBeGreaterThan(thumb.y);
+
+  // The pin it was opened at, under the dialog, is covered by it.
+  const at = (await pin.boundingBox())!;
+  const dialogBox = (await list.boundingBox())!;
+  const centre = { x: at.x + at.width / 2, y: at.y + at.height / 2 };
+  const under = centre.x > dialogBox.x && centre.x < dialogBox.x + dialogBox.width && centre.y > dialogBox.y && centre.y < dialogBox.y + dialogBox.height;
+  expect(under).toBe(true);
+  expect(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest(".cad-editor__pin-dialog"), centre)).toBe(true);
 });

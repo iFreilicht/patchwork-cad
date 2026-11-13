@@ -48,8 +48,8 @@ for (const [colorScheme, contrast] of [["dark", "no-preference"], ["light", "no-
         await page.emulateMedia({ contrast });
         await reloadStored(page);
         await hideSidebars(page);
-        // The comment button at the selection would cover the edge.
-        await page.addStyleTag({ content: ".cad-model__selection-action { display: none !important; }" });
+        // The pin to comment on the selection would cover the edge.
+        await page.addStyleTag({ content: ".cad-model__pin[data-new] { display: none !important; }" });
         await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
         await expect(timelineEntry(page, "extrude2")).toHaveAttribute("data-status", "ok", { timeout: 120_000 });
         // The same camera every time: the viewer keeps the last one, e.g. the turned one below.

@@ -20,8 +20,8 @@ import type { TimelinePeer } from "./Timeline.tsx";
 import { createEmbed } from "../embed.ts";
 import { createNamedViews } from "../namedViews.ts";
 import { createComments } from "../comments.ts";
-import { CommentsPopover } from "../CommentsPopover.tsx";
-import { createEntityComments, DetachedButton } from "../entityComments.tsx";
+import { createEntityComments } from "../entityComments.tsx";
+import { createPins } from "../pins.tsx";
 import { createFeatureHighlights } from "../featureHighlights.ts";
 import { createBodies } from "./bodies.ts";
 import { Browser, ResultDialog, ViewDialog, viewItems, type BrowserPeer, type ViewsSection } from "./Browser.tsx";
@@ -35,7 +35,7 @@ import { ANCHOR_PICK, DocumentDialog, InsertDialog } from "./DocumentDialog.tsx"
 import { createInserts, type PendingInsert } from "./inserts.ts";
 import { UNDO_IGNORE } from "../../model/locks.ts";
 import { getRegistry, type ToolDescription } from "@inkandswitch/patchwork-plugins";
-import { AnnotationList, AnnotationPopover, ANNOTATION_PIN, createAnnotationStore, placeAnnotations } from "../annotations.tsx";
+import { createAnnotationStore, placeAnnotations } from "../annotations.tsx";
 import { HOME } from "../../model/views.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -336,11 +336,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const shape = entity && shown().find((s) => s.body === entity.body);
     const names = Object.entries(shape?.features ?? {}).flatMap(([name, owned]) => ((entity!.kind === "face" ? owned.faces : owned.edges).includes(entity!.index) ? [name] : []));
     setViewFeatures(names);
-    editor.setViewHover(names);
   };
   /** The code of the features hovered in the 3D view: their statements, or in a Custom Script the lines that ran them. */
   const viewHoveredCode = (): Span[] => {
-    const names = new Set(viewFeatures());
+    const names = new Set(viewedFeatures());
     if (editor.syntaxError()) return [];
     // The code of the features that use the hovered or selected document (research/21, "The documents list").
     const focused = editor.documents().find((d) => d.id === editor.focusedDocument());
@@ -426,18 +425,38 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     shown,
     entries: () => editor.timeline().entries,
     source: editor.source,
-    info: documentInfo,
     complete: () => !rolledBack(),
+  });
+  // Comments and annotations, one pin per face or edge and one for the model (research/21, "Annotation").
+  const pins = createPins({
+    comments,
+    entityComments,
+    annotations,
+    info: documentInfo,
     goToView,
     selected: () => selectedDocument()?.annotation?.id,
+    edit: (id) => editor.select({ kind: "document", id: annotationRowId(id) }, "view"),
+    hoverAnnotation: (id) => editor.setHoveredDocument(id === undefined ? undefined : annotationRowId(id)),
+    // An open pin is the selection, with its dialog (research/19).
+    selection: {
+      selected: () => {
+        const s = editor.selection();
+        return s?.kind === "pin" ? s.id : undefined;
+      },
+      select: (key) => editor.select(key === undefined ? undefined : { kind: "pin", id: key }, "view"),
+    },
   });
-  /** Opens an annotation from its row: next to its pin, or its button at the bottom right, else at the top left of the view. */
-  const showAnnotation = (id: string) => {
-    const at = stage.querySelector(`.cad-model__pin[data-key="${CSS.escape(ANNOTATION_PIN + id)}"]:not([hidden]), .cad-model__annotation[data-annotation="${CSS.escape(id)}"]`);
-    const r = at?.getBoundingClientRect() ?? stage.getBoundingClientRect();
-    const fromList = !!at?.matches(".cad-model__annotation");
-    annotations.open(id, at ? { x: fromList ? r.right : r.left, y: fromList ? r.top : r.bottom } : { x: r.left + 8, y: r.top + 8 }, fromList);
+  /** Opens an annotation from its row, at the pin that holds it. */
+  const showAnnotation = (id: string) => pins.show(id, stage);
+  /** The features that made the open pin's face or edge, which are marked as if it were hovered (research/21, "Annotation"). */
+  const pinFeatures = () => {
+    const at = pins.opened();
+    const shape = at && shown().find((s) => s.body === at.body);
+    return Object.entries(shape?.features ?? {}).flatMap(([name, owned]) => ((at!.kind === "face" ? owned.faces : owned.edges).some((i) => at!.indices.includes(i)) ? [name] : []));
   };
+  /** What the 3D view marks in the timeline and code: the hovered face's or edge's features, and the open pin's. */
+  const viewedFeatures = createMemo(() => [...new Set([...viewFeatures(), ...pinFeatures()])], [], { equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]) });
+  createEffect(() => editor.setViewHover(viewedFeatures()));
   const toolName = (id: string) => getRegistry<ToolDescription>("patchwork:tool").get(id)?.name ?? id;
   /** The face a document is dragged over, as a hovered one is. */
   const dropFaceHighlight = (): Highlight[] => {
@@ -572,7 +591,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   let press: { x: number; y: number } | undefined;
   const onPress = (event: PointerEvent) => {
     const target = event.target as Element;
-    const popup = props.element.querySelector(".cad-editor__menu, .cad-model__comments-popover, .cad-model__comment-popover, .cad-model__annotation-popover");
+    const popup = props.element.querySelector(".cad-editor__menu, .cad-model__comments-popover, .cad-model__comment-popover");
     press = event.button === 0 && !popup && props.element.contains(target) && elsewhere(target) ? { x: event.clientX, y: event.clientY } : undefined;
   };
   const onRelease = (event: PointerEvent) => {
@@ -625,7 +644,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const s = editor.selection();
     if (!s) return "";
     if (s.kind === "feature" || s.kind === "script") return `${s.kind}:${editor.selectedIndex() ?? ""}`;
-    return s.kind === "configuration" || s.kind === "view" || s.kind === "document" ? `${s.kind}:${s.id}` : s.kind === "insert" ? `insert:${inserts.pending()?.url ?? ""}` : s.kind;
+    return s.kind === "configuration" || s.kind === "view" || s.kind === "document" || s.kind === "pin" ? `${s.kind}:${s.id}` : s.kind === "insert" ? `insert:${inserts.pending()?.url ?? ""}` : s.kind;
   };
 
   /** Documents held back at their locks, with what their newer version brings (research/21, "Following and pinning"). */
@@ -664,10 +683,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onSelect={onSelect}
           onContextMenu={onViewMenu}
           onPointer={(pointer) => presence.set({ pointer })}
-          highlight={[...peerHighlights(), ...entityComments.highlight(), ...annotations.highlight([selectedDocument()?.annotation?.id, annotations.popover()?.id].filter((id): id is string => !!id)), ...references(), ...featureHighlight(), ...bodyHighlights(), ...dropFaceHighlight()]}
-          pins={[...entityComments.pins(), ...annotations.pins()]}
-          onPin={(key, at) => (key.startsWith(ANNOTATION_PIN) ? annotations.open(key.slice(ANNOTATION_PIN.length), at) : entityComments.onPin(key, at))}
-          selectionAction={entityComments.selectionAction()}
+          highlight={[...peerHighlights(), ...pins.highlight(), ...references(), ...featureHighlight(), ...bodyHighlights(), ...dropFaceHighlight()]}
+          pins={pins.pins()}
+          onPin={pins.onPin}
+          onPinHover={pins.onPinHover}
           peers={peerMarkers(peers())}
           overlays={overlays()}
           sketches={shownSketches()}
@@ -698,22 +717,14 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           <Match when={selectedDocument()}>
             <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
+          <Match when={editor.selection()?.kind === "pin"}>{pins.dialog()}</Match>
           <Match when={inserts.pending()}>
             <InsertDialog inserts={inserts} pending={dialogInsert()!} editor={editor} onOpen={openUrl} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
         </Switch>
         <Show when={viewMenu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={stage} down onClose={() => setViewMenu(undefined)} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
-        <Show when={comments.enabled() && entityComments.detached().length}>
-          <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
-        </Show>
-        <AnnotationList annotations={annotations} info={documentInfo} />
-        <Show when={annotations.popover()} keyed>
-          {(p) => <AnnotationPopover annotations={annotations} popover={p} wrap={stage} actions={[{ label: "Edit annotation", run: () => editor.select({ kind: "document", id: annotationRowId(p.id) }, "view") }]} />}
-        </Show>
-        <Show when={entityComments.popover()} keyed>
-          {(p) => <CommentsPopover comments={comments} threads={p.threads} create={p.create} createNow={p.createNow} caption={p.caption} actions={p.actions} label={p.label} at={p.at} wrap={stage} above={!!p.above} onClose={entityComments.close} />}
-        </Show>
+        {pins.view(() => stage)}
         <Show when={editor.syntaxError()}>{(message) => <p class="cad-editor__banner">The code doesn't parse ({message()}); the timeline shows its last valid state.</p>}</Show>
       </div>
       <Show when={codeOpen()}>

@@ -401,12 +401,15 @@
 
 .cad-editor__dialog {
   position: absolute;
+  /* Over the pins in the view. */
+  z-index: 2;
   top: var(--studio-space-sm, 0.5rem);
   /* Left, as in Onshape, clear of the ViewCube at the top right. */
   left: var(--studio-space-sm, 0.5rem);
   box-sizing: border-box;
   width: min(22rem, calc(100% - var(--cad-viewcube-size) - 3 * var(--studio-space-sm, 0.5rem)));
-  max-height: calc(100% - 1rem);
+  /* Clear of the model's pin at the bottom left (research/21, "Annotation"). */
+  max-height: calc(100% - var(--studio-space-sm, 0.5rem) - 36px);
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1380,9 +1383,11 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
   width: min(360px, 92vw);
+  /* As high as the view has room for, which it sets; the list scrolls, New comment stays below it. */
   max-height: 60vh;
-  overflow: auto;
+  overflow: hidden;
   margin: 4px 0;
   padding: 6px;
   border: 1px solid var(--cad-model-border);
@@ -1391,26 +1396,98 @@
   box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
 }
 
+/* What is pinned to a face, edge or the model, in the editor: a dialog, wider, whose list scrolls. */
+.cad-editor__pin-dialog {
+  width: min(26rem, calc(100% - var(--cad-viewcube-size) - 3 * var(--studio-space-sm, 0.5rem)));
+  overflow: hidden;
+}
+
+/* Each thread and each annotation, with its caption and buttons, is an item of its own. */
+.cad-model__pin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* A scrolling area with a scrollbar of its own, always shown beside it (`Scrolled`). */
+.cad-model__scrolled {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-height: 0;
+}
+
+.cad-model__scrolled-area {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.cad-model__scrolled-area::-webkit-scrollbar {
+  display: none;
+}
+
+.cad-model__scrollbar {
+  position: relative;
+  flex: 0 0 14px;
+  border-radius: 7px;
+  background: var(--cad-model-panel);
+}
+
+.cad-model__scrollbar-thumb {
+  position: absolute;
+  right: 3px;
+  left: 3px;
+  border-radius: 4px;
+  background: var(--cad-model-muted);
+}
+
+.cad-model__scrollbar:hover .cad-model__scrollbar-thumb {
+  background: var(--cad-model-fg);
+}
+
+.cad-model__pin-item {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 4px;
+}
+
+.cad-model__pin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Patchwork's thread buttons (Resolve, Reply, Save, Cancel) as the editor's buttons. */
+.cad-model__pin-item .comment-btn,
+.cad-model__comment-popover .comment-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 3px;
+  background: var(--cad-model-panel);
+  color: var(--cad-model-fg);
+  font: inherit;
+  font-size: 12px;
+}
+
+.cad-model__pin-item .comment-btn:hover,
+.cad-model__comment-popover .comment-btn:hover {
+  border-color: var(--cad-model-accent-text);
+}
+
 .cad-model__comments-popover .comment-draft-textarea {
   box-sizing: border-box;
   max-width: 100%;
 }
 
-.cad-model__comment-new {
-  align-self: flex-start;
-  padding: 2px 8px;
-  border: 1px solid var(--cad-model-border);
-  border-radius: 3px;
-  background: var(--cad-model-bg);
-  color: var(--cad-model-fg);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
 /* A pin on commented faces and edges, with how many threads; its tail on the point. */
-.cad-model__pin,
-.cad-model__selection-action {
+/* Comments and annotations on a face or edge: their icons, and how many there are (research/21, "Annotation"). */
+.cad-model__pin {
   position: absolute;
   top: 0;
   left: 0;
@@ -1420,11 +1497,14 @@
   line-height: 1.4;
   cursor: pointer;
   white-space: nowrap;
-}
-
-.cad-model__pin {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  box-sizing: border-box;
   min-width: 18px;
-  margin: -1.6em 0 0 0;
+  /* Its own height and 2px above the point it hangs from, so that it covers nothing there, e.g. a drop on the face. */
+  height: 18px;
+  margin: -20px 0 0 0;
   padding: 0 5px;
   border: 1px solid var(--cad-model-comment-line);
   border-radius: 8px 8px 8px 2px;
@@ -1432,82 +1512,29 @@
   color: var(--cad-model-fg);
 }
 
-.cad-model__pin[data-focused="true"] {
+.cad-model__pin:hover {
   outline: 2px solid var(--cad-model-comment-line);
 }
 
-/* An annotation's pin: its document's icon (research/21, "Annotation"). */
-.cad-model__pin--annotation {
-  display: flex;
-  align-items: center;
-  padding: 2px 4px;
+/* Open, on the selected face or edge, or holding a thread focused, e.g. in Patchwork's Comments panel: filled. */
+.cad-model__pin[data-focused="true"],
+.cad-model__pin[data-selected="true"] {
   border-color: var(--cad-model-accent);
-  background: var(--cad-model-bg);
-}
-
-.cad-model__pin--annotation[data-focused="true"] {
-  outline-color: var(--cad-model-accent);
-}
-
-.cad-model__pin--annotation[data-state="unavailable"],
-.cad-model__annotation[data-state="unavailable"],
-.cad-model__annotation[data-detached="true"] {
-  border-color: var(--cad-model-warning);
-  color: var(--cad-model-warning);
-}
-
-/* Annotations on the model as a whole and those whose place is gone, at the bottom right of the 3D view. */
-.cad-model__annotations {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  z-index: 1;
-  display: flex;
-  gap: 4px;
-}
-
-.cad-model__annotation {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px 5px;
-  border: 1px solid var(--cad-model-accent);
-  border-radius: 8px;
-  background: var(--cad-model-bg);
-  color: var(--cad-model-fg);
-  cursor: pointer;
-}
-
-/* An annotation's document in Patchwork's embed frame. */
-.cad-model__annotation-popover {
-  position: absolute;
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: min(380px, 92vw);
-  margin: 4px 0;
-  padding: 4px;
-  border: 1px solid var(--cad-model-border);
-  border-radius: 6px;
-  background: var(--cad-model-bg);
-  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
-}
-
-.cad-model__annotation-actions {
-  display: flex;
-  gap: 6px;
-}
-
-/* Up and to the right of the selected face or edge, like a collaborator's name next to their pointer. */
-.cad-model__selection-action {
-  margin: -2em 0 0 8px;
-  padding: 2px 8px;
-  border: none;
-  border-radius: 6px;
   background: var(--cad-model-accent);
   color: white;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.cad-model__pin[data-state="unavailable"] {
+  border-color: var(--cad-model-warning);
+}
+
+/* What is pinned to the model as a whole, or whose place is gone or not shown, at the bottom left of the 3D view. */
+.cad-model__pin--model {
+  top: auto;
+  bottom: 8px;
+  left: 8px;
+  margin: 0;
+  padding: 2px 6px;
 }
 
 .cad-model__comment-caption {
@@ -1516,25 +1543,8 @@
   font-size: 12px;
 }
 
-.cad-model__comment-caption code,
-.cad-model__detached code {
+.cad-model__comment-caption code {
   font-family: var(--cad-model-family-code);
-}
-
-/* Threads whose target is gone, listed from the bottom left of the 3D view. */
-.cad-model__detached {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  z-index: 1;
-  padding: 2px 8px;
-  border: 1px solid var(--cad-model-comment-line);
-  border-radius: 3px;
-  background: var(--cad-model-comment);
-  color: var(--cad-model-fg);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
 }
 
 /* ---------- Parameters (research/17-parameters.md) ---------- */

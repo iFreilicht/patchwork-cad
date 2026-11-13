@@ -2,7 +2,7 @@ import { Dynamic } from "solid-js/web";
 import { createRoot, type JSX } from "solid-js";
 
 /**
- * The few lucide icons (https://lucide.dev, ISC) the editor shows for documents: datatypes name
+ * The few lucide icons (https://lucide.dev, ISC) the editor shows for documents and pins: datatypes name
  * their icon by its lucide name, and an unknown one shows as a file. Patchwork has no element that
  * draws an icon by name, and the whole set would be a dependency for a handful.
  */
@@ -60,6 +60,8 @@ const PATHS: Record<string, () => JSX.Element> = {
     </>
   ),
   Folder: () => <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
+  // Comments on a pin (research/21, "Annotation").
+  MessageSquare: () => <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />,
   // States of a document (research/21, "The documents list").
   Link: () => (
     <>
