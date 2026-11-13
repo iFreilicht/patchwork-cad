@@ -177,6 +177,12 @@ A configuration's value can be a link instead of a literal: `{ link: AutomergeUr
 - **Separate variant documents** (`{ model, params }`, one per set of values): the model can't see them, so a parameter renamed in the model orphans their values with no way to find and map them; and views and configurations would be spread over many documents.
 - **Drafts as variants:** drafts are meant to be merged back; a never-merged draft drifts from main, I found no operation that brings the original's later changes into a clone, and nothing keeps a draft to parameter changes. A good tool for "try a redesign", not for configurations.
 - **Variants as code** (a variant that imports the model and calls it): outputs and further features would come for free, but the variant then is an assembly of one part, which blurs the line between configurations and assemblies; and several code texts in one document that import each other need module resolution inside a document, which [02](02-model-storage.md#verdict-imports-in-code)'s imports don't solve.
+- **Configurations as code** (`export const configurations` next to `defaultParams`), so that their values can be expressions and read imports ([Values, not expressions](#configurations-and-named-views-in-the-model-document)), with each configuration's resolved values cached in the document for tools that don't run the model. Kept as data until users need it, for what it costs:
+  - **A stale cache:** values that read a followed document change without an edit of the code, and only an open editor recomputes them, so the cache would need the bookkeeping of locks ([21](21-embedding.md#following-and-pinning)). Derived parameters, which are computed in `main`, would need a build to cache.
+  - **Ids:** embeds name a configuration by its id; a configuration keyed by name in code breaks them when it is renamed in the code pane.
+  - **Merging:** concurrent edits of a value merge as text ([Document fields and portability](#document-fields-and-portability)).
+  - **Code the editor can't read,** e.g. `{ ...base, w: 80 }`, would need a fallback such as the Custom Script entry.
+  - **Named views** would stay data, splitting the one mechanism both share.
 - **Values in the embed itself** (`<patchwork-view params="…">`): `<patchwork-view>` passes only a document and a tool id ([10](10-view-state.md#instance-identity)), so values must live in a document.
 - **Configured models inside models** (dropping a configuration into the editor inserts an import and `body(() => m.default({ ...m.defaultParams, ...values }))`, as Onshape picks a configuration on insertion): belongs to assemblies.
 
@@ -190,6 +196,5 @@ Every open proxy builds the model in its own kernel worker, and each worker hold
 - Hovering a parameter to highlight the features that use it, completing parameter names in expression fields, and creating a parameter by typing an unknown name, as Fusion does.
 - `enum` as a choice in the dialog; units other than millimetres for display.
 - Values of a renamed parameter that a rename in the code pane leaves behind in configurations, and stale `paramConfig` keys.
-- Configurations whose values can be expressions as defaults are ([Values, not expressions](#configurations-and-named-views-in-the-model-document)), which means storing them as code; see [Variants as code](#considered).
 - A customizer: an embed's view of the parameters, to edit a configuration without opening the editor; and showing only some of `return`'s outputs in a configuration ([15](15-bodies.md#output)).
 - `near` hints that survive scaling ([above](#parameters-stress-references)).
