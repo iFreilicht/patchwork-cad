@@ -113,7 +113,7 @@ const labelled = decal({ body: engraved, face: plate.side.front, image: label, w
 - **Calibrate:** click two points of the image in the view and type their distance, as in Fusion; that sets `width`, about the centre. The points are crosses on the image, with a line between them, and the status bar says what to do next; a third click starts again, Escape or Cancel ends it, and a click in the view picks instead of closing the dialog.
 - **Inserting one:** Canvas is a role for an image or an SVG in "Use as" ([The document dialog](#the-document-dialog)). It lies on the face the image was dropped on, centred where it was dropped, or else on XY under the model's centre; it is a round number about as wide as the model, and half see-through.
 - **Not in the viewer tool and embeds:** a canvas helps the people modelling, and the viewer shows what the model is.
-- **Images only.** A live document on a plane is possible with three's `CSS3DRenderer`, which "can also be used in order to combine DOM elements with WebGL content", but "It's not possible to use the material system of three.js" and "The renderer only supports 100% browser and display zoom" ([three.js](https://threejs.org/docs/pages/CSS3DRenderer.html)). Other documents are [annotations](#annotation).
+- **Images only.** Other documents are [annotations](#annotation). Live documents on canvases, fitted and edited in place, are an experiment that needs Patchwork's help to work properly ([22](22-document-canvases.md)).
 
 ### Annotation
 
