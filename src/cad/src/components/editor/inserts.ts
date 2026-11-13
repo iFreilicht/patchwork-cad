@@ -3,7 +3,8 @@
  * dragged onto the editor, pasted into it or given to "Insert". Where a drop lands preselects a role:
  * the code pane, the timeline and the documents list Import, which is written at once; a number field
  * a value of the document for it; anywhere else nothing, and the document waits as a pending insert,
- * a selection with the document dialog, until the user chooses. Import is the only role so far.
+ * a selection with the document dialog, until the user chooses. A face preselects Annotation for any
+ * document but an image or an SVG, which wait for Decal and Sketch.
  */
 import { batch, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
@@ -13,7 +14,13 @@ import { parameters, setDefault } from "../../model/params.ts";
 import { namesIn } from "../../model/refactor.ts";
 import { applyToText, apply, setProp, type Edit } from "../../model/splice.ts";
 import { timeline } from "../../model/timeline.ts";
-import type { CadModelDoc } from "../../types.ts";
+import type { CadAnchor, CadModelDoc } from "../../types.ts";
+import type { AnnotationStore, AnnotationPlaces } from "../annotations.tsx";
+import type { Entity } from "../Viewer.tsx";
+import { annotationRowId } from "./documents.ts";
+
+/** The viewer tool, which a CAD model is shown with as an annotation. */
+const VIEWER_TOOL_ID = "cad-model-viewer";
 import { resolvedFrom } from "../configurations.ts";
 import { documentsInText, droppedDocuments, dropEffect, isPatchworkDrag, mayCarryDocuments, type DroppedDocument } from "../dnd.ts";
 import type { DocumentInfo } from "../documentInfo.ts";
@@ -29,13 +36,17 @@ import type { Editor, SelectionFrom } from "./state.ts";
  * own preselection rule (`preselects`) and its own fields in the dialog.
  */
 export interface Role {
-  id: "import";
+  id: "import" | "annotation";
   label: string;
   title: string;
   allows(value: unknown, path: boolean): boolean;
 }
 
-export const ROLES: readonly Role[] = [{ id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 }];
+export const ROLES: readonly Role[] = [
+  { id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 },
+  // A view of the whole document, which the embed frame shows (research/21, "Annotation").
+  { id: "annotation", label: "Annotation", title: "Show it at a place on the model", allows: (_, path) => !path },
+];
 
 /** A number field a value is dropped on: a feature's argument, a parameter's default, or a configuration's value. */
 export type ValueTarget = { kind: "argument"; feature: string; param: string; label: string } | { kind: "default"; key: string } | { kind: "override"; configuration: string; name: string; key: string };
@@ -43,10 +54,20 @@ export type ValueTarget = { kind: "argument"; feature: string; param: string; la
 /** Where a drop lands, by the `data-drop` of the element under the pointer and its `data-drop-value`. */
 export type DropTarget =
   | { kind: "import" | "insert" | "document" | "refuse"; element: Element | undefined }
-  | { kind: "value"; element: Element; target: ValueTarget };
+  | { kind: "value"; element: Element; target: ValueTarget }
+  | { kind: "face"; element: Element; face: Entity };
 
-/** The role a drop on a target preselects (research/21, "Dropping, pasting, inserting"). */
-export const preselects = (target: DropTarget): Role["id"] | undefined => (target.kind === "import" ? "import" : undefined);
+/**
+ * The role a drop of a document whose value is `value` on a target preselects (research/21,
+ * "Dropping, pasting, inserting"): on a face, Annotation, but for an image or an SVG, which are to be
+ * a decal or a sketch.
+ */
+export const preselects = (target: Pick<DropTarget, "kind">, value: unknown): Role["id"] | undefined => {
+  if (target.kind === "import") return "import";
+  if (target.kind !== "face") return undefined;
+  const kind = isFile(value) ? fileKind(value) : undefined;
+  return kind === "image" || kind === "svg" ? undefined : "annotation";
+};
 
 /** What a field target is called, in the dialog, the status bar and problems: "Distance of extrude1", "the default of w", "w in Wide". */
 export const targetLabel = (t: ValueTarget) => (t.kind === "argument" ? `${t.label} of ${t.feature}` : t.kind === "default" ? `the default of ${t.key}` : `${t.key} in ${t.name}`);
@@ -85,6 +106,8 @@ export interface PendingInsert {
   target: ValueTarget | undefined;
   /** The name the drag gave it, for its import's name. */
   name: string | undefined;
+  /** The face it was dropped on, which an annotation is pinned to. */
+  anchor?: CadAnchor | undefined;
 }
 
 export interface Inserts {
@@ -94,6 +117,8 @@ export interface Inserts {
   status: Accessor<string | undefined>;
   /** Whether a document is dragged over the editor, e.g. to show the documents list as a target. */
   dragging: Accessor<boolean>;
+  /** The face a document is dragged over, which a drop pins it to. */
+  dropFace: Accessor<Entity | undefined>;
   /** Selects a new pending insert of `url`, or of no document yet. */
   begin(url: AutomergeUrl | undefined, target: ValueTarget | undefined, from: SelectionFrom, name?: string): void;
   /** Gives the pending insert the document of a pasted URL; says why not. */
@@ -113,7 +138,20 @@ export interface Inserts {
 /** How long a drag may leave the editor's elements before its highlight goes: Safari's `dragleave` has no `relatedTarget`, and every element boundary looks like leaving. */
 const LEAVE_MS = 150;
 
-export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: Editor; model: Model; documents: Documents; params: ParamsController; info: (url: string) => DocumentInfo; element: HTMLElement }): Inserts {
+export function createInserts(props: {
+  handle: DocHandle<CadModelDoc>;
+  editor: Editor;
+  model: Model;
+  documents: Documents;
+  params: ParamsController;
+  annotations: AnnotationStore;
+  /** A face's anchor, as a comment on it has. */
+  anchorOf: AnnotationPlaces["anchorOf"];
+  /** The face at a point on the screen, if the 3D view has one there. */
+  faceAt: (x: number, y: number) => Entity | undefined;
+  info: (url: string) => DocumentInfo;
+  element: HTMLElement;
+}): Inserts {
   const { handle, editor, element } = props;
   const [pendingInsert, setPending] = createSignal<PendingInsert>();
   const pending = () => {
@@ -122,10 +160,10 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     return s?.kind === "insert" && p?.id === s.id ? p : undefined;
   };
   let count = 0;
-  const begin = (url: AutomergeUrl | undefined, target: ValueTarget | undefined, from: SelectionFrom, name?: string) => {
+  const begin = (url: AutomergeUrl | undefined, target: ValueTarget | undefined, from: SelectionFrom, name?: string, anchor?: CadAnchor) => {
     const id = String(++count);
     batch(() => {
-      setPending({ id, url, target, name });
+      setPending({ id, url, target, name, anchor });
       editor.select({ kind: "insert", id }, from);
     });
   };
@@ -220,6 +258,42 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
   };
 
   /**
+   * Shows document `url`, whose value is `value`, as an annotation pinned to `anchor`, or to the
+   * model as a whole, and selects its row; one of the same document on the same place already is
+   * selected instead. A CAD model is shown in the viewer, as the editor has no place in a popover;
+   * this model can't annotate itself.
+   */
+  const annotate = (url: AutomergeUrl, anchor: CadAnchor | undefined, value: unknown) => {
+    const doc = withoutHeads(url);
+    if (docOf(url) === docOf(handle.url)) return editor.setNotice("A model can't annotate itself.");
+    // A place by its name: Automerge may give a reference's keys in another order than the worker.
+    const place = (anchor: CadAnchor | undefined) => anchor?.entityName ?? anchor?.feature ?? "";
+    const same = props.annotations.list().find((a) => withoutHeads(a.doc) === doc && place(a.anchor) === place(anchor));
+    const model = (value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type === "cad-model";
+    const id = same?.id ?? props.annotations.add(url, anchor, model ? VIEWER_TOOL_ID : undefined);
+    editor.select({ kind: "document", id: annotationRowId(id) }, "dialog");
+    editor.setNotice(undefined);
+  };
+
+  /** A face's anchor, as a comment on it has: its feature, statement and reference (research/13). */
+  const faceAnchor = async (face: Entity): Promise<CadAnchor | undefined> => {
+    const { code, ref } = await props.model.engine.pick(face.body, "face", face.index).catch(() => ({ code: "", ref: undefined }));
+    return ref && code ? props.anchorOf(face, ref, code) : undefined;
+  };
+
+  /**
+   * A document dropped on a face: Annotation if it is preselected, written at once; otherwise the
+   * document waits, and keeps the face for when Annotation is chosen.
+   */
+  const dropOnFace = async (d: DroppedDocument, face: Entity) => {
+    const doc = docOf(d.url);
+    if (!doc) return;
+    const [anchor, loaded] = await Promise.all([faceAnchor(face), load(d.url).catch(() => undefined)]);
+    if (withoutHeads(d.url) === doc && preselects({ kind: "face" }, loaded?.value) === "annotation") return annotate(d.url, anchor, loaded?.value);
+    begin(d.url, undefined, "view", d.name, anchor);
+  };
+
+  /**
    * Uses the value at `path` of document `doc` (research/21, "Dropping, pasting, inserting"): a
    * configuration's value links to it, a feature's argument or a parameter's default becomes the
    * expression that reads it, with its import, in one change; without a field, only the import is
@@ -302,6 +376,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
   };
   const [status, setStatus] = createSignal<string>();
   const [dragging, setDragging] = createSignal(false);
+  const [dropFace, setDropFace] = createSignal<Entity>();
   let highlighted: Element | undefined;
   const highlight = (target: Element | undefined) => {
     if (highlighted === target) return;
@@ -316,6 +391,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     batch(() => {
       setStatus(undefined);
       setDragging(false);
+      setDropFace(undefined);
     });
   };
   const onDragEnd = () => {
@@ -339,6 +415,11 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
       if (kind === "document") return { kind: "document", element: node };
       if (kind === "import" || kind === "insert") return input ? { kind: "refuse", element: undefined } : { kind, element: node };
       if (node.matches("input, textarea, select")) input = true;
+      // A face of the model, which a document is pinned to (research/21, "Annotation").
+      if (node.matches(".cad-model__viewer > canvas") && event instanceof MouseEvent) {
+        const face = props.faceAt(event.clientX, event.clientY);
+        if (face) return { kind: "face", element: node, face };
+      }
     }
     return input ? { kind: "refuse", element: undefined } : { kind: "insert", element: undefined };
   };
@@ -352,7 +433,8 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     if (target.kind === "import") return imported ? `Select ${title}` : docs.length > 1 ? `Import ${title} and ${docs.length - 1} more` : `Import ${title}`;
     if (target.kind === "value") return (target.target.kind === "override" ? `Link ${title} to ${target.target.key}` : `Use ${title} for ${targetLabel(target.target)}`) + others;
     if (target.kind === "document") return (pending() ? `Insert ${title}` : `Replace with ${title}`) + others;
-    if (target.kind === "insert") return `${first && importedRow(first.url) ? "Select" : "Insert"} ${title}${others}`;
+    if (target.kind === "insert") return `Insert ${title}${others}`;
+    if (target.kind === "face") return `${!first || preselects(target, props.info(docOf(first.url) ?? first.url).value) === "annotation" ? "Pin" : "Insert"} ${title} to the face${others}`;
     return undefined;
   };
 
@@ -374,7 +456,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     if (!kind || !event.dataTransfer) return;
     const target = targetOf(event);
     if (!target) return end();
-    const takes = kind === "documents" ? target.kind !== "refuse" : kind === "text" && (target.kind === "insert" || target.kind === "value" || target.kind === "document") && !target.element?.closest("[data-drop=import]");
+    const takes = kind === "documents" ? target.kind !== "refuse" : kind === "text" && (target.kind === "insert" || target.kind === "face" || target.kind === "value" || target.kind === "document") && !target.element?.closest("[data-drop=import]");
     if (kind === "text" && !takes) return;
     // Accepted, or refused so that no field or the code pane takes the URL as text.
     event.preventDefault();
@@ -382,8 +464,11 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     event.dataTransfer.dropEffect = takes ? dropEffect(event.dataTransfer.effectAllowed) : "none";
     clearTimeout(leaving);
     if (kind !== "documents") return;
-    highlight(takes ? (target.element ?? (event.composedPath().find((n) => n instanceof Element && n.matches(".cad-editor__stage, .cad-editor__browser")) as Element | undefined)) : undefined);
+    // Over a face, the face is highlighted, not the view.
+    highlight(takes && target.kind !== "face" ? (target.element ?? (event.composedPath().find((n) => n instanceof Element && n.matches(".cad-editor__stage, .cad-editor__browser")) as Element | undefined)) : undefined);
     batch(() => {
+      const face = takes && target.kind === "face" ? target.face : undefined;
+      if (JSON.stringify(face) !== JSON.stringify(dropFace())) setDropFace(face);
       setDragging(true);
       setStatus(takes ? describe(target, drag?.docs ?? []) : undefined);
     });
@@ -408,6 +493,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     if (target.kind === "import") return void importDocuments(docs);
     editor.setNotice(others);
     if (target.kind === "value") return void dropValue(first, target.target);
+    if (target.kind === "face") return void dropOnFace(first, target.face);
     if (target.kind === "document") {
       const s = editor.selection();
       if (s?.kind === "document") {
@@ -418,9 +504,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
       const p = pending();
       if (p) return void setPending({ ...p, url: first.url, name: first.name });
     }
-    // Imported already: Import would add nothing, so its row is selected, as a drop on the code does.
-    const row = importedRow(first.url);
-    if (row) return editor.select({ kind: "document", id: row.id }, "view");
+    // Imported already or not, it waits: it may be an annotation, and Import of an imported one selects its row.
     begin(first.url, undefined, "view", first.name);
   };
 
@@ -435,9 +519,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     const first = urls[0];
     if (!first) return;
     event.preventDefault();
-    const row = importedRow(first);
-    if (row) editor.select({ kind: "document", id: row.id }, "view");
-    else begin(first, undefined, "view");
+    begin(first, undefined, "view");
     editor.setNotice(urls.length > 1 ? `Only ${titleOf(first)} is inserted; the others are left out.` : undefined);
   };
 
@@ -463,6 +545,7 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     pending,
     status,
     dragging,
+    dropFace,
     begin,
     setDocument(text) {
       const p = pending();
@@ -473,7 +556,8 @@ export function createInserts(props: { handle: DocHandle<CadModelDoc>; editor: E
     },
     async choose(role) {
       const p = pending();
-      if (role !== "import" || !p?.url) return;
+      if (!p?.url) return;
+      if (role === "annotation") return annotate(p.url, p.anchor, documentOf(p)?.info.value);
       await importDocuments([{ url: p.url, ...(p.name ? { name: p.name } : {}) }]);
     },
     async pick(path) {

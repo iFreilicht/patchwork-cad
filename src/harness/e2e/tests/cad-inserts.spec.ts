@@ -9,57 +9,9 @@ import type { Locator, Page } from "@playwright/test";
 import { CAD_MODULES, createModel, dialog, docUrl, editorView, modelSource, openCode, setModelSource, timelineEntry } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, pressMod } from "../ui.ts";
+import { centre, drag, sidebarDocuments, sidebarEntry, type Repo } from "../documents.ts";
 
 test.use({ siteModules: CAD_MODULES });
-
-type Handle = { url: string; heads(): string[]; doc(): Record<string, unknown>; change(fn: (d: Record<string, unknown>) => void): void };
-type Repo = { find(u: string): Promise<Handle>; create(d: unknown): Handle };
-
-/**
- * Creates documents and lists them in the folder the sidebar's document list shows, as "Add to
- * sidebar" does: data documents as given, files with their text as UTF-8 bytes, as the sidebar
- * uploads them. Each is listed under its key.
- */
-async function sidebarDocuments(page: Page, docs: Record<string, { data: Record<string, unknown> } | { file: string; mimeType: string; text: string }>): Promise<Record<string, string>> {
-  return page.evaluate(async (docs) => {
-    const w = window as unknown as { repo: Repo };
-    const list = document.querySelector('.threepane-sidebar patchwork-view[tool-id="chee/document-list"]');
-    const folder = await w.repo.find(list!.getAttribute("doc-url")!);
-    const urls: Record<string, string> = {};
-    for (const [key, d] of Object.entries(docs)) {
-      const [name, extension] = "file" in d ? d.file.split(".") : [];
-      const handle = "data" in d ? w.repo.create(d.data) : w.repo.create({ "@patchwork": { type: "file" }, name, extension, mimeType: d.mimeType, content: new TextEncoder().encode(d.text) });
-      urls[key] = handle.url;
-      folder.change((f) => (f["docs"] as unknown[]).push({ name: key, type: "data" in d ? "unknown" : "file", url: handle.url }));
-    }
-    return urls;
-  }, docs);
-}
-
-const sidebarEntry = (page: Page, name: string) => page.locator(".threepane-sidebar [data-dnd-item]").filter({ hasText: new RegExp(`^${name}$`) }).first();
-
-async function centre(target: Locator | { x: number; y: number }): Promise<{ x: number; y: number }> {
-  if (!("boundingBox" in target)) return target;
-  const box = await target.boundingBox();
-  if (!box) throw new Error("the drop target isn't visible");
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-
-/**
- * Drags a sidebar entry, by its name, or another element with the mouse onto `target` and, unless `release` is false, drops it there.
- * WebKit drops only where a dragover accepted the drag, which a move ending on a new element hasn't yet sent.
- */
-async function drag(page: Page, source: string | Locator, target: Locator | { x: number; y: number }, release = true): Promise<void> {
-  const from = await centre(typeof source === "string" ? sidebarEntry(page, source) : source);
-  const to = await centre(target);
-  await page.mouse.move(from.x, from.y);
-  await page.mouse.down();
-  await page.mouse.move(from.x + 20, from.y + 5, { steps: 5 });
-  await page.mouse.move(to.x, to.y, { steps: 10 });
-  await page.mouse.move(to.x + 1, to.y, { steps: 2 });
-  await page.mouse.move(to.x, to.y, { steps: 2 });
-  if (release) await page.mouse.up();
-}
 
 const status = (page: Page) => page.locator(".cad-model__status").first();
 const codePane = (page: Page) => page.locator(".cad-editor__code");
@@ -428,7 +380,7 @@ test("a field's dialog is about a value for it alone: a problem line where none 
   await expect.poll(() => modelSource(page)).toBe(PLATE.replace(FEATURES_IMPORT, `${FEATURES_IMPORT}import c from "${docs["Deep"]}/a/b/@1/c";\n`).replace("distance: 5", "distance: c"));
 });
 
-test("a document row drags its document: onto a field it reuses the import, into the view it is selected, into Patchwork it is a document", async ({ users }) => {
+test("a document row drags its document: onto a field it reuses the import, into the view it waits, into Patchwork it is a document", async ({ users }) => {
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
   const { page } = a;
@@ -448,10 +400,11 @@ test("a document row drags its document: onto a field it reuses the import, into
   await insertDialog(page).locator(".cad-editor__tree-pick", { hasText: /^4$/ }).click();
   await expect.poll(() => modelSource(page)).toBe(imported.replace("distance: 5", "distance: sizes.height"));
 
-  // Into the view: imported already, so its row is selected.
+  // Into the view: it waits, as it may be an annotation; Import, imported already, selects its row.
   await drag(page, grip, await inView(page), false);
-  await expect(status(page)).toContainText("Select Sizes");
+  await expect(status(page)).toContainText("Insert Sizes");
   await page.mouse.up();
+  await insertDialog(page).getByRole("radio", { name: "Import" }).click();
   await expect(editorView(page)).toHaveAttribute("data-selection", `document:${sizes}`);
   await expect(insertDialog(page)).toHaveCount(0);
   expect(await modelSource(page)).toBe(imported.replace("distance: 5", "distance: sizes.height"));

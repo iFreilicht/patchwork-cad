@@ -13,6 +13,7 @@ import { NameField } from "./NameField.tsx";
 import type { Editor, Selectable } from "./state.ts";
 import { rowDragUrl, type DocumentRow, type Documents } from "./documents.ts";
 import { Icon } from "../icons.tsx";
+import { anchorLabel } from "../../model/annotations.ts";
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
 export const EyeIcon = (props: { open: boolean }) => (
@@ -622,9 +623,10 @@ export function ResultDialog(props: { editor: Editor; onClose: () => void; onEdi
 /** What a document row's context menu and the document dialog offer (research/21, "The documents list"). */
 export function documentActions(documents: Documents, row: DocumentRow): (MenuItem & { disabled?: boolean })[] {
   const state = documents.state(row).state;
-  const own = row.role === "import";
+  const own = row.role === "import" || row.role === "annotation";
   return [
     { label: "Open", disabled: !row.doc, run: () => documents.open(row) },
+    ...(row.annotation ? [{ label: "Show", run: () => documents.show(row) }] : []),
     row.pinned ? { label: "Follow", disabled: !own, run: () => documents.follow(row) } : { label: "Pin to this version", disabled: !own || !documents.builtWith(row), run: () => documents.pin(row) },
     { label: "Update", disabled: !own || state !== "newer", run: () => documents.update(row) },
     { label: "Remove", danger: true, disabled: !documents.removable(row), run: () => documents.remove(row) },
@@ -700,7 +702,7 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                 </span>
                 <button
                   class="cad-editor__browser-name"
-                  title={`${props.documents.title(row())}${row().path ?? ""}${row().role === "indirect" ? `, imported by ${via() ?? "an imported file"}` : row().role === "link" ? ", linked to by a configuration" : ""}`}
+                  title={`${props.documents.title(row())}${row().path ?? ""}${row().role === "indirect" ? `, imported by ${via() ?? "an imported file"}` : row().role === "link" ? ", linked to by a configuration" : row().annotation ? `, an annotation on ${anchorLabel(row().annotation!)}` : ""}`}
                   aria-pressed={selected()}
                   onClick={(event) => toggle(props.editor, item(), event, selected())}
                   onKeyDown={(event) => {
@@ -720,6 +722,7 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                   <Show when={row().type}>
                     <span class="cad-editor__muted">{row().type}</span>
                   </Show>
+                  <Show when={row().annotation}>{(a) => <span class="cad-editor__muted">on {anchorLabel(a())}</span>}</Show>
                 </button>
                 <span class="cad-editor__document-state" data-state={state().state} title={state().label} aria-label={state().label} role="img">
                   <Icon name={state().icon} size={12} />

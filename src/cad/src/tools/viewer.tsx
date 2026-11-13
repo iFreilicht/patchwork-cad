@@ -18,7 +18,8 @@ import { createEntityComments, DetachedButton } from "../components/entityCommen
 import type { Entity } from "../components/Viewer.tsx";
 import { analyze } from "../model/analyze.ts";
 import { timeline } from "../model/timeline.ts";
-import { createDocumentInfo, heldProblems } from "../components/documentInfo.ts";
+import { createDocumentInfo, heldProblems, type DocumentInfo } from "../components/documentInfo.ts";
+import { AnnotationList, AnnotationPopover, ANNOTATION_PIN, createAnnotationStore, placeAnnotations } from "../components/annotations.tsx";
 import "../styles.css";
 
 const VIEWER_TOOL_ID = "cad-model-viewer";
@@ -38,9 +39,10 @@ export default function mount(handle: DocHandle<CadModelDoc | CadModelEmbedDoc>,
 /**
  * The viewer's part in collaborators' presence (research/13): its pointer, hovered and selected
  * faces and edges go out, and collaborators' show in 3D. It has no code or timeline to share.
- * Faces and edges are named by the worker only while someone else is there to see them.
+ * Faces and edges are named by the worker only while someone else is there to see them. Comments
+ * and annotations (research/21, "Annotation") show as pins, which open them.
  */
-function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, model: Model): { props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "selectionAction">; popover: (wrap: () => HTMLElement) => JSX.Element } {
+function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, model: Model, info: (url: string) => DocumentInfo, goToView: (id: string) => void): { props: Pick<ViewerProps, "onHover" | "onSelect" | "onPointer" | "highlight" | "peers" | "pins" | "onPin" | "selectionAction">; popover: (wrap: () => HTMLElement) => JSX.Element } {
   const presence = joinPresence(element, handle, "viewer");
   const hover = createEntityName(model, 100);
   const selected = createEntityName(model, 0);
@@ -68,6 +70,7 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
     current: () => true,
     complete: () => true,
   });
+  const annotations = placeAnnotations({ store: createAnnotationStore(handle), model, shown: () => model.shapes() ?? [], entries, source: comments.source, info, complete: () => true, goToView });
   createEffect(() => presence.set({ hover: hover.ref() }));
   createEffect(() => presence.set({ selected: selected.ref() }));
   const highlights = createPeerHighlights(model, () => model.shapes() ?? [], presence.peers);
@@ -79,15 +82,16 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
     },
     onPointer: (pointer) => presence.set({ pointer }),
     get highlight() {
-      return [...highlights(), ...entityComments.highlight()];
+      const open = annotations.popover()?.id;
+      return [...highlights(), ...entityComments.highlight(), ...annotations.highlight(open ? [open] : [])];
     },
     get peers() {
       return peerMarkers(presence.peers());
     },
     get pins() {
-      return entityComments.pins();
+      return [...entityComments.pins(), ...annotations.pins()];
     },
-    onPin: entityComments.onPin,
+    onPin: (key, at) => (key.startsWith(ANNOTATION_PIN) ? annotations.open(key.slice(ANNOTATION_PIN.length), at) : entityComments.onPin(key, at)),
     get selectionAction() {
       return entityComments.selectionAction();
     },
@@ -97,6 +101,10 @@ function viewerPresence(element: HTMLElement, handle: DocHandle<CadModelDoc>, mo
     <>
       <Show when={comments.enabled() && entityComments.detached().length}>
         <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
+      </Show>
+      <AnnotationList annotations={annotations} info={info} />
+      <Show when={annotations.popover()} keyed>
+        {(p) => <AnnotationPopover annotations={annotations} popover={p} wrap={wrap()} />}
       </Show>
       <Show when={entityComments.popover()} keyed>
         {(p) => <CommentsPopover comments={comments} threads={p.threads} create={p.create} createNow={p.createNow} caption={p.caption} actions={p.actions} label={p.label} at={p.at} wrap={wrap()} above={!!p.above} onClose={entityComments.close} />}
@@ -111,12 +119,20 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   const model = createModel(props.handle);
   const ui = createUiState(props.element, props.handle.url);
   const views = createNamedViews(props.handle);
-  const { props: presence, popover } = viewerPresence(props.element, props.handle, model);
   const info = createDocumentInfo();
+  let viewer: ViewerApi | undefined;
+  /** A named view an annotation opened, as a new object each time, which the view applies even if it showed it before. */
+  const [goTo, setGoTo] = createSignal<CameraState>();
+  const goToView = (id: string) => {
+    const camera = id === HOME ? undefined : views.views().find((v) => v.id === id)?.camera;
+    if (camera) setGoTo({ ...camera });
+    else if (id === HOME) viewer?.home();
+  };
+  const { props: presence, popover } = viewerPresence(props.element, props.handle, model, info, goToView);
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
+      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={goTo() ?? ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
       {popover(() => root)}
       <StatusBar model={model} problems={heldProblems(model, info)} />
     </div>
@@ -159,7 +175,6 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   );
   const model = createModel(props.model, params);
   const views = createNamedViews(props.model);
-  const { props: presence, popover } = viewerPresence(props.element, props.model, model);
   const info = createDocumentInfo();
   let stage!: HTMLDivElement;
   /** The model's views, Home first, whose camera is unset until it is changed (research/18, "Home"). */
@@ -183,6 +198,13 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
     else setCurrent(camera);
   };
   const changed = () => !!view() && !!current() && !sameCamera(current(), view()?.camera);
+  /** An annotation's view: orbiting there is local, as any orbit; Reset returns to the embed's view. */
+  const goToView = (id: string) => {
+    const camera = id === HOME ? views.home() : views.views().find((v) => v.id === id)?.camera;
+    if (camera) setShown({ ...camera });
+    else if (id === HOME) viewer?.home();
+  };
+  const { props: presence, popover } = viewerPresence(props.element, props.model, model, info, goToView);
   const reset = () => {
     const camera = view()?.camera;
     setCurrent(undefined);

@@ -30,10 +30,13 @@ import { createConfigurations } from "../configurations.ts";
 import { createParams } from "./parameters.ts";
 import { ParamsDialog } from "./ParamsDialog.tsx";
 import { createDocumentInfo } from "../documentInfo.ts";
-import { createDocuments, type DocumentRow } from "./documents.ts";
-import { DocumentDialog, InsertDialog } from "./DocumentDialog.tsx";
+import { annotationRowId, createDocuments, type DocumentRow } from "./documents.ts";
+import { ANCHOR_PICK, DocumentDialog, InsertDialog } from "./DocumentDialog.tsx";
 import { createInserts, type PendingInsert } from "./inserts.ts";
 import { UNDO_IGNORE } from "../../model/locks.ts";
+import { getRegistry, type ToolDescription } from "@inkandswitch/patchwork-plugins";
+import { AnnotationList, AnnotationPopover, ANNOTATION_PIN, createAnnotationStore, placeAnnotations } from "../annotations.tsx";
+import { HOME } from "../../model/views.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -59,9 +62,22 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const model = createModel(props.handle, params.shown, { writeLocks: true });
   const editor = createEditor(props.handle, model, ui);
   const documentInfo = createDocumentInfo();
-  const documents = createDocuments({ handle: props.handle, editor, model, configurations: params.configurations.list, info: documentInfo, element: props.element });
+  // Documents shown at places on the model (research/21, "Annotation"); where they show is placed with the view, below.
+  const annotationStore = createAnnotationStore(props.handle);
+  const documents = createDocuments({ handle: props.handle, editor, model, configurations: params.configurations.list, annotations: annotationStore, onShow: (id) => showAnnotation(id), info: documentInfo, element: props.element });
   // Documents dropped, pasted or inserted (research/21, "Dropping, pasting, inserting").
-  const inserts = createInserts({ handle: props.handle, editor, model, documents, params, info: documentInfo, element: props.element });
+  const inserts = createInserts({
+    handle: props.handle,
+    editor,
+    model,
+    documents,
+    params,
+    annotations: annotationStore,
+    anchorOf: (...a) => annotations.anchorOf(...a),
+    faceAt: (x, y) => viewer?.faceAt(x, y),
+    info: documentInfo,
+    element: props.element,
+  });
   const bodies = createBodies(editor, ui);
   const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
@@ -156,6 +172,18 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {
     setPickError(undefined);
+    // A face or edge picked for an annotation pins it there (research/21, "Annotation").
+    const target = editor.pickTarget()?.param;
+    const annotation = selectedDocument()?.annotation;
+    if ((target === ANCHOR_PICK.face || target === ANCHOR_PICK.edge) && annotation) {
+      editor.setPickTarget(undefined);
+      if (entity.kind !== "face" && entity.kind !== "edge") return;
+      model.engine.pick(entity.body, entity.kind, entity.index).then(
+        ({ code, ref }) => (ref && code ? annotations.setAnchor(annotation.id, annotations.anchorOf(entity, ref, code)) : setPickError("it has no reference")),
+        (error: unknown) => setPickError(String((error as Error)?.message ?? error)),
+      );
+      return;
+    }
     editor.pick(entity).catch((error: unknown) => setPickError(String((error as Error)?.message ?? error)));
   };
 
@@ -386,6 +414,36 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     current: () => !editor.syntaxError(),
     complete: () => !rolledBack(),
   });
+  /** Goes to a named view by its id, or Home, as opening an annotation with a view does. */
+  const goToView = (id: string) => {
+    if (id === HOME) return views.goHome();
+    const view = views.views.views().find((v) => v.id === id);
+    if (view) views.goTo(view);
+  };
+  const annotations = placeAnnotations({
+    store: annotationStore,
+    model,
+    shown,
+    entries: () => editor.timeline().entries,
+    source: editor.source,
+    info: documentInfo,
+    complete: () => !rolledBack(),
+    goToView,
+    selected: () => selectedDocument()?.annotation?.id,
+  });
+  /** Opens an annotation from its row: next to its pin, or its button at the bottom right, else at the top left of the view. */
+  const showAnnotation = (id: string) => {
+    const at = stage.querySelector(`.cad-model__pin[data-key="${CSS.escape(ANNOTATION_PIN + id)}"]:not([hidden]), .cad-model__annotation[data-annotation="${CSS.escape(id)}"]`);
+    const r = at?.getBoundingClientRect() ?? stage.getBoundingClientRect();
+    const fromList = !!at?.matches(".cad-model__annotation");
+    annotations.open(id, at ? { x: fromList ? r.right : r.left, y: fromList ? r.top : r.bottom } : { x: r.left + 8, y: r.top + 8 }, fromList);
+  };
+  const toolName = (id: string) => getRegistry<ToolDescription>("patchwork:tool").get(id)?.name ?? id;
+  /** The face a document is dragged over, as a hovered one is. */
+  const dropFaceHighlight = (): Highlight[] => {
+    const face = inserts.dropFace();
+    return face ? [{ body: face.body, kind: "face", indices: [face.index], style: "hover" }] : [];
+  };
   let stage!: HTMLDivElement;
   /** Collaborators in the editor, with the timeline entry they selected, if they selected one. */
   const editorPeers = createMemo(() =>
@@ -514,7 +572,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   let press: { x: number; y: number } | undefined;
   const onPress = (event: PointerEvent) => {
     const target = event.target as Element;
-    const popup = props.element.querySelector(".cad-editor__menu, .cad-model__comments-popover, .cad-model__comment-popover");
+    const popup = props.element.querySelector(".cad-editor__menu, .cad-model__comments-popover, .cad-model__comment-popover, .cad-model__annotation-popover");
     press = event.button === 0 && !popup && props.element.contains(target) && elsewhere(target) ? { x: event.clientX, y: event.clientY } : undefined;
   };
   const onRelease = (event: PointerEvent) => {
@@ -606,9 +664,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onSelect={onSelect}
           onContextMenu={onViewMenu}
           onPointer={(pointer) => presence.set({ pointer })}
-          highlight={[...peerHighlights(), ...entityComments.highlight(), ...references(), ...featureHighlight(), ...bodyHighlights()]}
-          pins={entityComments.pins()}
-          onPin={entityComments.onPin}
+          highlight={[...peerHighlights(), ...entityComments.highlight(), ...annotations.highlight([selectedDocument()?.annotation?.id, annotations.popover()?.id].filter((id): id is string => !!id)), ...references(), ...featureHighlight(), ...bodyHighlights(), ...dropFaceHighlight()]}
+          pins={[...entityComments.pins(), ...annotations.pins()]}
+          onPin={(key, at) => (key.startsWith(ANNOTATION_PIN) ? annotations.open(key.slice(ANNOTATION_PIN.length), at) : entityComments.onPin(key, at))}
           selectionAction={entityComments.selectionAction()}
           peers={peerMarkers(peers())}
           overlays={overlays()}
@@ -638,7 +696,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             <ViewDialog section={views} view={dialogView()!} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
           <Match when={selectedDocument()}>
-            <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} onClose={() => editor.select(undefined, "dialog")} />
+            <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
           <Match when={inserts.pending()}>
             <InsertDialog inserts={inserts} pending={dialogInsert()!} editor={editor} onOpen={openUrl} onClose={() => editor.select(undefined, "dialog")} />
@@ -648,6 +706,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
         <Show when={comments.enabled() && entityComments.detached().length}>
           <DetachedButton count={entityComments.detached().length} onOpen={entityComments.openDetached} />
+        </Show>
+        <AnnotationList annotations={annotations} info={documentInfo} />
+        <Show when={annotations.popover()} keyed>
+          {(p) => <AnnotationPopover annotations={annotations} popover={p} wrap={stage} actions={[{ label: "Edit annotation", run: () => editor.select({ kind: "document", id: annotationRowId(p.id) }, "view") }]} />}
         </Show>
         <Show when={entityComments.popover()} keyed>
           {(p) => <CommentsPopover comments={comments} threads={p.threads} create={p.create} createNow={p.createNow} caption={p.caption} actions={p.actions} label={p.label} at={p.at} wrap={stage} above={!!p.above} onClose={entityComments.close} />}

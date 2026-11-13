@@ -7,6 +7,121 @@ import { documentActions } from "./Browser.tsx";
 import type { As, DocumentRow, Documents } from "./documents.ts";
 import { PICK_LIMITS, pickProblem, ROLES, type Inserts, type PendingInsert } from "./inserts.ts";
 import type { Editor } from "./state.ts";
+import { PickButton } from "./FeatureDialog.tsx";
+import { anchorLabel } from "../../model/annotations.ts";
+import type { Annotation } from "../../types.ts";
+import type { Annotations } from "../annotations.tsx";
+
+/** What an annotation's fields offer and change (research/21, "The document dialog"). */
+export interface AnnotationOptions {
+  annotations: Annotations;
+  /** The model's named views, Home first, which opening an annotation may go to. */
+  views: { id: string; name: string }[];
+  /** A tool's name by its id, as Patchwork's registry has it. */
+  toolName(id: string): string;
+  /** Goes to a named view by its id, or Home's. */
+  goToView(id: string): void;
+}
+
+/** The pick targets of an annotation's anchor: a face or an edge picked in the view pins it there. */
+export const ANCHOR_PICK = { face: "annotation-face", edge: "annotation-edge" } as const;
+
+/**
+ * An annotation's own fields: where it is pinned, a face or edge picked in the view, a feature or
+ * the model; the tool the embed frame shows it with, which is picked there; and the named view
+ * opening it goes to.
+ */
+function AnnotationFields(props: { annotation: Annotation; options: AnnotationOptions; editor: Editor }) {
+  const a = () => props.annotation;
+  const store = () => props.options.annotations;
+  const placed = () => store().placed().find((p) => p.annotation.id === a().id);
+  const features = () => props.editor.timeline().entries.flatMap((e) => (e.kind === "feature" ? [e] : []));
+  const disabled = () => props.editor.syntaxError() !== undefined;
+  const choose = (value: string) => {
+    if (!value) return store().setAnchor(a().id, undefined);
+    const entry = features().find((e) => e.name === value);
+    if (entry) store().setAnchor(a().id, store().featureAnchor(entry));
+  };
+  return (
+    <>
+      <div class="cad-editor__field" data-param="anchor">
+        <span>On</span>
+        <div class="cad-editor__refs">
+          <select class="cad-editor__input" aria-label="On" disabled={disabled()} onChange={(event) => choose(event.currentTarget.value)}>
+            <option value="" selected={!a().anchor}>
+              the model
+            </option>
+            <Show when={a().anchor?.entity}>
+              <option value="#entity" selected>
+                {anchorLabel(a())}
+              </option>
+            </Show>
+            <Show when={a().anchor?.feature && !a().anchor?.entity && !features().some((e) => e.name === a().anchor?.feature)}>
+              <option value="#gone" selected>
+                {a().anchor?.feature}
+              </option>
+            </Show>
+            <For each={features()}>
+              {(e) => (
+                <option value={e.name} selected={!a().anchor?.entity && a().anchor?.feature === e.name}>
+                  {e.name}
+                </option>
+              )}
+            </For>
+          </select>
+          <PickButton editor={props.editor} param={ANCHOR_PICK.face} kind="face" multi={false} disabled={disabled()} label="Select face" />
+          <PickButton editor={props.editor} param={ANCHOR_PICK.edge} kind="edge" multi={false} disabled={disabled()} label="Select edge" />
+          <Show when={placed()?.detached}>
+            <span class="cad-editor__document-state" data-state="unavailable" title="Not found in the model" aria-label="Not found in the model" role="img">
+              <Icon name="TriangleAlert" size={12} />
+            </span>
+          </Show>
+        </div>
+      </div>
+      <div class="cad-editor__field" data-param="tool">
+        <span>Tool</span>
+        <div class="cad-editor__refs">
+          <span>{a().tool ? props.options.toolName(a().tool!) : "Default"}</span>
+          <Show when={a().tool}>
+            <button class="cad-editor__button" title="Show it with its datatype's default tool" onClick={() => store().setTool(a().id, undefined)}>
+              Reset
+            </button>
+          </Show>
+        </div>
+      </div>
+      <div class="cad-editor__field" data-param="view">
+        <span>View</span>
+        <select
+          class="cad-editor__input"
+          aria-label="View"
+          title="The named view opening it goes to"
+          onChange={(event) => {
+            const id = event.currentTarget.value || undefined;
+            store().setView(a().id, id);
+            // Chosen, it is shown, as a click on a view's row goes there.
+            if (id) props.options.goToView(id);
+          }}
+        >
+          <option value="" selected={!a().view}>
+            none
+          </option>
+          <Show when={a().view && !props.options.views.some((v) => v.id === a().view)}>
+            <option value={a().view} disabled selected>
+              Deleted view
+            </option>
+          </Show>
+          <For each={props.options.views}>
+            {(v) => (
+              <option value={v.id} selected={a().view === v.id}>
+                {v.name}
+              </option>
+            )}
+          </For>
+        </select>
+      </div>
+    </>
+  );
+}
 
 /** Caps of the preview, so that a large document stays cheap to show: keys per level, lines, characters, and bytes drawn as an image. */
 const MAX_KEYS = 50;
@@ -192,11 +307,13 @@ const AS_TITLES: Record<As, string> = { data: "Its data, each key a named export
  * it (As, and a preview), its name and its version; and what uses it, each of which selects that.
  * Edits apply as they are made.
  */
-export function DocumentDialog(props: { documents: Documents; row: DocumentRow; editor: Editor; onClose: () => void }) {
+export function DocumentDialog(props: { documents: Documents; row: DocumentRow; editor: Editor; annotation?: AnnotationOptions; onClose: () => void }) {
   const row = () => props.row;
   const info = () => props.documents.info(row());
   const state = () => props.documents.state(row());
   const own = () => row().role === "import";
+  /** Its URL and version are the model's to change: an import's, or an annotation's. */
+  const editable = () => own() || row().role === "annotation";
   const disabled = () => props.editor.syntaxError() !== undefined;
   const named = () => row().statements.flatMap((s) => s.named);
   const name = () => row().statements.find((s) => s.name !== undefined)?.name;
@@ -232,7 +349,7 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
               <span class="cad-editor__muted">{row().path}</span>
             </Show>
           </button>
-          <Show when={own()}>
+          <Show when={editable()}>
             <CommitInput value={row().specifier.split("#", 1)[0]!} label="Document URL" title="Another document's automerge: URL replaces this one" disabled={disabled()} commit={(url) => props.documents.replace(row(), url)} onNotice={props.editor.setNotice} />
           </Show>
         </div>
@@ -278,15 +395,15 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
         <span>Version</span>
         <div class="cad-editor__refs">
           <div class="cad-editor__segmented" role="radiogroup" aria-label="Version">
-            <button role="radio" class="cad-editor__segment" aria-checked={!row().pinned} disabled={!own() || disabled()} title="Follow the document's latest version" onClick={() => props.documents.follow(row())}>
+            <button role="radio" class="cad-editor__segment" aria-checked={!row().pinned} disabled={!editable() || disabled()} title="Follow the document's latest version" onClick={() => props.documents.follow(row())}>
               Following
             </button>
-            <button role="radio" class="cad-editor__segment" aria-checked={!!row().pinned} disabled={!own() || disabled() || !props.documents.builtWith(row())} title="Pin the version the model is built with" onClick={() => !row().pinned && props.documents.pin(row())}>
+            <button role="radio" class="cad-editor__segment" aria-checked={!!row().pinned} disabled={!editable() || disabled() || !props.documents.builtWith(row())} title="Pin the version the model is built with" onClick={() => !row().pinned && props.documents.pin(row())}>
               Pinned
             </button>
           </div>
           <Show when={state().state === "newer"}>
-            <button class="cad-editor__button" disabled={!own() || disabled()} title="Pin the document's latest version" onClick={() => props.documents.update(row())}>
+            <button class="cad-editor__button" disabled={!editable() || disabled()} title="Pin the document's latest version" onClick={() => props.documents.update(row())}>
               Update
             </button>
           </Show>
@@ -295,49 +412,54 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
           </span>
         </div>
       </div>
-      <div class="cad-editor__field" data-param="users">
-        <span>Used by</span>
-        <div class="cad-editor__refs">
-          <For each={row().users.entries}>
-            {(index) => (
-              <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "entry", index }, "dialog")}>
-                {userLabel(index)}
+      <Show when={row().annotation && props.annotation && { annotation: row().annotation!, options: props.annotation }}>
+        {(a) => <AnnotationFields annotation={a().annotation} options={a().options} editor={props.editor} />}
+      </Show>
+      <Show when={row().role !== "annotation"}>
+        <div class="cad-editor__field" data-param="users">
+          <span>Used by</span>
+          <div class="cad-editor__refs">
+            <For each={row().users.entries}>
+              {(index) => (
+                <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "entry", index }, "dialog")}>
+                  {userLabel(index)}
+                </button>
+              )}
+            </For>
+            <Show when={row().users.params}>
+              <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "params" }, "dialog")}>
+                Parameters
               </button>
-            )}
-          </For>
-          <Show when={row().users.params}>
-            <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "params" }, "dialog")}>
-              Parameters
-            </button>
-          </Show>
-          <For each={row().users.configurations}>
-            {(c) => (
-              <button class="cad-editor__link" title={c.keys.join(", ")} onClick={() => props.editor.select({ kind: "configuration", id: c.id }, "dialog")}>
-                {c.name}: {c.keys.join(", ")}
-              </button>
-            )}
-          </For>
-          <Show when={row().role === "indirect" && row().via}>
-            {(via) => {
-              const parent = () => props.documents.rows().find((r) => r.id === via());
-              return (
-                <Show when={parent()}>
-                  {(p) => (
-                    <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "document", id: p().id }, "dialog")}>
-                      {props.documents.title(p())}
-                    </button>
-                  )}
-                </Show>
-              );
-            }}
-          </Show>
-          <Show when={!row().users.entries.length && !row().users.params && !row().users.configurations.length && row().role !== "indirect"}>
-            <span class="cad-editor__muted">nothing</span>
-          </Show>
+            </Show>
+            <For each={row().users.configurations}>
+              {(c) => (
+                <button class="cad-editor__link" title={c.keys.join(", ")} onClick={() => props.editor.select({ kind: "configuration", id: c.id }, "dialog")}>
+                  {c.name}: {c.keys.join(", ")}
+                </button>
+              )}
+            </For>
+            <Show when={row().role === "indirect" && row().via}>
+              {(via) => {
+                const parent = () => props.documents.rows().find((r) => r.id === via());
+                return (
+                  <Show when={parent()}>
+                    {(p) => (
+                      <button class="cad-editor__link" onClick={() => props.editor.select({ kind: "document", id: p().id }, "dialog")}>
+                        {props.documents.title(p())}
+                      </button>
+                    )}
+                  </Show>
+                );
+              }}
+            </Show>
+            <Show when={!row().users.entries.length && !row().users.params && !row().users.configurations.length && row().role !== "indirect"}>
+              <span class="cad-editor__muted">nothing</span>
+            </Show>
+          </div>
         </div>
-      </div>
+      </Show>
       <footer class="cad-editor__dialog-footer">
-        <For each={documentActions(props.documents, row()).filter((a) => a.label === "Open" || a.label === "Remove")}>
+        <For each={documentActions(props.documents, row()).filter((a) => a.label === "Open" || a.label === "Show" || a.label === "Remove")}>
           {(action) => (
             <button class="cad-editor__button" classList={{ "cad-editor__button--danger": !!action.danger }} disabled={action.disabled || (action.label === "Remove" && disabled())} onClick={() => void action.run()}>
               {action.label}
@@ -458,6 +580,14 @@ export function InsertDialog(props: { inserts: Inserts; pending: PendingInsert; 
           <div class="cad-editor__field" data-param="target">
             <span>For</span>
             <span>{props.inserts.targetLabel(t())}</span>
+          </div>
+        )}
+      </Show>
+      <Show when={props.pending.anchor}>
+        {(anchor) => (
+          <div class="cad-editor__field" data-param="anchor">
+            <span>On</span>
+            <span>{anchorLabel({ anchor: anchor() })}</span>
           </div>
         )}
       </Show>

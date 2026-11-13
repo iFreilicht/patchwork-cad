@@ -2,7 +2,8 @@
  * The documents a model refers to, as the editor's documents list and document dialog show and edit
  * them (research/21, "The documents list", "The document dialog"): the documents the code imports,
  * those imported JS files import, and those configurations link values to, each with its title, its
- * state, what uses it, and the edits of its import as splices of the code.
+ * state, what uses it, and the edits of its import as splices of the code; and the documents shown as
+ * annotations (research/21, "Annotation"), whose edits are of the `cad` field.
  */
 import { batch, createMemo, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
@@ -11,17 +12,18 @@ import { analyze } from "../../model/analyze.ts";
 import { isLinked } from "../../model/configurations.ts";
 import { documentId, documentStatements, follow as followEdits, pin as pinEdits, removeStatement, renameImport, replaceDocument, setType as setTypeEdits, usedAnywhere, type DocumentStatement } from "../../model/documents.ts";
 import { apply } from "../../model/splice.ts";
-import type { CadModelDoc, Configuration } from "../../types.ts";
+import type { Annotation, CadModelDoc, Configuration } from "../../types.ts";
+import type { AnnotationStore } from "../annotations.tsx";
 import type { HeldDocument, Model } from "../createModel.ts";
 import type { DocumentInfo } from "../documentInfo.ts";
-import { docOf, headsOf, importKinds, sameHeads, withoutHeads } from "../imports.ts";
+import { docOf, headsOf, importKinds, sameHeads, withHeads, withoutHeads } from "../imports.ts";
 import type { Editor } from "./state.ts";
 
-/** How a document enters the model: imported by its code, by an imported JS file, or linked to by a configuration's value. */
-export type DocumentRole = "import" | "indirect" | "link";
+/** How a document enters the model: imported by its code, by an imported JS file, linked to by a configuration's value, or shown as an annotation. */
+export type DocumentRole = "import" | "indirect" | "link" | "annotation";
 
 export interface DocumentRow {
-  /** Its id as the selection names it: `documentId` for an import, the URL `as link` for a linked value's document. */
+  /** Its id as the selection names it: `documentId` for an import, the URL `as link` for a linked value's document, `annotationRowId` for an annotation. */
   id: string;
   role: DocumentRole;
   /** The specifier as the code has it, with heads if it is pinned. */
@@ -41,7 +43,12 @@ export interface DocumentRow {
   users: { entries: number[]; params: boolean; configurations: { id: string; name: string; keys: string[] }[] };
   /** For an indirect document, the id of the JS file's row that imports it. */
   via: string | undefined;
+  /** For an annotation, the annotation. */
+  annotation?: Annotation;
 }
+
+/** The selection's id of an annotation's row: one row per annotation, as a document may be pinned to several places. */
+export const annotationRowId = (id: string) => `annotation:${id}`;
 
 /** A row's state, as its icon and tooltip show it (research/21, "The documents list"). */
 export type DocumentState = "following" | "pinned" | "newer" | "unavailable" | "held";
@@ -75,6 +82,8 @@ export interface Documents {
   /** Whether nothing uses it, so that Remove may delete its imports. */
   removable(row: DocumentRow): boolean;
   open(row: DocumentRow): void;
+  /** Shows an annotation's document next to its pin. */
+  show(row: DocumentRow): void;
   pin(row: DocumentRow): void;
   follow(row: DocumentRow): void;
   /** Pins a pinned document to its current version. */
@@ -94,7 +103,7 @@ const pathOf = (specifier: string) => {
   return rest.startsWith("/") && rest.length > 1 ? rest : undefined;
 };
 
-export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor: Editor; model: Model; configurations: Accessor<Configuration[]>; info: (url: string) => DocumentInfo; element: HTMLElement }): Documents {
+export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor: Editor; model: Model; configurations: Accessor<Configuration[]>; annotations: AnnotationStore; onShow: (annotation: string) => void; info: (url: string) => DocumentInfo; element: HTMLElement }): Documents {
   const { handle, editor, model } = props;
   const rows = createMemo<DocumentRow[]>(() => {
     const shown = model.documents();
@@ -154,7 +163,10 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
         user.keys.push(key);
       }
     }
-    return [...out, ...links.values()];
+    const annotated = props.annotations.list().map(
+      (a): DocumentRow => ({ id: annotationRowId(a.id), role: "annotation", specifier: a.doc, doc: docOf(a.doc), path: undefined, type: undefined, pinned: headsOf(a.doc), statements: [], module: undefined, held: undefined, users: { entries: [], params: false, configurations: [] }, via: undefined, annotation: a }),
+    );
+    return [...out, ...links.values(), ...annotated];
   });
 
   const info = (row: DocumentRow): DocumentInfo => (row.doc ? props.info(row.doc) : { status: "unavailable", title: row.specifier, icon: "File", datatype: undefined, heads: undefined, value: undefined, problem: "it isn't a valid automerge URL" });
@@ -171,6 +183,8 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
 
   const builtWith = (row: DocumentRow): UrlHeads | undefined => {
     if (row.pinned) return row.pinned;
+    // An annotation is shown as it is now.
+    if (row.role === "annotation") return info(row).heads;
     if (row.held) return row.held.locked;
     return model.documents().find((d) => d.doc === row.doc && !headsOf(d.specifier))?.heads ?? info(row).heads;
   };
@@ -211,20 +225,27 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
     kinds,
     as,
     removable: (row) => {
+      if (row.role === "annotation") return true;
       const a = editor.analysis();
       return row.role === "import" && !!a && row.statements.every((s) => !usedAnywhere(a.program, s));
     },
+    show: (row) => row.annotation && props.onShow(row.annotation.id),
     open(row) {
       if (row.doc) props.element.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url: row.doc }, bubbles: true, composed: true }));
     },
     pin(row) {
       const heads = builtWith(row);
-      if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
+      if (heads && row.annotation) props.annotations.setDoc(row.annotation.id, withHeads(row.annotation.doc, heads) as AutomergeUrl);
+      else if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
     },
-    follow: (row) => void (row.role === "import" && edit((source, s) => followEdits(source, s, row.id))),
+    follow(row) {
+      if (row.annotation) props.annotations.setDoc(row.annotation.id, withoutHeads(row.annotation.doc) as AutomergeUrl);
+      else if (row.role === "import") edit((source, s) => followEdits(source, s, row.id));
+    },
     update(row) {
       const heads = info(row).heads;
-      if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
+      if (heads && row.annotation) props.annotations.setDoc(row.annotation.id, withHeads(row.annotation.doc, heads) as AutomergeUrl);
+      else if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
     },
     setAs(row, to) {
       const type = row.type === "json" && to === "data" ? "json" : TYPE_OF[to];
@@ -234,11 +255,20 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
     replace(row, url) {
       const next = url.trim();
       if (!docOf(next)) return `${next} isn't an automerge URL`;
+      if (row.annotation) {
+        if (next !== row.annotation.doc) props.annotations.setDoc(row.annotation.id, next as AutomergeUrl);
+        return undefined;
+      }
       if (next === row.specifier || row.role !== "import") return undefined;
       reidentify(row, documentId(next, row.type), (source, s) => replaceDocument(source, s, row.id, next));
       return undefined;
     },
     remove(row) {
+      if (row.annotation) {
+        if (editor.isSelected({ kind: "document", id: row.id })) editor.select(undefined, "dialog");
+        props.annotations.remove(row.annotation.id);
+        return;
+      }
       if (row.role !== "import") return;
       if (editor.isSelected({ kind: "document", id: row.id })) editor.select(undefined, "dialog");
       edit((source, s) => s.filter((x) => x.id === row.id && x.node.type === "ImportDeclaration").flatMap((x) => removeStatement(source, x)));

@@ -1,5 +1,5 @@
 import { Dynamic } from "solid-js/web";
-import type { JSX } from "solid-js";
+import { createRoot, type JSX } from "solid-js";
 
 /**
  * The few lucide icons (https://lucide.dev, ISC) the editor shows for documents: datatypes name
@@ -96,4 +96,14 @@ export function Icon(props: { name: string; size?: number }) {
       <Dynamic component={PATHS[props.name] ?? PATHS["File"]!} />
     </svg>
   );
+}
+
+/** An icon as a detached element, for DOM built without Solid, e.g. a pin over the 3D view. */
+export function iconElement(name: string, size?: number): Element {
+  return createRoot((dispose) => {
+    const svg = (<Icon name={name} {...(size ? { size } : {})} />) as Element;
+    // Static: nothing to keep tracking once it is drawn.
+    dispose();
+    return svg;
+  });
 }

@@ -124,6 +124,21 @@ export interface CadData {
    * without a path or heads (research/21, "Following and pinning"); written by the editor only.
    */
   locks?: Record<string, string[]>;
+  /** Documents shown at places on the model (research/21, "Annotation"). */
+  annotations?: Annotation[];
+}
+
+/** A document shown as a pin on a face, edge or feature, or on the model as a whole (research/21, "Annotation"). */
+export interface Annotation {
+  id: string;
+  /** The document; with heads, a version of it. */
+  doc: AutomergeUrl;
+  /** The tool the embed frame shows it with, as picked there; the document's default if not given. */
+  tool?: string;
+  /** Where it is pinned, as a comment is; on the model as a whole without one. */
+  anchor?: CadAnchor;
+  /** A named view's id, which opening it goes to. */
+  view?: string;
 }
 
 /** A value of a parameter, as JSON. */

@@ -11,6 +11,7 @@ import type { CameraState, Margins, StoredCamera } from "../types.ts";
 import { cameraOf, corners, DEFAULT_MARGINS, expand, fitLens, fitted, inside, marginsOf, meet, overlaps, TAN, tanToShow, trimmed, visibleAt, type Lens, type Rect, type Shot } from "./framing.ts";
 import { contactToken } from "./presence.ts";
 import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
+import { iconElement } from "./icons.tsx";
 
 export type EntityKind = "face" | "edge";
 
@@ -55,15 +56,22 @@ export interface PeerMarker {
   contactUrl: string;
 }
 
-/** Comments on faces or edges (research/13-collaboration.md, "Comments"): a pin on them, labelled with how many threads. */
+/**
+ * A pin on faces or edges: comments (research/13-collaboration.md, "Comments"), labelled with how
+ * many threads, or an annotation (research/21, "Annotation"), drawn as its document's icon.
+ */
 export interface Pin {
   key: string;
   body: string;
   kind: EntityKind;
   indices: number[];
   label: string;
-  /** One of its threads is focused, e.g. in the Comments panel. */
+  /** One of its threads is focused, e.g. in the Comments panel, or its annotation selected. */
   focused: boolean;
+  /** An annotation's: its document's icon in place of the label, which is then its tooltip. */
+  icon?: string;
+  /** An annotation's document's state, e.g. `unavailable`. */
+  state?: string;
 }
 
 export interface ViewerProps {
@@ -128,6 +136,8 @@ export interface ViewerApi {
   home(): void;
   /** Where Home goes now: the model's Home view, or the framing from the front, right and above. */
   homeCamera(): CameraState | undefined;
+  /** The face of a feature-library body at a point on the screen, unless it is off the model, e.g. where a document is dropped (research/21). */
+  faceAt(clientX: number, clientY: number): Entity | undefined;
 }
 
 /**
@@ -1061,10 +1071,18 @@ export function Viewer(props: ViewerProps) {
       const keys = new Set(pins.map((p) => `pin:${p.key}`));
       unfloat((key) => !key.startsWith("pin:") || keys.has(key));
       for (const pin of pins) {
-        const f = float(`pin:${pin.key}`, "cad-model__pin", (at) => props.onPin?.(pin.key, at));
-        f.el.textContent = pin.label;
-        f.el.title = "Comments";
-        f.el.setAttribute("aria-label", `Comments (${pin.label})`);
+        const f = float(`pin:${pin.key}`, pin.icon ? "cad-model__pin cad-model__pin--annotation" : "cad-model__pin", (at) => props.onPin?.(pin.key, at));
+        if (pin.icon) {
+          if (f.el.firstElementChild?.getAttribute("data-icon") !== pin.icon) f.el.replaceChildren(iconElement(pin.icon, 12));
+          f.el.title = pin.label;
+          f.el.setAttribute("aria-label", pin.label);
+          if (pin.state) f.el.dataset["state"] = pin.state;
+          else delete f.el.dataset["state"];
+        } else {
+          f.el.textContent = pin.label;
+          f.el.title = "Comments";
+          f.el.setAttribute("aria-label", `Comments (${pin.label})`);
+        }
         f.el.dataset["key"] = pin.key;
         f.el.dataset["focused"] = pin.focused ? "true" : "false";
         f.point = anchorOf(pin.body, pin.kind, pin.indices);
@@ -1321,7 +1339,7 @@ export function Viewer(props: ViewerProps) {
     };
     (container as HTMLDivElement & { cadViewer?: ViewerTestHook }).cadViewer = hook;
     const homeCamera = (): CameraState | undefined => (props.home ? cameraOf(props.home) : modelPoints().length ? defaultHome() : undefined);
-    props.onApi?.({ camera: () => intent?.camera, home: () => home(), homeCamera });
+    props.onApi?.({ camera: () => intent?.camera, home: () => home(), homeCamera, faceAt: (x, y) => entityAt(x, y, "face") });
 
     onCleanup(() => {
       cancelAnimationFrame(frameId);

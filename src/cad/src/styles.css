@@ -346,7 +346,7 @@
   grid-template-areas: "toolbar toolbar code" "browser stage code" "timeline timeline timeline" "status status status";
 }
 
-.cad-model--editor .cad-model__status {
+.cad-model--editor > .cad-model__status {
   grid-area: status;
 }
 
@@ -371,7 +371,7 @@
   grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 }
 
-.cad-editor__stage .cad-model__viewer {
+.cad-editor__stage > .cad-model__viewer {
   grid-area: 1 / 1;
 }
 
@@ -1434,6 +1434,69 @@
 
 .cad-model__pin[data-focused="true"] {
   outline: 2px solid var(--cad-model-comment-line);
+}
+
+/* An annotation's pin: its document's icon (research/21, "Annotation"). */
+.cad-model__pin--annotation {
+  display: flex;
+  align-items: center;
+  padding: 2px 4px;
+  border-color: var(--cad-model-accent);
+  background: var(--cad-model-bg);
+}
+
+.cad-model__pin--annotation[data-focused="true"] {
+  outline-color: var(--cad-model-accent);
+}
+
+.cad-model__pin--annotation[data-state="unavailable"],
+.cad-model__annotation[data-state="unavailable"],
+.cad-model__annotation[data-detached="true"] {
+  border-color: var(--cad-model-warning);
+  color: var(--cad-model-warning);
+}
+
+/* Annotations on the model as a whole and those whose place is gone, at the bottom right of the 3D view. */
+.cad-model__annotations {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+
+.cad-model__annotation {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  border: 1px solid var(--cad-model-accent);
+  border-radius: 8px;
+  background: var(--cad-model-bg);
+  color: var(--cad-model-fg);
+  cursor: pointer;
+}
+
+/* An annotation's document in Patchwork's embed frame. */
+.cad-model__annotation-popover {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(380px, 92vw);
+  margin: 4px 0;
+  padding: 4px;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 6px;
+  background: var(--cad-model-bg);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+}
+
+.cad-model__annotation-actions {
+  display: flex;
+  gap: 6px;
 }
 
 /* Up and to the right of the selected face or edge, like a collaborator's name next to their pointer. */
