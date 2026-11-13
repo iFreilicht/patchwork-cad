@@ -83,6 +83,19 @@ export interface Pin {
   new?: boolean;
 }
 
+/** A canvas (research/21, "Canvas"): an image on a plane, drawn translucently, over the model if `through`. */
+export interface ShownCanvas {
+  id: string;
+  /** The image, drawn once, which the view makes a texture of. */
+  image: HTMLCanvasElement;
+  /** Its corners in world coordinates, counterclockwise from the image's bottom left. */
+  corners: [number, number, number][];
+  opacity: number;
+  through: boolean;
+  /** Outlined, as a hovered face is, or as a selected one. */
+  highlight?: "hover" | "accent" | undefined;
+}
+
 export interface ViewerProps {
   shapes: MeshedShape[] | undefined;
   /** Which entities hover and click pick; nothing is pickable without it, and hover takes edges, else faces. */
@@ -128,6 +141,10 @@ export interface ViewerProps {
   pins?: Pin[] | undefined;
   onPin?: (key: string, at: { x: number; y: number }) => void;
   onPinHover?: (key: string | undefined) => void;
+  canvases?: ShownCanvas[] | undefined;
+  /** While points of a canvas are picked, e.g. to calibrate it: its id. A click on it gives the point, as fractions of its image from the bottom left. */
+  canvasPick?: string | undefined;
+  onCanvasPick?: (id: string, point: [number, number]) => void;
 }
 
 export interface FaceRefs {
@@ -144,6 +161,8 @@ export interface ViewerApi {
   home(): void;
   /** Where Home goes now: the model's Home view, or the framing from the front, right and above. */
   homeCamera(): CameraState | undefined;
+  /** The world point under a position on the screen, on the model if it is there. */
+  pointAt(clientX: number, clientY: number): [number, number, number] | undefined;
   /** The face of a feature-library body at a point on the screen, unless it is off the model, e.g. where a document is dropped (research/21). */
   faceAt(clientX: number, clientY: number): Entity | undefined;
 }
@@ -199,6 +218,10 @@ export interface ViewerTestHook {
   intent(): CameraState | undefined;
   /** Where the eye is, which decides the perspective. */
   eye(): [number, number, number];
+  /** The canvases drawn, with whether their texture is there, their opacity, and their corners on the screen. */
+  canvases(): { id: string; opacity: number; through: boolean; highlight: string | undefined; world: [number, number, number][]; corners: { x: number; y: number }[] }[];
+  /** Where a point of a canvas's image, as fractions of it from the bottom left, is on the screen. */
+  canvasPoint(id: string, u: number, v: number): { x: number; y: number } | undefined;
 }
 
 export type Projection = CameraState["projection"];
@@ -424,7 +447,8 @@ export function Viewer(props: ViewerProps) {
     highlightGroup.renderOrder = 2;
     const peerGroup = new THREE.Group();
     peerGroup.renderOrder = 3;
-    scene.add(group, sketchGroup, overlayGroup, highlightGroup, peerGroup);
+    const canvasGroup = new THREE.Group();
+    scene.add(group, canvasGroup, sketchGroup, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
     const cube = new ViewCube({
@@ -993,6 +1017,61 @@ export function Viewer(props: ViewerProps) {
       for (const overlay of props.overlays ?? []) overlayGroup.add(...overlayMaterials.map((material, i) => Object.assign(new LineSegments2(segments(overlay), material), { renderOrder: i })));
     });
 
+    // ---------- canvases (research/21, "Canvas") ----------
+
+    /** A texture per drawn image, kept while a canvas shows it. */
+    const textures = new Map<HTMLCanvasElement, THREE.CanvasTexture>();
+    let drawnCanvases: { canvas: ShownCanvas; mesh: THREE.Mesh }[] = [];
+    /** Removes the drawn canvases: their geometries and own materials; the outlines' materials are the highlights'. */
+    const clearCanvases = () => {
+      for (const child of canvasGroup.children) if (child instanceof THREE.Mesh) child.geometry.dispose();
+      for (const d of drawnCanvases) (d.mesh.material as THREE.Material).dispose();
+      canvasGroup.clear();
+      drawnCanvases = [];
+    };
+    createEffect(() => {
+      const list = props.canvases ?? [];
+      clearCanvases();
+      for (const [image, texture] of textures) {
+        if (list.some((c) => c.image === image)) continue;
+        texture.dispose();
+        textures.delete(image);
+      }
+      drawnCanvases = list.map((c) => {
+        let texture = textures.get(c.image);
+        if (!texture) {
+          texture = new THREE.CanvasTexture(c.image);
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+          textures.set(c.image, texture);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(c.corners.flat(), 3));
+        geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+        geometry.setIndex([0, 1, 2, 0, 2, 3]);
+        // In front of a face it lies on, which the faces' polygon offset pushes back; through the model if it is drawn through it.
+        const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: c.opacity, side: THREE.DoubleSide, depthWrite: false, depthTest: !c.through, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+        const mesh = new THREE.Mesh(geometry, material);
+        canvasGroup.add(mesh);
+        if (c.highlight) {
+          const { line } = highlightMaterials[c.highlight];
+          canvasGroup.add(...[line.halo, line.core].map((m, i) => Object.assign(new LineSegments2(segments({ points: c.corners, closed: true }), m), { renderOrder: 2 + i })));
+        }
+        return { canvas: c, mesh };
+      });
+      container.dataset["canvases"] = String(drawnCanvases.length);
+    });
+    /** The point of canvas `id`'s image under a position on the screen, as fractions of it from the bottom left. */
+    const canvasAt = (id: string, clientX: number, clientY: number): [number, number] | undefined => {
+      const drawn = drawnCanvases.find((d) => d.canvas.id === id);
+      if (!drawn) return undefined;
+      const rect = canvas.getBoundingClientRect();
+      pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(pointer, camera);
+      const uv = raycaster.intersectObject(drawn.mesh, false)[0]?.uv;
+      return uv ? [Math.round(uv.x * 1e6) / 1e6, Math.round(uv.y * 1e6) / 1e6] : undefined;
+    };
+
     // ---------- collaborators' pointers ----------
 
     /** A marker per collaborator: a dot on the model and their name next to it, which the render loop places. */
@@ -1171,6 +1250,12 @@ export function Viewer(props: ViewerProps) {
       down = undefined;
       // A drag orbits the camera; only a click picks or selects.
       if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > 4) return;
+      // A point of a canvas, e.g. to calibrate it, before anything else a click does.
+      if (props.canvasPick && event.button === 0) {
+        const uv = canvasAt(props.canvasPick, event.clientX, event.clientY);
+        if (uv) props.onCanvasPick?.(props.canvasPick, uv);
+        return;
+      }
       if (event.button === 2 && props.onContextMenu) {
         const entity = props.pick ? undefined : hoverAt(event.clientX, event.clientY);
         props.onContextMenu(isBody(entity) ? entity : undefined, { x: event.clientX, y: event.clientY });
@@ -1319,6 +1404,15 @@ export function Viewer(props: ViewerProps) {
       },
       intent: () => intent?.camera,
       eye: () => camera.position.toArray() as [number, number, number],
+      canvases: () =>
+        drawnCanvases.map(({ canvas: c }) => ({ id: c.id, opacity: c.opacity, through: c.through, highlight: c.highlight, world: c.corners, corners: c.corners.map((p) => toScreen(new THREE.Vector3(...p))) })),
+      canvasPoint(id, u, v) {
+        const drawn = drawnCanvases.find((d) => d.canvas.id === id);
+        if (!drawn) return undefined;
+        const [a, b, , d] = drawn.canvas.corners.map((p) => new THREE.Vector3(...p)) as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+        const p = toScreen(a.clone().addScaledVector(b.clone().sub(a), u).addScaledVector(d.clone().sub(a), v));
+        return { x: Math.round(p.x), y: Math.round(p.y) };
+      },
       peerMarkers: () =>
         [...markers].map(([key, m]) => {
           const p = toScreen(m.point);
@@ -1344,7 +1438,7 @@ export function Viewer(props: ViewerProps) {
     };
     (container as HTMLDivElement & { cadViewer?: ViewerTestHook }).cadViewer = hook;
     const homeCamera = (): CameraState | undefined => (props.home ? cameraOf(props.home) : modelPoints().length ? defaultHome() : undefined);
-    props.onApi?.({ camera: () => intent?.camera, home: () => home(), homeCamera, faceAt: (x, y) => entityAt(x, y, "face") });
+    props.onApi?.({ camera: () => intent?.camera, home: () => home(), homeCamera, pointAt, faceAt: (x, y) => entityAt(x, y, "face") });
 
     onCleanup(() => {
       cancelAnimationFrame(frameId);
@@ -1361,6 +1455,8 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
       cube.dispose();
       dispose([...group.children, ...sketchGroup.children, ...overlayGroup.children, ...highlightGroup.children]);
+      clearCanvases();
+      for (const texture of textures.values()) texture.dispose();
       for (const m of markers.values()) m.label.remove();
       dotGeometry.dispose();
       pmrem.dispose();
@@ -1371,7 +1467,7 @@ export function Viewer(props: ViewerProps) {
   });
 
   return (
-    <div class="cad-model__viewer" ref={container} data-hovered={entityKey(hovered())} data-selected={entityKey(selected())} data-projection={projection()} data-sketches={(props.sketches ?? []).map((s) => s.name).join(" ")}>
+    <div class="cad-model__viewer" ref={container} data-canvas-pick={props.canvasPick ? "true" : undefined} data-hovered={entityKey(hovered())} data-selected={entityKey(selected())} data-projection={projection()} data-sketches={(props.sketches ?? []).map((s) => s.name).join(" ")}>
       <canvas ref={canvas} />
       <div class="cad-viewcube" data-collapsed={collapsed() ? "true" : "false"}>
         <button class="cad-viewcube__button cad-viewcube__button--toggle" aria-label="ViewCube" title={collapsed() ? "Show ViewCube" : "Hide ViewCube"} aria-expanded={!collapsed()} onClick={() => setCollapsed(!collapsed())}>

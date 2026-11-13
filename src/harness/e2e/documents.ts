@@ -7,9 +7,9 @@ export type Repo = { find(u: string): Promise<Handle>; create(d: unknown): Handl
 /**
  * Creates documents and lists them in the folder the sidebar's document list shows, as "Add to
  * sidebar" does: data documents as given, files with their text as UTF-8 bytes, as the sidebar
- * uploads them. Each is listed under its key.
+ * uploads them, or with their bytes. Each is listed under its key.
  */
-export async function sidebarDocuments(page: Page, docs: Record<string, { data: Record<string, unknown> } | { file: string; mimeType: string; text: string }>): Promise<Record<string, string>> {
+export async function sidebarDocuments(page: Page, docs: Record<string, { data: Record<string, unknown> } | { file: string; mimeType: string; text: string } | { file: string; mimeType: string; bytes: number[] }>): Promise<Record<string, string>> {
   return page.evaluate(async (docs) => {
     const w = window as unknown as { repo: Repo };
     const list = document.querySelector('.threepane-sidebar patchwork-view[tool-id="chee/document-list"]');
@@ -17,7 +17,7 @@ export async function sidebarDocuments(page: Page, docs: Record<string, { data: 
     const urls: Record<string, string> = {};
     for (const [key, d] of Object.entries(docs)) {
       const [name, extension] = "file" in d ? d.file.split(".") : [];
-      const handle = "data" in d ? w.repo.create(d.data) : w.repo.create({ "@patchwork": { type: "file" }, name, extension, mimeType: d.mimeType, content: new TextEncoder().encode(d.text) });
+      const handle = "data" in d ? w.repo.create(d.data) : w.repo.create({ "@patchwork": { type: "file" }, name, extension, mimeType: d.mimeType, content: "text" in d ? new TextEncoder().encode(d.text) : new Uint8Array(d.bytes) });
       urls[key] = handle.url;
       folder.change((f) => (f["docs"] as unknown[]).push({ name: key, type: "data" in d ? "unknown" : "file", url: handle.url }));
     }
@@ -49,3 +49,29 @@ export async function drag(page: Page, source: string | Locator, target: Locator
   await page.mouse.move(to.x, to.y, { steps: 2 });
   if (release) await page.mouse.up();
 }
+
+/** A PNG of `width` × `height` pixels, drawn by the page: a frame, its diagonals and a disc, in colours that tell its corners apart. */
+export const pngBytes = (page: Page, width: number, height: number): Promise<number[]> =>
+  page.evaluate(
+    async ([w, h]) => {
+      const canvas = new OffscreenCanvas(w!, h!);
+      const c = canvas.getContext("2d")!;
+      c.fillStyle = "#fff8e0";
+      c.fillRect(0, 0, w!, h!);
+      c.strokeStyle = "#c03030";
+      c.lineWidth = Math.max(2, w! / 50);
+      c.strokeRect(c.lineWidth / 2, c.lineWidth / 2, w! - c.lineWidth, h! - c.lineWidth);
+      c.beginPath();
+      c.moveTo(0, 0);
+      c.lineTo(w!, h!);
+      c.moveTo(w!, 0);
+      c.lineTo(0, h!);
+      c.stroke();
+      c.fillStyle = "#3050c0";
+      c.beginPath();
+      c.arc(w! / 4, h! / 2, h! / 5, 0, 2 * Math.PI);
+      c.fill();
+      return [...new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer())];
+    },
+    [width, height],
+  );

@@ -11,6 +11,7 @@ import { PickButton } from "./FeatureDialog.tsx";
 import { anchorLabel } from "../../model/annotations.ts";
 import type { Annotation } from "../../types.ts";
 import type { Annotations } from "../annotations.tsx";
+import { CanvasFields, type CanvasOptions } from "./CanvasFields.tsx";
 
 /** What an annotation's fields offer and change (research/21, "The document dialog"). */
 export interface AnnotationOptions {
@@ -307,13 +308,13 @@ const AS_TITLES: Record<As, string> = { data: "Its data, each key a named export
  * it (As, and a preview), its name and its version; and what uses it, each of which selects that.
  * Edits apply as they are made.
  */
-export function DocumentDialog(props: { documents: Documents; row: DocumentRow; editor: Editor; annotation?: AnnotationOptions; onClose: () => void }) {
+export function DocumentDialog(props: { documents: Documents; row: DocumentRow; editor: Editor; annotation?: AnnotationOptions; canvas?: CanvasOptions; onClose: () => void }) {
   const row = () => props.row;
   const info = () => props.documents.info(row());
   const state = () => props.documents.state(row());
   const own = () => row().role === "import";
-  /** Its URL and version are the model's to change: an import's, or an annotation's. */
-  const editable = () => own() || row().role === "annotation";
+  /** Its URL and version are the model's to change: an import's, an annotation's or a canvas's. */
+  const editable = () => own() || row().role === "annotation" || row().role === "canvas";
   const disabled = () => props.editor.syntaxError() !== undefined;
   const named = () => row().statements.flatMap((s) => s.named);
   const name = () => row().statements.find((s) => s.name !== undefined)?.name;
@@ -327,9 +328,9 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
     return !e ? "" : e.kind === "feature" ? e.name : `the Custom Script at lines ${e.lines.join("–")}`;
   };
   return (
-    <section class="cad-editor__dialog" aria-label={`Document ${props.documents.title(row())}`} data-feature="document" data-document={row().id} data-role={row().role} data-state={state().state}>
+    <section class="cad-editor__dialog" aria-label={row().canvas ? `Canvas ${row().canvas!.name}` : `Document ${props.documents.title(row())}`} data-feature="document" data-document={row().id} data-role={row().role} data-state={state().state}>
       <header class="cad-editor__dialog-header">
-        <strong>Document</strong> <span>{props.documents.title(row())}</span>
+        <strong>{row().canvas ? "Canvas" : "Document"}</strong> <span>{row().canvas?.name ?? props.documents.title(row())}</span>
         <button class="cad-editor__link" aria-label="close" onClick={() => props.onClose()}>
           ×
         </button>
@@ -415,7 +416,10 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
       <Show when={row().annotation && props.annotation && { annotation: row().annotation!, options: props.annotation }}>
         {(a) => <AnnotationFields annotation={a().annotation} options={a().options} editor={props.editor} />}
       </Show>
-      <Show when={row().role !== "annotation"}>
+      <Show when={row().canvas && props.canvas && { canvas: row().canvas!, options: props.canvas }}>
+        {(c) => <CanvasFields canvas={c().canvas} options={c().options} editor={props.editor} />}
+      </Show>
+      <Show when={row().role !== "annotation" && row().role !== "canvas"}>
         <div class="cad-editor__field" data-param="users">
           <span>Used by</span>
           <div class="cad-editor__refs">

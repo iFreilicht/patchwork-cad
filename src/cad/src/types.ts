@@ -126,6 +126,35 @@ export interface CadData {
   locks?: Record<string, string[]>;
   /** Documents shown at places on the model (research/21, "Annotation"). */
   annotations?: Annotation[];
+  /** Images on planes, to trace or compare (research/21, "Canvas"). */
+  canvases?: Canvas[];
+}
+
+/** A plane: its origin, its normal, and the direction of its x axis, as the feature library's `Frame`. */
+export interface PlaneFrame {
+  origin: [number, number, number];
+  normal: [number, number, number];
+  xDir: [number, number, number];
+}
+
+/** An image drawn on a plane or a planar face, in the editor's view only (research/21, "Canvas"). */
+export interface Canvas {
+  id: string;
+  name: string;
+  /** The image document; with heads, a version of it. */
+  image: AutomergeUrl;
+  /** An origin plane's frame, or a planar face, anchored as a comment is, whose frame a sketch on it has. */
+  plane: PlaneFrame | CadAnchor;
+  /** The image's centre in the plane's coordinates. */
+  center: [number, number];
+  /** Its rotation about the plane's normal, in degrees. */
+  angle: number;
+  /** Its width in model units; its height follows the image's aspect. */
+  width: number;
+  /** From 0, invisible, to 1. */
+  opacity: number;
+  /** Drawn over the model, as Fusion's "Display Through". */
+  through: boolean;
 }
 
 /** A document shown as a pin on a face, edge or feature, or on the model as a whole (research/21, "Annotation"). */

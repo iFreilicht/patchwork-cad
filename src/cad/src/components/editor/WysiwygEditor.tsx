@@ -8,7 +8,7 @@ import type { CadModelDoc, CameraState, NamedView } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, faceRefs, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
-import { Viewer, type Entity, type Highlight, type ViewerApi } from "../Viewer.tsx";
+import { Viewer, type Entity, type Highlight, type ShownCanvas, type ViewerApi } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
 import { CodeDialog, FeatureDialog } from "./FeatureDialog.tsx";
 import { createEditor, type Selectable } from "./state.ts";
@@ -30,13 +30,16 @@ import { createConfigurations } from "../configurations.ts";
 import { createParams } from "./parameters.ts";
 import { ParamsDialog } from "./ParamsDialog.tsx";
 import { createDocumentInfo } from "../documentInfo.ts";
-import { annotationRowId, createDocuments, type DocumentRow } from "./documents.ts";
+import { annotationRowId, canvasRowId, createDocuments, type DocumentRow } from "./documents.ts";
 import { ANCHOR_PICK, DocumentDialog, InsertDialog } from "./DocumentDialog.tsx";
 import { createInserts, type PendingInsert } from "./inserts.ts";
 import { UNDO_IGNORE } from "../../model/locks.ts";
 import { getRegistry, type ToolDescription } from "@inkandswitch/patchwork-plugins";
 import { createAnnotationStore, placeAnnotations } from "../annotations.tsx";
 import { HOME } from "../../model/views.ts";
+import { createCanvasImages, createCanvasStore, onFace, placeCanvases, placeNewCanvas } from "../canvases.ts";
+import { canvasCorners } from "../../model/canvases.ts";
+import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
 
@@ -64,7 +67,21 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const documentInfo = createDocumentInfo();
   // Documents shown at places on the model (research/21, "Annotation"); where they show is placed with the view, below.
   const annotationStore = createAnnotationStore(props.handle);
-  const documents = createDocuments({ handle: props.handle, editor, model, configurations: params.configurations.list, annotations: annotationStore, onShow: (id) => showAnnotation(id), info: documentInfo, element: props.element });
+  // Images on planes, to trace or compare (research/21, "Canvas"); where they are is placed with the view, below.
+  const canvasStore = createCanvasStore(props.handle);
+  const canvasImage = createCanvasImages(documentInfo, () => canvasStore.list().map((c) => c.image));
+  const documents = createDocuments({
+    handle: props.handle,
+    editor,
+    model,
+    configurations: params.configurations.list,
+    annotations: annotationStore,
+    canvases: canvasStore,
+    canvasImage,
+    onShow: (id) => showAnnotation(id),
+    info: documentInfo,
+    element: props.element,
+  });
   // Documents dropped, pasted or inserted (research/21, "Dropping, pasting, inserting").
   const inserts = createInserts({
     handle: props.handle,
@@ -75,6 +92,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     annotations: annotationStore,
     anchorOf: (...a) => annotations.anchorOf(...a),
     faceAt: (x, y) => viewer?.faceAt(x, y),
+    pointAt: (x, y) => viewer?.pointAt(x, y),
+    canvases: canvasStore,
+    placeCanvas: (face, anchor, point) => placeNewCanvas(shown(), face, anchor, point),
     info: documentInfo,
     element: props.element,
   });
@@ -172,6 +192,22 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const [pickError, setPickError] = createSignal<string>();
   const pick = (entity: Parameters<typeof editor.pick>[0]) => {
     setPickError(undefined);
+    // A face picked for a canvas puts it on the face, centred on it (research/21, "Canvas").
+    const canvas = selectedDocument()?.canvas;
+    if (editor.pickTarget()?.param === CANVAS_PICK && canvas) {
+      editor.setPickTarget(undefined);
+      const shape = shown().find((s) => s.body === entity.body);
+      if (entity.kind !== "face" || !shape) return;
+      void model.engine.pick(entity.body, "face", entity.index).then(
+        ({ code, ref }) => {
+          const placed = ref && code ? onFace(shape, entity.index, annotations.anchorOf(entity, ref, code)) : undefined;
+          if (placed) canvasStore.update(canvas.id, placed);
+          else setPickError(ref && code ? "the face isn't planar" : "it has no reference");
+        },
+        (error: unknown) => setPickError(String((error as Error)?.message ?? error)),
+      );
+      return;
+    }
     // A face or edge picked for an annotation pins it there (research/21, "Annotation").
     const target = editor.pickTarget()?.param;
     const annotation = selectedDocument()?.annotation;
@@ -446,6 +482,28 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       select: (key) => editor.select(key === undefined ? undefined : { kind: "pin", id: key }, "view"),
     },
   });
+  // Canvases (research/21, "Canvas"): where each is, whether this user shows it, and Calibrate.
+  const placedCanvases = placeCanvases({ list: canvasStore.list, model, shown, complete: () => !rolledBack() });
+  const canvasVisible = (id: string) => ui.visibility()[`canvas:${id}`] ?? true;
+  const setCanvasVisible = (id: string, visible: boolean) => ui.setVisibility(`canvas:${id}`, visible ? undefined : false);
+  const calibration = createCalibration({
+    canvases: canvasStore,
+    placed: placedCanvases,
+    image: canvasImage,
+    selected: () => selectedDocument()?.canvas?.id,
+    picking: () => !!editor.pickTarget(),
+    stopPicking: () => editor.setPickTarget(undefined),
+  });
+  /** The canvases this user shows, with their images drawn: the selected one is outlined, a hovered row's too. */
+  const shownCanvases = createMemo((): ShownCanvas[] =>
+    placedCanvases().flatMap(({ canvas, frame }) => {
+      const image = canvasImage(canvas.image);
+      if (!frame || image.status !== "ready" || !canvasVisible(canvas.id)) return [];
+      const row = canvasRowId(canvas.id);
+      const highlight = editor.isSelected({ kind: "document", id: row }) ? "accent" : editor.hoveredDocument() === row ? "hover" : undefined;
+      return [{ id: canvas.id, image: image.image, corners: canvasCorners(canvas, frame, image.aspect), opacity: canvas.opacity, through: canvas.through, highlight }];
+    }),
+  );
   /** Opens an annotation from its row, at the pin that holds it. */
   const showAnnotation = (id: string) => pins.show(id, stage);
   /** The features that made the open pin's face or edge, which are marked as if it were hovered (research/21, "Annotation"). */
@@ -597,16 +655,17 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const onRelease = (event: PointerEvent) => {
     const p = press;
     press = undefined;
-    // As the ViewCube's click: a drag orbits or pans, and keeps the dialog. While a field picks, a click picks.
-    if (!p || Math.hypot(event.clientX - p.x, event.clientY - p.y) > 4 || editor.pickTarget()) return;
+    // As the ViewCube's click: a drag orbits or pans, and keeps the dialog. While a field picks, a click picks, and so while Calibrate does.
+    if (!p || Math.hypot(event.clientX - p.x, event.clientY - p.y) > 4 || editor.pickTarget() || calibration.state()) return;
     editor.select(undefined, "view");
   };
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     const target = event.target as Node;
     if (target !== document.body && !props.element.contains(target)) return;
-    // A field that picks stops picking first.
+    // A field that picks stops picking first, and so does Calibrate.
     if (editor.pickTarget()) editor.setPickTarget(undefined);
+    else if (calibration.state()) calibration.stop();
     else if (editor.selection()) editor.select(undefined, "dialog");
     else return;
     event.preventDefault();
@@ -670,7 +729,18 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} onInsert={() => inserts.begin(undefined, undefined, "toolbar")} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} params={params} documents={documents} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} dragging={inserts.dragging()} />
+        <Browser
+          editor={editor}
+          bodies={bodies}
+          views={views}
+          params={params}
+          documents={documents}
+          peers={browserPeers()}
+          onHoverConfiguration={setConfigurationHovered}
+          embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })}
+          dragging={inserts.dragging()}
+          canvases={{ placed: placedCanvases, visible: canvasVisible, setVisible: setCanvasVisible }}
+        />
       </Show>
       <div class="cad-editor__stage" ref={stage} tabindex="-1" data-drop="insert">
         <Viewer
@@ -688,7 +758,10 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onPin={pins.onPin}
           onPinHover={pins.onPinHover}
           peers={peerMarkers(peers())}
-          overlays={overlays()}
+          overlays={[...overlays(), ...calibration.overlays()]}
+          canvases={shownCanvases()}
+          canvasPick={calibration.state()?.id}
+          onCanvasPick={calibration.pick}
           sketches={shownSketches()}
           view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
           onViewChange={saveCamera}
@@ -715,7 +788,14 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             <ViewDialog section={views} view={dialogView()!} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
           <Match when={selectedDocument()}>
-            <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }} onClose={() => editor.select(undefined, "dialog")} />
+            <DocumentDialog
+              documents={documents}
+              row={dialogDocument()!}
+              editor={editor}
+              annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }}
+              canvas={{ canvases: canvasStore, placed: placedCanvases, image: canvasImage, calibration }}
+              onClose={() => editor.select(undefined, "dialog")}
+            />
           </Match>
           <Match when={editor.selection()?.kind === "pin"}>{pins.dialog()}</Match>
           <Match when={inserts.pending()}>
@@ -785,7 +865,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onOpen: () => toggle({ kind: "params" }),
         }}
       />
-      <StatusBar model={model} notice={editor.notice()} action={inserts.status()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} action={inserts.status() ?? calibration.status()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }

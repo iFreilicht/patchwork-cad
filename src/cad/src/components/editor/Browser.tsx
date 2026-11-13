@@ -14,6 +14,15 @@ import type { Editor, Selectable } from "./state.ts";
 import { rowDragUrl, type DocumentRow, type Documents } from "./documents.ts";
 import { Icon } from "../icons.tsx";
 import { anchorLabel } from "../../model/annotations.ts";
+import { planeLabel } from "../../model/canvases.ts";
+import type { PlacedCanvas } from "../canvases.ts";
+
+/** The canvases the browser lists (research/21, "Canvas"): where each is, and whether this user shows it. */
+export interface CanvasesSection {
+  placed(): PlacedCanvas[];
+  visible(id: string): boolean;
+  setVisible(id: string, visible: boolean): void;
+}
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
 export const EyeIcon = (props: { open: boolean }) => (
@@ -207,6 +216,7 @@ export function Browser(props: {
   embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined;
   /** Whether a document is dragged over the editor. */
   dragging: boolean;
+  canvases: CanvasesSection;
 }) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
@@ -232,6 +242,9 @@ export function Browser(props: {
     { label: "Rename", run: () => void queueMicrotask(() => setRenaming(row.key)) },
     { label: row.visible ? "Hide" : "Show", run: () => props.bodies.setVisible(row, !row.visible) },
   ];
+  // Canvases have a section of their own, with an eye each.
+  const canvasRows = () => props.documents.rows().filter((r) => r.role === "canvas");
+  const documentRows = () => props.documents.rows().filter((r) => r.role !== "canvas");
   const at = () => {
     const n = props.editor.timeline().entries.length;
     if (props.editor.pickingAt() !== undefined) return `Before ${props.editor.open()?.name ?? "the open feature"}`;
@@ -248,9 +261,12 @@ export function Browser(props: {
           <h3 class="cad-editor__browser-heading">Sketches</h3>
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
+        <Show when={canvasRows().length > 0}>
+          <DocumentList heading="Canvases" rows={canvasRows()} canvases={props.canvases} documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} dragFrom={() => aside} />
+        </Show>
         {/* While a document is dragged, also when the model refers to none: a drop there imports it (research/21). */}
-        <Show when={props.documents.rows().length > 0 || props.dragging}>
-          <DocumentList documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} dragFrom={() => aside} />
+        <Show when={documentRows().length > 0 || props.dragging}>
+          <DocumentList heading="Documents" rows={documentRows()} documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} dragFrom={() => aside} />
         </Show>
         <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
         <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
@@ -623,7 +639,7 @@ export function ResultDialog(props: { editor: Editor; onClose: () => void; onEdi
 /** What a document row's context menu and the document dialog offer (research/21, "The documents list"). */
 export function documentActions(documents: Documents, row: DocumentRow): (MenuItem & { disabled?: boolean })[] {
   const state = documents.state(row).state;
-  const own = row.role === "import" || row.role === "annotation";
+  const own = row.role === "import" || row.role === "annotation" || row.role === "canvas";
   return [
     { label: "Open", disabled: !row.doc, run: () => documents.open(row) },
     ...(row.annotation ? [{ label: "Show", run: () => documents.show(row) }] : []),
@@ -638,19 +654,24 @@ export function documentActions(documents: Documents, row: DocumentRow): (MenuIt
  * datatype's icon, its title and the path it names, and its state; a click selects it, which opens
  * its dialog. Hovering or selecting a row highlights the features that use it, and hovering or
  * selecting a feature the rows of the documents it uses. The grip drags a row's document, as
- * Patchwork's sidebar does, out of the editor or onto its fields.
+ * Patchwork's sidebar does, out of the editor or onto its fields. The canvases (research/21,
+ * "Canvas") are a list of their own, by their names, each with an eye that shows or hides it for
+ * this user only, as bodies have.
  */
-function DocumentList(props: { documents: Documents; editor: Editor; openMenu: OpenMenu; peers: () => BrowserPeer[]; dragFrom: () => HTMLElement }) {
+function DocumentList(props: { heading: string; rows: DocumentRow[]; canvases?: CanvasesSection; documents: Documents; editor: Editor; openMenu: OpenMenu; peers: () => BrowserPeer[]; dragFrom: () => HTMLElement }) {
+  const name = (row: DocumentRow) => row.canvas?.name ?? props.documents.title(row);
   const open = (row: DocumentRow, x: number, y: number) => {
-    const items = documentActions(props.documents, row).filter((a) => !a.disabled);
-    if (items.length) props.openMenu({ key: `document:${row.id}`, label: `Actions for ${props.documents.title(row)}`, items, x, y });
+    const c = row.canvas;
+    const eye = c && props.canvases ? [{ label: props.canvases.visible(c.id) ? "Hide" : "Show", run: () => props.canvases!.setVisible(c.id, !props.canvases!.visible(c.id)) }] : [];
+    const items = [...eye, ...documentActions(props.documents, row).filter((a) => !a.disabled)];
+    if (items.length) props.openMenu({ key: `document:${row.id}`, label: `Actions for ${name(row)}`, items, x, y });
   };
   return (
-    <div class="cad-editor__documents" data-drop="import">
-      <h3 class="cad-editor__browser-heading">Documents</h3>
-      <ul class="cad-editor__browser-list" aria-label="Documents">
+    <div class="cad-editor__documents" data-drop={props.canvases ? undefined : "import"}>
+      <h3 class="cad-editor__browser-heading">{props.heading}</h3>
+      <ul class="cad-editor__browser-list" aria-label={props.heading}>
         {/* By position, as the bodies: rows are new objects after every edit, and their buttons should stay, e.g. while clicked. */}
-        <Index each={props.documents.rows()} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
+        <Index each={props.rows} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
           {(row) => {
             const item = () => ({ kind: "document", id: row().id }) as const;
             const selected = () => props.editor.isSelected(item());
@@ -663,14 +684,21 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
               const parent = props.documents.rows().find((r) => r.id === row().via);
               return parent && props.documents.title(parent);
             };
+            const visible = () => (row().canvas && props.canvases ? props.canvases.visible(row().canvas!.id) : undefined);
+            const placement = () => {
+              const c = row().canvas;
+              const p = c && props.canvases?.placed().find((x) => x.canvas.id === c.id)?.problem;
+              return p === "gone" ? "Its face isn't in the model" : p === "not planar" ? "Its face isn't planar" : undefined;
+            };
             return (
               <li
                 class="cad-editor__browser-row cad-editor__document-row"
                 data-kind="document"
                 data-key={`document:${row().id}`}
                 data-role={row().role}
-                data-name={info().title}
+                data-name={name(row())}
                 data-state={state().state}
+                data-visible={visible() === undefined ? undefined : visible() ? "true" : "false"}
                 data-selected={selected() ? "true" : undefined}
                 data-hovered={hovered() ? "true" : undefined}
                 data-peer={peer() ? "true" : undefined}
@@ -682,6 +710,19 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                   open(row(), event.clientX, event.clientY);
                 }}
               >
+                <Show when={row().canvas && visible() !== undefined && row().canvas}>
+                  {(c) => (
+                    <button
+                      class="cad-editor__icon-button"
+                      aria-pressed={visible()}
+                      aria-label={`${visible() ? "Hide" : "Show"} ${c().name}`}
+                      title={`${visible() ? "Hide" : "Show"} ${c().name} (only for you)`}
+                      onClick={() => props.canvases!.setVisible(c().id, !visible())}
+                    >
+                      <EyeIcon open={!!visible()} />
+                    </button>
+                  )}
+                </Show>
                 <span
                   class="cad-editor__grip"
                   draggable="true"
@@ -702,7 +743,11 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                 </span>
                 <button
                   class="cad-editor__browser-name"
-                  title={`${props.documents.title(row())}${row().path ?? ""}${row().role === "indirect" ? `, imported by ${via() ?? "an imported file"}` : row().role === "link" ? ", linked to by a configuration" : row().annotation ? `, an annotation on ${anchorLabel(row().annotation!)}` : ""}`}
+                  title={
+                    row().canvas
+                      ? `${row().canvas!.name}, ${props.documents.title(row())} on ${planeLabel(row().canvas!.plane)}`
+                      : `${props.documents.title(row())}${row().path ?? ""}${row().role === "indirect" ? `, imported by ${via() ?? "an imported file"}` : row().role === "link" ? ", linked to by a configuration" : row().annotation ? `, an annotation on ${anchorLabel(row().annotation!)}` : ""}`
+                  }
                   aria-pressed={selected()}
                   onClick={(event) => toggle(props.editor, item(), event, selected())}
                   onKeyDown={(event) => {
@@ -715,7 +760,7 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                   onFocus={() => props.editor.setHoveredDocument(row().id)}
                   onBlur={() => props.editor.setHoveredDocument(undefined)}
                 >
-                  <span>{props.documents.title(row())}</span>
+                  <span>{name(row())}</span>
                   <Show when={row().path}>
                     <span class="cad-editor__muted">{row().path}</span>
                   </Show>
@@ -723,7 +768,15 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                     <span class="cad-editor__muted">{row().type}</span>
                   </Show>
                   <Show when={row().annotation}>{(a) => <span class="cad-editor__muted">on {anchorLabel(a())}</span>}</Show>
+                  <Show when={row().canvas}>{(c) => <span class="cad-editor__muted">on {planeLabel(c().plane)}</span>}</Show>
                 </button>
+                <Show when={placement()}>
+                  {(why) => (
+                    <span class="cad-editor__document-state" data-state="unavailable" data-placement="problem" title={why()} aria-label={why()} role="img">
+                      <Icon name="TriangleAlert" size={12} />
+                    </span>
+                  )}
+                </Show>
                 <span class="cad-editor__document-state" data-state={state().state} title={state().label} aria-label={state().label} role="img">
                   <Icon name={state().icon} size={12} />
                 </span>

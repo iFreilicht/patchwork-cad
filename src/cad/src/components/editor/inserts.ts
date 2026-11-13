@@ -4,7 +4,7 @@
  * the code pane, the timeline and the documents list Import, which is written at once; a number field
  * a value of the document for it; anywhere else nothing, and the document waits as a pending insert,
  * a selection with the document dialog, until the user chooses. A face preselects Annotation for any
- * document but an image or an SVG, which wait for Decal and Sketch.
+ * document but an image or an SVG, which wait for Decal and Sketch; an image can be a canvas there.
  */
 import { batch, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
@@ -16,8 +16,9 @@ import { applyToText, apply, setProp, type Edit } from "../../model/splice.ts";
 import { timeline } from "../../model/timeline.ts";
 import type { CadAnchor, CadModelDoc } from "../../types.ts";
 import type { AnnotationStore, AnnotationPlaces } from "../annotations.tsx";
+import { isImage, type CanvasPlacement, type CanvasStore } from "../canvases.ts";
 import type { Entity } from "../Viewer.tsx";
-import { annotationRowId } from "./documents.ts";
+import { annotationRowId, canvasRowId } from "./documents.ts";
 
 /** The viewer tool, which a CAD model is shown with as an annotation. */
 const VIEWER_TOOL_ID = "cad-model-viewer";
@@ -36,13 +37,15 @@ import type { Editor, SelectionFrom } from "./state.ts";
  * own preselection rule (`preselects`) and its own fields in the dialog.
  */
 export interface Role {
-  id: "import" | "annotation";
+  id: "import" | "annotation" | "canvas";
   label: string;
   title: string;
   allows(value: unknown, path: boolean): boolean;
 }
 
 export const ROLES: readonly Role[] = [
+  // An image on a plane, drawn in the view only (research/21, "Canvas").
+  { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && isImage(value) },
   { id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 },
   // A view of the whole document, which the embed frame shows (research/21, "Annotation").
   { id: "annotation", label: "Annotation", title: "Show it at a place on the model", allows: (_, path) => !path },
@@ -106,8 +109,11 @@ export interface PendingInsert {
   target: ValueTarget | undefined;
   /** The name the drag gave it, for its import's name. */
   name: string | undefined;
-  /** The face it was dropped on, which an annotation is pinned to. */
+  /** The face it was dropped on, which an annotation is pinned to and a canvas lies on. */
   anchor?: CadAnchor | undefined;
+  face?: Entity | undefined;
+  /** Where on the face it was dropped, which a canvas is centred on. */
+  point?: [number, number, number] | undefined;
 }
 
 export interface Inserts {
@@ -149,6 +155,11 @@ export function createInserts(props: {
   anchorOf: AnnotationPlaces["anchorOf"];
   /** The face at a point on the screen, if the 3D view has one there. */
   faceAt: (x: number, y: number) => Entity | undefined;
+  /** The point on the model at a point on the screen. */
+  pointAt: (x: number, y: number) => [number, number, number] | undefined;
+  canvases: CanvasStore;
+  /** Where a canvas dropped on `face`, at `point`, or inserted elsewhere goes. */
+  placeCanvas(face: Entity | undefined, anchor: CadAnchor | undefined, point: [number, number, number] | undefined): CanvasPlacement;
   info: (url: string) => DocumentInfo;
   element: HTMLElement;
 }): Inserts {
@@ -160,10 +171,10 @@ export function createInserts(props: {
     return s?.kind === "insert" && p?.id === s.id ? p : undefined;
   };
   let count = 0;
-  const begin = (url: AutomergeUrl | undefined, target: ValueTarget | undefined, from: SelectionFrom, name?: string, anchor?: CadAnchor) => {
+  const begin = (url: AutomergeUrl | undefined, target: ValueTarget | undefined, from: SelectionFrom, name?: string, anchor?: CadAnchor, face?: Entity, point?: [number, number, number]) => {
     const id = String(++count);
     batch(() => {
-      setPending({ id, url, target, name, anchor });
+      setPending({ id, url, target, name, anchor, face, point });
       editor.select({ kind: "insert", id }, from);
     });
   };
@@ -285,12 +296,22 @@ export function createInserts(props: {
    * A document dropped on a face: Annotation if it is preselected, written at once; otherwise the
    * document waits, and keeps the face for when Annotation is chosen.
    */
-  const dropOnFace = async (d: DroppedDocument, face: Entity) => {
+  const dropOnFace = async (d: DroppedDocument, face: Entity, point: [number, number, number] | undefined) => {
     const doc = docOf(d.url);
     if (!doc) return;
     const [anchor, loaded] = await Promise.all([faceAnchor(face), load(d.url).catch(() => undefined)]);
     if (withoutHeads(d.url) === doc && preselects({ kind: "face" }, loaded?.value) === "annotation") return annotate(d.url, anchor, loaded?.value);
-    begin(d.url, undefined, "view", d.name, anchor);
+    begin(d.url, undefined, "view", d.name, anchor, face, point);
+  };
+
+  /** Shows the pending insert's image on a plane: on the face it was dropped on, centred where it was, else on XY; and selects the canvas. */
+  const canvas = (p: PendingInsert) => {
+    const d = documentOf(p);
+    if (!p.url || !d) return;
+    const place = props.placeCanvas(p.face, p.anchor, p.point);
+    const id = props.canvases.add(p.url, baseName(p.url, d.info.value, p.name), place.plane, place.center, place.width);
+    editor.select({ kind: "document", id: canvasRowId(id) }, "dialog");
+    editor.setNotice(place.notice);
   };
 
   /**
@@ -493,7 +514,7 @@ export function createInserts(props: {
     if (target.kind === "import") return void importDocuments(docs);
     editor.setNotice(others);
     if (target.kind === "value") return void dropValue(first, target.target);
-    if (target.kind === "face") return void dropOnFace(first, target.face);
+    if (target.kind === "face") return void dropOnFace(first, target.face, props.pointAt(event.clientX, event.clientY));
     if (target.kind === "document") {
       const s = editor.selection();
       if (s?.kind === "document") {
@@ -558,6 +579,7 @@ export function createInserts(props: {
       const p = pending();
       if (!p?.url) return;
       if (role === "annotation") return annotate(p.url, p.anchor, documentOf(p)?.info.value);
+      if (role === "canvas") return canvas(p);
       await importDocuments([{ url: p.url, ...(p.name ? { name: p.name } : {}) }]);
     },
     async pick(path) {

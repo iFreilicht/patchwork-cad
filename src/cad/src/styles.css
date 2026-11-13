@@ -707,6 +707,17 @@
   white-space: nowrap;
 }
 
+/* The name keeps its room longest; what follows it, e.g. where it is pinned, gives way first. */
+.cad-editor__browser-name > span:first-child {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.cad-editor__browser-name > span.cad-editor__muted {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
 .cad-editor__browser-name:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -1845,4 +1856,27 @@
 /* A branch of a picker's tree that leads to a value that fits the field. */
 .cad-editor__tree summary[data-leads="true"] .cad-editor__tree-key {
   text-decoration: underline dotted;
+}
+
+/* A canvas's fields (research/21, "Canvas"). */
+.cad-editor__range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--cad-model-accent);
+}
+
+.cad-editor__check {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding-top: 3px;
+}
+
+.cad-editor__canvas-size {
+  flex: 1 1 8rem;
+}
+
+/* Calibrate picks points of a canvas's image. */
+.cad-model__viewer[data-canvas-pick] > canvas {
+  cursor: crosshair;
 }

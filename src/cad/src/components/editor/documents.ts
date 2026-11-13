@@ -3,7 +3,8 @@
  * them (research/21, "The documents list", "The document dialog"): the documents the code imports,
  * those imported JS files import, and those configurations link values to, each with its title, its
  * state, what uses it, and the edits of its import as splices of the code; and the documents shown as
- * annotations (research/21, "Annotation"), whose edits are of the `cad` field.
+ * annotations (research/21, "Annotation") and the images of canvases (research/21, "Canvas"), whose
+ * edits are of the `cad` field.
  */
 import { batch, createMemo, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
@@ -12,15 +13,16 @@ import { analyze } from "../../model/analyze.ts";
 import { isLinked } from "../../model/configurations.ts";
 import { documentId, documentStatements, follow as followEdits, pin as pinEdits, removeStatement, renameImport, replaceDocument, setType as setTypeEdits, usedAnywhere, type DocumentStatement } from "../../model/documents.ts";
 import { apply } from "../../model/splice.ts";
-import type { Annotation, CadModelDoc, Configuration } from "../../types.ts";
+import type { Annotation, CadModelDoc, Canvas, Configuration } from "../../types.ts";
 import type { AnnotationStore } from "../annotations.tsx";
+import type { CanvasStore, ImageState } from "../canvases.ts";
 import type { HeldDocument, Model } from "../createModel.ts";
 import type { DocumentInfo } from "../documentInfo.ts";
 import { docOf, headsOf, importKinds, sameHeads, withHeads, withoutHeads } from "../imports.ts";
 import type { Editor } from "./state.ts";
 
-/** How a document enters the model: imported by its code, by an imported JS file, linked to by a configuration's value, or shown as an annotation. */
-export type DocumentRole = "import" | "indirect" | "link" | "annotation";
+/** How a document enters the model: imported by its code, by an imported JS file, linked to by a configuration's value, shown as an annotation, or a canvas's image. */
+export type DocumentRole = "import" | "indirect" | "link" | "annotation" | "canvas";
 
 export interface DocumentRow {
   /** Its id as the selection names it: `documentId` for an import, the URL `as link` for a linked value's document, `annotationRowId` for an annotation. */
@@ -45,10 +47,14 @@ export interface DocumentRow {
   via: string | undefined;
   /** For an annotation, the annotation. */
   annotation?: Annotation;
+  /** For a canvas, the canvas. */
+  canvas?: Canvas;
 }
 
 /** The selection's id of an annotation's row: one row per annotation, as a document may be pinned to several places. */
 export const annotationRowId = (id: string) => `annotation:${id}`;
+/** The selection's id of a canvas's row. */
+export const canvasRowId = (id: string) => `canvas:${id}`;
 
 /** A row's state, as its icon and tooltip show it (research/21, "The documents list"). */
 export type DocumentState = "following" | "pinned" | "newer" | "unavailable" | "held";
@@ -103,7 +109,19 @@ const pathOf = (specifier: string) => {
   return rest.startsWith("/") && rest.length > 1 ? rest : undefined;
 };
 
-export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor: Editor; model: Model; configurations: Accessor<Configuration[]>; annotations: AnnotationStore; onShow: (annotation: string) => void; info: (url: string) => DocumentInfo; element: HTMLElement }): Documents {
+export function createDocuments(props: {
+  handle: DocHandle<CadModelDoc>;
+  editor: Editor;
+  model: Model;
+  configurations: Accessor<Configuration[]>;
+  annotations: AnnotationStore;
+  canvases: CanvasStore;
+  /** A canvas's image, by its URL, which may not be one. */
+  canvasImage: (url: string) => ImageState;
+  onShow: (annotation: string) => void;
+  info: (url: string) => DocumentInfo;
+  element: HTMLElement;
+}): Documents {
   const { handle, editor, model } = props;
   const rows = createMemo<DocumentRow[]>(() => {
     const shown = model.documents();
@@ -166,7 +184,10 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
     const annotated = props.annotations.list().map(
       (a): DocumentRow => ({ id: annotationRowId(a.id), role: "annotation", specifier: a.doc, doc: docOf(a.doc), path: undefined, type: undefined, pinned: headsOf(a.doc), statements: [], module: undefined, held: undefined, users: { entries: [], params: false, configurations: [] }, via: undefined, annotation: a }),
     );
-    return [...out, ...links.values(), ...annotated];
+    const canvases = props.canvases.list().map(
+      (c): DocumentRow => ({ id: canvasRowId(c.id), role: "canvas", specifier: c.image, doc: docOf(c.image), path: undefined, type: undefined, pinned: headsOf(c.image), statements: [], module: undefined, held: undefined, users: { entries: [], params: false, configurations: [] }, via: undefined, canvas: c }),
+    );
+    return [...out, ...links.values(), ...annotated, ...canvases];
   });
 
   const info = (row: DocumentRow): DocumentInfo => (row.doc ? props.info(row.doc) : { status: "unavailable", title: row.specifier, icon: "File", datatype: undefined, heads: undefined, value: undefined, problem: "it isn't a valid automerge URL" });
@@ -174,7 +195,8 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
 
   const state = (row: DocumentRow): { state: DocumentState; icon: string; label: string } => {
     const i = info(row);
-    const problem = row.module?.kind === "problem" ? row.module.problem : i.status === "unavailable" ? i.problem : undefined;
+    const image = row.canvas ? props.canvasImage(row.canvas.image) : undefined;
+    const problem = row.module?.kind === "problem" ? row.module.problem : i.status === "unavailable" ? i.problem : image?.status === "unavailable" ? image.problem : undefined;
     if (problem) return { state: "unavailable", icon: "TriangleAlert", label: `Unavailable: ${problem}` };
     if (row.held) return { state: "held", icon: "Lock", label: `Held back at the version the model last built with; the newer version brings: ${row.held.errors.join("; ")}` };
     if (row.pinned) return sameHeads(row.pinned, i.heads) || !i.heads ? { state: "pinned", icon: "Pin", label: "Pinned to a version" } : { state: "newer", icon: "Dot", label: "Pinned; a newer version is available" };
@@ -183,8 +205,8 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
 
   const builtWith = (row: DocumentRow): UrlHeads | undefined => {
     if (row.pinned) return row.pinned;
-    // An annotation is shown as it is now.
-    if (row.role === "annotation") return info(row).heads;
+    // An annotation or a canvas is shown as it is now.
+    if (row.role === "annotation" || row.role === "canvas") return info(row).heads;
     if (row.held) return row.held.locked;
     return model.documents().find((d) => d.doc === row.doc && !headsOf(d.specifier))?.heads ?? info(row).heads;
   };
@@ -225,7 +247,7 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
     kinds,
     as,
     removable: (row) => {
-      if (row.role === "annotation") return true;
+      if (row.role === "annotation" || row.role === "canvas") return true;
       const a = editor.analysis();
       return row.role === "import" && !!a && row.statements.every((s) => !usedAnywhere(a.program, s));
     },
@@ -236,15 +258,18 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
     pin(row) {
       const heads = builtWith(row);
       if (heads && row.annotation) props.annotations.setDoc(row.annotation.id, withHeads(row.annotation.doc, heads) as AutomergeUrl);
+      else if (heads && row.canvas) props.canvases.update(row.canvas.id, { image: withHeads(row.canvas.image, heads) as AutomergeUrl });
       else if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
     },
     follow(row) {
       if (row.annotation) props.annotations.setDoc(row.annotation.id, withoutHeads(row.annotation.doc) as AutomergeUrl);
+      else if (row.canvas) props.canvases.update(row.canvas.id, { image: withoutHeads(row.canvas.image) as AutomergeUrl });
       else if (row.role === "import") edit((source, s) => followEdits(source, s, row.id));
     },
     update(row) {
       const heads = info(row).heads;
       if (heads && row.annotation) props.annotations.setDoc(row.annotation.id, withHeads(row.annotation.doc, heads) as AutomergeUrl);
+      else if (heads && row.canvas) props.canvases.update(row.canvas.id, { image: withHeads(row.canvas.image, heads) as AutomergeUrl });
       else if (heads && row.role === "import") edit((source, s) => pinEdits(source, s, row.id, heads));
     },
     setAs(row, to) {
@@ -259,6 +284,10 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
         if (next !== row.annotation.doc) props.annotations.setDoc(row.annotation.id, next as AutomergeUrl);
         return undefined;
       }
+      if (row.canvas) {
+        if (next !== row.canvas.image) props.canvases.update(row.canvas.id, { image: next as AutomergeUrl });
+        return undefined;
+      }
       if (next === row.specifier || row.role !== "import") return undefined;
       reidentify(row, documentId(next, row.type), (source, s) => replaceDocument(source, s, row.id, next));
       return undefined;
@@ -267,6 +296,11 @@ export function createDocuments(props: { handle: DocHandle<CadModelDoc>; editor:
       if (row.annotation) {
         if (editor.isSelected({ kind: "document", id: row.id })) editor.select(undefined, "dialog");
         props.annotations.remove(row.annotation.id);
+        return;
+      }
+      if (row.canvas) {
+        if (editor.isSelected({ kind: "document", id: row.id })) editor.select(undefined, "dialog");
+        props.canvases.remove(row.canvas.id);
         return;
       }
       if (row.role !== "import") return;
