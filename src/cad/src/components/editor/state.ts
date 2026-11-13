@@ -64,7 +64,7 @@ export interface LaneHover {
   version: string;
 }
 
-export type SelectionKind = "feature" | "script" | "params" | "configuration" | "return" | "view" | "document";
+export type SelectionKind = "feature" | "script" | "params" | "configuration" | "return" | "view" | "document" | "insert";
 /** Where a selection was made: that pane doesn't scroll to it. */
 export type SelectionFrom = "browser" | "timeline" | "code" | "view" | "dialog" | "toolbar";
 
@@ -72,8 +72,8 @@ export type SelectionFrom = "browser" | "timeline" | "code" | "view" | "dialog" 
  * The selected item (research/19-selection.md, "The selection"). A timeline entry's `id` is an
  * automerge cursor at the start of its code; a configuration's or a view's is its own (`""` is
  * Defaults); a document's is its URL without heads and the type it is imported with
- * (`documentId`), or for a linked value's document its URL as a link; the parameters and the return
- * have none.
+ * (`documentId`), or for a linked value's document its URL as a link; a pending insert's is a number
+ * of this tab's (research/21, "Dropping, pasting, inserting"); the parameters and the return have none.
  */
 export interface Selection {
   kind: SelectionKind;
@@ -82,7 +82,7 @@ export interface Selection {
 }
 
 /** What can be selected: a timeline entry by its index, or another item. */
-export type Selectable = { kind: "entry"; index: number } | { kind: "params" | "return" } | { kind: "configuration" | "view" | "document"; id: string };
+export type Selectable = { kind: "entry"; index: number } | { kind: "params" | "return" } | { kind: "configuration" | "view" | "document" | "insert"; id: string };
 
 /** A document the model's code imports (research/21, "The documents list"): its import statements, and what uses them. */
 export interface ModelDocument {
@@ -107,8 +107,8 @@ export interface Editor {
   isSelected(item: Selectable): boolean;
   /** The selected timeline entry, a feature's or a Custom Script's, by index; kept while the code doesn't parse. */
   selectedIndex: Accessor<number | undefined>;
-  /** The selected entry as `{ kind, id }` for collaborators: an automerge cursor at the start of its code. */
-  shared: Accessor<{ kind: SelectionKind; id: string } | undefined>;
+  /** The selection as `{ kind, id }` for collaborators, an entry's id being an automerge cursor at the start of its code; none for a pending insert. */
+  shared: Accessor<{ kind: Exclude<SelectionKind, "insert">; id: string } | undefined>;
   /** The timeline entry a collaborator's selection `{ kind, id }` stands for, if it is one. */
   entryOf(selection: { kind: string; id: string } | undefined): number | undefined;
   /** The selected feature, if it has a dialog: not a body() (research/11). */
@@ -392,8 +392,10 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
   };
   const shared = () => {
     const s = selection();
-    if (!s) return undefined;
-    return s.kind === "feature" || s.kind === "script" ? { kind: s.kind, id: anchor()?.cursor ?? "" } : { kind: s.kind, id: s.id };
+    // A pending insert names nothing in the model yet: collaborators can't resolve it.
+    const kind = s?.kind;
+    if (!s || kind === undefined || kind === "insert") return undefined;
+    return kind === "feature" || kind === "script" ? { kind, id: anchor()?.cursor ?? "" } : { kind, id: s.id };
   };
   const entryOf = (s: { kind: string; id: string } | undefined): number | undefined => {
     if (!s || (s.kind !== "feature" && s.kind !== "script") || syntaxError()) return undefined;

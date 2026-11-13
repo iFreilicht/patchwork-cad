@@ -6,6 +6,7 @@ import type { LinkedValue, ParamValue } from "../../types.ts";
 import { ExpressionInput } from "./FeatureDialog.tsx";
 import { NameField } from "./NameField.tsx";
 import { asCode, type ParamsController } from "./parameters.ts";
+import type { ValueTarget } from "./inserts.ts";
 import type { Editor } from "./state.ts";
 
 /** A value as the dialog shows it: code, or the link it reads. */
@@ -235,13 +236,13 @@ export function ParamsDialog(props: {
                     onDone={() => setRenaming(undefined)}
                   />
                   <Show when={editable()} fallback={<td class="cad-editor__param-default"><code>{param().value ?? "–"}</code></td>}>
-                    <td>
+                    <td data-drop="value" data-drop-value={JSON.stringify({ kind: "default", key: param().key } satisfies ValueTarget)}>
                       <ExpressionInput label={`Default of ${param().key}`} value={param().value ?? ""} onCommit={(text) => props.params.setDefault(param().key, text)} />
                     </td>
                   </Show>
                   {/* Read directly, not through an accessor of the Show, which throws when read after switching back to the defaults. */}
                   <Show when={selected()}>
-                    <td>
+                    <td data-drop="value" data-drop-value={JSON.stringify({ kind: "override", configuration: selected()?.id ?? "", name: selected()?.name ?? "", key: param().key } satisfies ValueTarget)}>
                       <OverrideInput label={`${param().key} in ${selected()?.name ?? ""}`} value={shown(value())} problem={linked()?.problem ? `Its linked value ${linked()!.problem}` : undefined} onCommit={(v) => props.params.setValue(param().key, v)} />
                     </td>
                   </Show>

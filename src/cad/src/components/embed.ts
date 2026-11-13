@@ -14,16 +14,16 @@ export function createEmbed(model: DocHandle<CadModelDoc>, of: { view: { id: str
 }
 
 /**
- * Drags document `url` with the payload Patchwork's drop targets read, as in the pandoc tool, and
- * `title` as the drag image, drawn in `container`.
+ * Drags document `url` with the payload Patchwork's drop targets read, as in the pandoc tool, with its
+ * datatype `type` if known, and `title` as the drag image, drawn in `container`.
  */
-export function dragDocument(event: DragEvent, doc: { url: AutomergeUrl; title: string; type: string }, container: HTMLElement): void {
+export function dragDocument(event: DragEvent, doc: { url: AutomergeUrl; title: string; type?: string }, container: HTMLElement): void {
   const transfer = event.dataTransfer;
   if (!transfer) return;
   // "all", as the sideboard's own drags: its list asks for "move", and a drop effect the drag doesn't allow cancels the drop.
   transfer.effectAllowed = "all";
   transfer.setData("text/x-patchwork-urls", JSON.stringify([doc.url]));
-  transfer.setData("text/x-patchwork-dnd", JSON.stringify({ source: "patchwork-cad", items: [{ url: doc.url, name: doc.title, type: doc.type }] }));
+  transfer.setData("text/x-patchwork-dnd", JSON.stringify({ source: "patchwork-cad", items: [{ url: doc.url, name: doc.title, ...(doc.type ? { type: doc.type } : {}) }] }));
   transfer.setData("text/plain", doc.url);
   const image = document.createElement("div");
   image.className = "cad-drag-image";

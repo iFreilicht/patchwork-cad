@@ -6,6 +6,7 @@ import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
 import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setProp, usedFunctions } from "../../model/splice.ts";
 import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
+import type { ValueTarget } from "./inserts.ts";
 import { schemaOf, type Editor } from "./state.ts";
 
 /** Whether `text` is one expression that can replace a parameter's value, e.g. not `1,` or `1 // x`, which would break the code around it. */
@@ -111,11 +112,13 @@ function setParam(editor: Editor, key: string, text: string, optional: boolean):
 /** A number as code, e.g. `20` or `-1.5`, which can become a parameter's default. */
 const NUMBER = /^-?(\d+\.?\d*|\.\d+)$/;
 
+/** A number argument; a document dropped on it gives it a value (research/21, "Dropping, pasting, inserting"). */
 function ScalarField(props: FieldProps) {
   const value = () => textOf(props.source, propNode(props.entry.call, props.name));
   const def = props.spec.kind === "length" || props.spec.kind === "number" ? props.spec.default : undefined;
+  const target = (): ValueTarget => ({ kind: "argument", feature: props.entry.name, param: props.name, label: props.spec.label });
   return (
-    <div class="cad-editor__scalar">
+    <div class="cad-editor__scalar" data-drop="value" data-drop-value={JSON.stringify(target())}>
       <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />
       <Show when={props.promote && NUMBER.test(value())}>
         <button class="cad-editor__link" title="Make a parameter of this value, with it as the default" aria-label="Make a parameter of this value" disabled={props.disabled} onClick={() => props.editor.setNotice(props.promote?.(props.entry.call, props.name))}>

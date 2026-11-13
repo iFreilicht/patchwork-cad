@@ -11,7 +11,7 @@ import { PickButton } from "./FeatureDialog.tsx";
 import { Menu, type MenuItem } from "./Menu.tsx";
 import { NameField } from "./NameField.tsx";
 import type { Editor, Selectable } from "./state.ts";
-import type { DocumentRow, Documents } from "./documents.ts";
+import { rowDragUrl, type DocumentRow, type Documents } from "./documents.ts";
 import { Icon } from "../icons.tsx";
 
 /** An eye, crossed out when hidden (lucide's eye and eye-off). */
@@ -204,6 +204,8 @@ export function Browser(props: {
   peers: BrowserPeer[];
   onHoverConfiguration: (hovered: boolean) => void;
   embedConfiguration: (configuration: Configuration | undefined) => { url: AutomergeUrl; title: string } | undefined;
+  /** Whether a document is dragged over the editor. */
+  dragging: boolean;
 }) {
   let aside!: HTMLElement;
   const [renaming, setRenaming] = createSignal<string>();
@@ -237,7 +239,7 @@ export function Browser(props: {
   };
   return (
     <>
-      <aside class="cad-editor__browser" aria-label="Browser" ref={aside}>
+      <aside class="cad-editor__browser" aria-label="Browser" ref={aside} tabindex="-1" data-drop="insert">
         <p class="cad-editor__muted cad-editor__browser-note">{at()}</p>
         <h3 class="cad-editor__browser-heading">Bodies</h3>
         <BodyList editor={props.editor} bodies={props.bodies} kind="body" state={state} />
@@ -245,8 +247,9 @@ export function Browser(props: {
           <h3 class="cad-editor__browser-heading">Sketches</h3>
           <BodyList editor={props.editor} bodies={props.bodies} kind="sketch" state={state} />
         </Show>
-        <Show when={props.documents.rows().length > 0}>
-          <DocumentList documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} />
+        {/* While a document is dragged, also when the model refers to none: a drop there imports it (research/21). */}
+        <Show when={props.documents.rows().length > 0 || props.dragging}>
+          <DocumentList documents={props.documents} editor={props.editor} openMenu={(m) => setMenu(m)} peers={() => props.peers} dragFrom={() => aside} />
         </Show>
         <ViewList section={props.views} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
         <ConfigurationList params={props.params} onHover={props.onHoverConfiguration} embed={props.embedConfiguration} editor={props.editor} renaming={renaming} setRenaming={setRenaming} openMenu={(m) => setMenu(m)} dragFrom={() => aside} peers={() => props.peers} />
@@ -632,19 +635,20 @@ export function documentActions(documents: Documents, row: DocumentRow): (MenuIt
  * The documents the model refers to (research/21, "The documents list"): a row each, with its
  * datatype's icon, its title and the path it names, and its state; a click selects it, which opens
  * its dialog. Hovering or selecting a row highlights the features that use it, and hovering or
- * selecting a feature the rows of the documents it uses.
+ * selecting a feature the rows of the documents it uses. The grip drags a row's document, as
+ * Patchwork's sidebar does, out of the editor or onto its fields.
  */
-function DocumentList(props: { documents: Documents; editor: Editor; openMenu: OpenMenu; peers: () => BrowserPeer[] }) {
+function DocumentList(props: { documents: Documents; editor: Editor; openMenu: OpenMenu; peers: () => BrowserPeer[]; dragFrom: () => HTMLElement }) {
   const open = (row: DocumentRow, x: number, y: number) => {
     const items = documentActions(props.documents, row).filter((a) => !a.disabled);
     if (items.length) props.openMenu({ key: `document:${row.id}`, label: `Actions for ${props.documents.title(row)}`, items, x, y });
   };
   return (
-    <>
+    <div class="cad-editor__documents" data-drop="import">
       <h3 class="cad-editor__browser-heading">Documents</h3>
       <ul class="cad-editor__browser-list" aria-label="Documents">
         {/* By position, as the bodies: rows are new objects after every edit, and their buttons should stay, e.g. while clicked. */}
-        <Index each={props.documents.rows()}>
+        <Index each={props.documents.rows()} fallback={<li class="cad-editor__muted cad-editor__browser-empty">none</li>}>
           {(row) => {
             const item = () => ({ kind: "document", id: row().id }) as const;
             const selected = () => props.editor.isSelected(item());
@@ -676,6 +680,21 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
                   open(row(), event.clientX, event.clientY);
                 }}
               >
+                <span
+                  class="cad-editor__grip"
+                  draggable="true"
+                  aria-hidden="true"
+                  data-drag="document"
+                  title={`Drag ${props.documents.title(row())} into Patchwork, or onto a field of this model`}
+                  onDragStart={(event) => {
+                    const url = rowDragUrl(row());
+                    if (!url) return event.preventDefault();
+                    const type = (info().value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type;
+                    dragDocument(event, { url, title: props.documents.title(row()), ...(typeof type === "string" ? { type } : {}) }, props.dragFrom());
+                  }}
+                >
+                  ⠿
+                </span>
                 <span class="cad-editor__document-icon" title={info().datatype}>
                   <Icon name={info().icon} />
                 </span>
@@ -710,6 +729,6 @@ function DocumentList(props: { documents: Documents; editor: Editor; openMenu: O
           }}
         </Index>
       </ul>
-    </>
+    </div>
   );
 }

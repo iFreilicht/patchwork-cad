@@ -2,7 +2,8 @@
  * The documents a model imports, as its code has them (research/21, "The documents list"): each
  * import statement of a document, which entries use it, and the edits of the documents list and
  * dialog as text splices of the import (Pin, Follow, Update, As, replacing the document, removing
- * and renaming it), each one undo step.
+ * and renaming it), each one undo step; and the imports a drop or a picked value inserts
+ * (research/21, "Dropping, pasting, inserting").
  */
 import type { AnyNode, ExportAllDeclaration, ExportNamedDeclaration, ImportAttribute, ImportDeclaration, Program } from "acorn";
 import { importType, isDocumentSpecifier, moduleKey, type ImportType } from "../kernel/imports.ts";
@@ -187,4 +188,156 @@ export function renameImport(analysis: Analysis, statement: DocumentStatement, t
     else edits.push({ start: id.start, end: id.end, text: to });
   });
   return { edits };
+}
+
+/** How an inserted import binds its module: its default export, the module, or one named export. */
+export type Binding = { kind: "default"; local: string } | { kind: "namespace"; local: string } | { kind: "named"; imported: string; local: string };
+
+/** An import to insert: its specifier as written, its attribute's type, and its binding. */
+export interface NewImport {
+  specifier: string;
+  type: ImportType | undefined;
+  binding: Binding;
+}
+
+/** An identifier name, which `import { … }` and a member expression can use as is, reserved words included. */
+const IDENTIFIER_NAME = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * A name for an import of a document titled `title` that no name in the model has (`namesIn`):
+ * its words in camelCase, without diacritics and other characters that aren't ASCII identifier
+ * characters, after an underscore if it would start with a digit or be a reserved word, and numbered
+ * from 2 if it is taken; "doc" if nothing is left.
+ */
+export function importName(title: string, taken: ReadonlySet<string>): string {
+  const words = title
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .split(/[^A-Za-z0-9_$]+/)
+    .filter(Boolean);
+  const camel = words
+    .map((w, i) => (i > 0 ? w[0]!.toUpperCase() + w.slice(1) : w === w.toUpperCase() ? w.toLowerCase() : w[0]!.toLowerCase() + w.slice(1)))
+    .join("");
+  const base = !camel ? "doc" : /^[0-9]/.test(camel) || !declarable(camel) ? `_${camel}` : camel;
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}${n}`)) return `${base}${n}`;
+}
+
+/** A string literal in double quotes. */
+const quoted = (text: string) => JSON.stringify(text);
+
+/** An import statement of `i`, in the style of the model's other imports. */
+export function importStatement(i: NewImport): string {
+  const b = i.binding;
+  const imported = b.kind === "named" ? (IDENTIFIER_NAME.test(b.imported) ? b.imported : quoted(b.imported)) : "";
+  const clause = b.kind === "default" ? b.local : b.kind === "namespace" ? `* as ${b.local}` : `{ ${imported === b.local ? b.local : `${imported} as ${b.local}`} }`;
+  return `import ${clause} from ${quoted(i.specifier)}${i.type ? ` with { type: "${i.type}" }` : ""};`;
+}
+
+/**
+ * Inserts `imports` after the model's last import statement, or at its start if it has none, so
+ * that imports stay at the top wherever a drop was: one statement each, or, for a named binding, a
+ * specifier added to a statement of the same specifier and type that has named ones already.
+ */
+export function insertImports(source: string, program: Program, imports: readonly NewImport[]): Edit[] {
+  const edits: Edit[] = [];
+  const statements: string[] = [];
+  const declarations = program.body.filter((n): n is ImportDeclaration => n.type === "ImportDeclaration");
+  for (const i of imports) {
+    const b = i.binding;
+    const into =
+      b.kind === "named"
+        ? declarations.find((d) => {
+            let type: ImportType | undefined;
+            try {
+              type = importType(d.attributes);
+            } catch {
+              return false;
+            }
+            return String(d.source.value) === i.specifier && type === i.type && d.specifiers.some((s) => s.type === "ImportSpecifier");
+          })
+        : undefined;
+    const last = into?.specifiers.findLast((s) => s.type === "ImportSpecifier");
+    if (b.kind === "named" && last) {
+      const imported = IDENTIFIER_NAME.test(b.imported) ? b.imported : quoted(b.imported);
+      edits.push({ start: last.end, end: last.end, text: `, ${imported === b.local ? b.local : `${imported} as ${b.local}`}` });
+    } else statements.push(importStatement(i));
+  }
+  if (statements.length) {
+    const last = declarations[declarations.length - 1];
+    const at = last ? lines(source, last).end : 0;
+    const newline = at > 0 && source[at - 1] !== "\n";
+    edits.push({ start: at, end: at, text: newline ? `\n${statements.join("\n")}` : `${statements.join("\n")}\n` });
+  }
+  return edits;
+}
+
+/** `name` followed by the members that reach `path` in it: `.key` where the key is an identifier name, else `["key"]`, and `[3]`. */
+export const memberExpression = (name: string, path: readonly (string | number)[]) =>
+  name + path.map((p) => (typeof p === "number" ? `[${p}]` : IDENTIFIER_NAME.test(p) ? `.${p}` : `[${quoted(p)}]`)).join("");
+
+/** How the model reads one value of a document: an expression, the imports it needs, and the id of the module it reads. */
+export interface ValueReference {
+  expression: string;
+  imports: NewImport[];
+  id: string;
+}
+
+/**
+ * How the model reads the value at `path` of document `doc` (research/21, "The document dialog"):
+ * through an import of the document, of the value itself or of the key the path starts with that
+ * there is already, as a member expression; else by a new import, a top-level key as a named import
+ * (with `as` where its name is taken or isn't an identifier), a deeper value as a default import of
+ * the URL with its path (`pathUrl`, absent for a file, whose content isn't addressed by paths), and
+ * else of the whole document, named `base`. A JS file (`code`) has no default export to read a
+ * deeper value from: its value is a member of the export the path starts with, imported by name.
+ * A new import of a document that the model imports already uses the same specifier, so that it
+ * stays one module, pinned or following as it is; else `doc`, with heads to pin it.
+ */
+export function valueReference(statements: readonly DocumentStatement[], taken: ReadonlySet<string>, doc: string, path: readonly (string | number)[], pathUrl: string | undefined, base: string, code = false): ValueReference {
+  const imports = statements.filter((s) => s.node.type === "ImportDeclaration");
+  const whole = documentId(doc, undefined);
+  const ofDocument = imports.filter((s) => s.id === whole || s.id === documentId(doc, "json"));
+  const defaultOf = (s: DocumentStatement) => {
+    const d = (s.node as ImportDeclaration).specifiers.find((x) => x.type === "ImportDefaultSpecifier");
+    return d?.local.name;
+  };
+  const namespaceOf = (s: DocumentStatement) => (s.node as ImportDeclaration).specifiers.find((x) => x.type === "ImportNamespaceSpecifier")?.local.name;
+  // A JS file's default export is a value of its own, not the module: only its namespace has its exports as members.
+  for (const s of ofDocument) {
+    const name = code ? namespaceOf(s) : defaultOf(s);
+    if (name) return { expression: memberExpression(name, path), imports: [], id: s.id };
+    const ofDefault = code && path[0] === "default" && defaultOf(s);
+    if (ofDefault) return { expression: memberExpression(ofDefault, path.slice(1)), imports: [], id: s.id };
+    // A data module's namespace has its keys as members, but only its default is the whole value: a JSON module has no others, and a key "default" isn't one.
+    const namespace = !code && namespaceOf(s);
+    if (namespace) return { expression: memberExpression(namespace, s.type === "json" || path[0] === "default" || typeof path[0] !== "string" ? ["default", ...path] : path), imports: [], id: s.id };
+  }
+  if (pathUrl) {
+    const id = documentId(pathUrl, undefined);
+    const existing = imports.find((s) => s.id === id && defaultOf(s));
+    if (existing) return { expression: defaultOf(existing)!, imports: [], id };
+  }
+  const key = path[0];
+  if (typeof key === "string") {
+    const named = ofDocument.flatMap((s) => (s.type === undefined ? s.named.filter((n) => n.imported === key).map((n) => ({ ...n, id: s.id })) : []))[0];
+    if (named) return { expression: memberExpression(named.local, path.slice(1)), imports: [], id: named.id };
+  }
+  const specifier = ofDocument.find((s) => s.type === undefined)?.specifier ?? doc;
+  if ((path.length === 1 || code) && typeof key === "string" && key !== "default") {
+    const local = declarable(key) && !taken.has(key) ? key : importName(key, taken);
+    return { expression: memberExpression(local, path.slice(1)), imports: [{ specifier, type: undefined, binding: { kind: "named", imported: key, local } }], id: documentId(specifier, undefined) };
+  }
+  if (code && key === "default") {
+    const local = importName(base, taken);
+    return { expression: memberExpression(local, path.slice(1)), imports: [{ specifier, type: undefined, binding: { kind: "default", local } }], id: documentId(specifier, undefined) };
+  }
+  if (pathUrl && path.length > 0) {
+    const last = path.findLastIndex((p) => typeof p === "string");
+    const label = last < 0 ? base : path.slice(last).join(" ");
+    const local = importName(label, taken);
+    return { expression: local, imports: [{ specifier: pathUrl, type: undefined, binding: { kind: "default", local } }], id: documentId(pathUrl, undefined) };
+  }
+  const local = importName(base, taken);
+  return { expression: memberExpression(local, path), imports: [{ specifier, type: undefined, binding: { kind: "default", local } }], id: documentId(specifier, undefined) };
 }

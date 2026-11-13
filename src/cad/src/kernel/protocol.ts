@@ -115,7 +115,9 @@ export type WorkerRequest =
   /** The entities of bodies `bodies` of the last build that each of `refs` names, e.g. collaborators' picks. */
   | { type: "locate"; id: number; bodies: string[]; refs: RefData[] }
   /** A trial build of `source` without meshing, e.g. before moving a Custom Script; it leaves the last build as it is. */
-  | { type: "check"; id: number; source: string; params?: BuildParams; imports?: Imports };
+  | { type: "check"; id: number; source: string; params?: BuildParams; imports?: Imports }
+  /** What the JS module of document `specifier` exports, as far as it is JSON, run with `imports`, the documents it imports and itself (research/21, "Dropping, pasting, inserting"). */
+  | { type: "exports"; id: number; specifier: string; imports: Imports };
 
 export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
@@ -133,4 +135,5 @@ export type WorkerResponse =
   | { type: "differenceMeshed"; id: number; shapes: MeshedShape[] }
   /** The trial build's error, or how many of its features are broken or failed, and which. */
   | { type: "checked"; id: number; error: ModelError | undefined; problems: number; failures: Failure[] }
+  | { type: "exported"; id: number; value: unknown }
   | { type: "requestFailed"; id: number; message: string };

@@ -1,9 +1,11 @@
-import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, Index, onCleanup, Show } from "solid-js";
 import { parse } from "acorn";
 import type { ImportedModule } from "../../kernel/imports.ts";
+import { fileKind, fittingValues, importKinds, isFile, moduleOf, type ValuePath } from "../imports.ts";
 import { Icon } from "../icons.tsx";
 import { documentActions } from "./Browser.tsx";
 import type { As, DocumentRow, Documents } from "./documents.ts";
+import { PICK_LIMITS, pickProblem, ROLES, type Inserts, type PendingInsert } from "./inserts.ts";
 import type { Editor } from "./state.ts";
 
 /** Caps of the preview, so that a large document stays cheap to show: keys per level, lines, characters, and bytes drawn as an image. */
@@ -50,9 +52,20 @@ function CommitInput(props: { value: string; label: string; title?: string; disa
   );
 }
 
-/** One value of a data preview: a primitive, or a collapsed object or array that renders its keys only when opened. */
-function DataNode(props: { name: string | undefined; value: unknown }) {
-  const [open, setOpen] = createSignal(false);
+/** Which values of a data preview can be picked, and what a pick does (research/21, "Dropping, pasting, inserting"). */
+interface Picker {
+  fits(value: unknown): boolean;
+  pick(path: ValuePath): void;
+  /** Whether the branch at `path` leads to a value that fits, which opens it. */
+  leads(path: ValuePath): boolean;
+}
+
+/**
+ * One value of a data preview: a primitive, or a collapsed object or array that renders its keys
+ * only when opened. With a picker, a value that fits is a button that picks it by its path.
+ */
+function DataNode(props: { name: string | undefined; value: unknown; path?: ValuePath; picker?: Picker | undefined; opened?: boolean }) {
+  const [open, setOpen] = createSignal(props.opened || !!props.picker?.leads(props.path ?? []));
   const entries = () => Object.entries(props.value as object);
   const isObject = () => !!props.value && typeof props.value === "object";
   return (
@@ -63,13 +76,19 @@ function DataNode(props: { name: string | undefined; value: unknown }) {
           <Show when={props.name !== undefined}>
             <span class="cad-editor__tree-key">{props.name}</span>{" "}
           </Show>
-          <code>{clip(JSON.stringify(props.value) ?? "undefined")}</code>
+          <Show when={props.picker?.fits(props.value) && props.picker} fallback={<code>{clip(JSON.stringify(props.value) ?? "undefined")}</code>}>
+            {(picker) => (
+              <button class="cad-editor__tree-pick" title={`Use ${(props.path ?? []).join(".") || "it"}`} onClick={() => picker().pick(props.path ?? [])}>
+                <code>{clip(JSON.stringify(props.value) ?? "undefined")}</code>
+              </button>
+            )}
+          </Show>
         </li>
       }
     >
       <li>
-        <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-          <summary>
+        <details open={open()} onToggle={(event) => setOpen(event.currentTarget.open)}>
+          <summary data-leads={props.picker?.leads(props.path ?? []) ? "true" : undefined}>
             <Show when={props.name !== undefined}>
               <span class="cad-editor__tree-key">{props.name}</span>{" "}
             </Show>
@@ -77,7 +96,7 @@ function DataNode(props: { name: string | undefined; value: unknown }) {
           </summary>
           <Show when={open()}>
             <ul class="cad-editor__tree">
-              <For each={entries().slice(0, MAX_KEYS)}>{([key, value]) => <DataNode name={key} value={value} />}</For>
+              <For each={entries().slice(0, MAX_KEYS)}>{([key, value]) => <DataNode name={key} value={value} path={[...(props.path ?? []), Array.isArray(props.value) ? Number(key) : key]} picker={props.picker} />}</For>
               <Show when={entries().length > MAX_KEYS}>
                 <li class="cad-editor__muted">… {entries().length - MAX_KEYS} more</li>
               </Show>
@@ -110,7 +129,7 @@ function exportedNames(code: string): string[] {
 const size = (n: number) => (n < 1024 ? `${n} bytes` : n < 2 ** 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 2 ** 20).toFixed(1)} MB`);
 
 /** What the model gets of a document (research/21, "The document dialog"): data as a tree, text as its first lines, bytes as their size and an image as itself, code as its exports. */
-function Preview(props: { module: ImportedModule; mimeType: string | undefined }) {
+function Preview(props: { module: ImportedModule; mimeType: string | undefined; picker?: Picker | undefined }) {
   const image = createMemo(() => {
     const m = props.module;
     if (m.kind !== "bytes" || !props.mimeType?.startsWith("image/") || m.bytes.length > MAX_IMAGE_BYTES) return undefined;
@@ -123,7 +142,8 @@ function Preview(props: { module: ImportedModule; mimeType: string | undefined }
       <Show when={props.module.kind === "data" && props.module}>
         {(m) => (
           <ul class="cad-editor__tree">
-            <DataNode name={undefined} value={m().value} />
+            {/* What a value is picked from starts open. */}
+            <DataNode name={undefined} value={m().value} picker={props.picker} opened={!!props.picker} />
           </ul>
         )}
       </Show>
@@ -325,6 +345,145 @@ export function DocumentDialog(props: { documents: Documents; row: DocumentRow; 
           )}
         </For>
       </footer>
+    </section>
+  );
+}
+
+/**
+ * The document dialog of a pending insert (research/21, "The document dialog"): a document dropped,
+ * pasted or given to "Insert" that waits for its role. "Use as" offers the roles the document allows,
+ * none chosen, and nothing is written until one is, or a value of the preview is picked to import
+ * only that. Dropped on a number field, the dialog is about a value for it alone: no "Use as", the
+ * branches that lead to numbers open, a JS file's exports as its tree, and a problem line where
+ * none can be picked. The document field takes a pasted URL or a drop.
+ */
+export function InsertDialog(props: { inserts: Inserts; pending: PendingInsert; editor: Editor; onOpen: (doc: string) => void; onClose: () => void }) {
+  const inserted = () => props.inserts.documentOf(props.pending);
+  const title = () => {
+    const d = inserted();
+    return d ? d.info.title + (d.path?.length ? `/${d.path.join("/")}` : "") : "";
+  };
+  const hasPath = () => !!inserted()?.path?.length;
+  const disabled = () => props.editor.syntaxError() !== undefined;
+  const roles = () => {
+    const d = inserted();
+    return d && d.info.status === "ready" ? ROLES.filter((r) => r.allows(d.info.value, hasPath())) : [];
+  };
+  const mimeType = () => {
+    const v = inserted()?.info.value as { mimeType?: unknown } | undefined;
+    return typeof v?.mimeType === "string" ? v.mimeType : undefined;
+  };
+  const target = () => props.pending.target;
+  /** For a field, what a JS file exports, which it is run for: its numbers are what can be picked. */
+  const runs = () => {
+    const d = inserted();
+    return target() && !hasPath() && d?.info.status === "ready" && isFile(d.info.value) && fileKind(d.info.value) === "js" ? { doc: d.doc, value: d.info.value } : undefined;
+  };
+  const [exported] = createResource(runs, ({ doc }) =>
+    props.inserts.exportsOf(doc).then(
+      (value): ImportedModule => ({ kind: "data", value }),
+      (error: unknown): ImportedModule => ({ kind: "problem", problem: `running it failed: ${String((error as Error)?.message ?? error)}` }),
+    ),
+  );
+  /** What the model gets of it, imported in the first way it can be, or for a field a JS file's exports: a data tree is what values are picked from. */
+  const module = createMemo((): ImportedModule | undefined => {
+    const d = inserted();
+    if (!d || d.info.status !== "ready") return undefined;
+    if (hasPath()) return d.value === undefined ? undefined : { kind: "data", value: d.value };
+    // A resource keeps its last value when its source is gone, e.g. once another document is dropped.
+    const exports = runs() && exported.state === "ready" ? exported() : undefined;
+    if (exports) return exports;
+    const as = importKinds(d.value)[0];
+    return as ? moduleOf(d.value, as === "text" || as === "bytes" ? as : undefined, d.doc) : undefined;
+  });
+  const fits = (value: unknown) => (target() ? typeof value === "number" : value === null || typeof value !== "object");
+  /** For a field, where the values that fit it are, within limits: the branches to them open. */
+  const search = createMemo(() => {
+    const m = module();
+    return target() && m?.kind === "data" ? fittingValues(m.value, fits, PICK_LIMITS) : undefined;
+  });
+  const leading = createMemo(() => new Set((search()?.paths ?? []).flatMap((path) => path.map((_, i) => JSON.stringify(path.slice(0, i))))));
+  /** For a field, why nothing can be picked, if nothing can. */
+  const problem = () => {
+    const d = inserted();
+    const t = target();
+    const m = module();
+    if (!d || !t) return undefined;
+    return pickProblem(title(), d.info, t, search()) ?? (m?.kind === "problem" ? `${title()} can't be used: ${m.problem}.` : undefined);
+  };
+  const picker = (): Picker | undefined => {
+    const d = inserted();
+    if (!d || disabled() || problem()) return undefined;
+    return { fits, pick: (path) => void props.inserts.pick(path), leads: (path) => leading().has(JSON.stringify(path)) };
+  };
+  return (
+    <section class="cad-editor__dialog" aria-label={`Insert ${title() || "a document"}`} data-feature="insert" data-insert={props.pending.url ?? ""} data-target={target()?.kind ?? ""}>
+      <header class="cad-editor__dialog-header">
+        <strong>Insert</strong> <span>{title()}</span>
+        <button class="cad-editor__link" aria-label="close" onClick={() => props.onClose()}>
+          ×
+        </button>
+      </header>
+      <Show when={!target() && inserted()?.info.status === "unavailable"}>
+        <p class="cad-editor__problem" data-status="unavailable">
+          Unavailable: {inserted()?.info.problem}
+        </p>
+      </Show>
+      <Show when={problem()}>
+        {(why) => (
+          <p class="cad-editor__problem" data-status="unpickable">
+            {why()}
+          </p>
+        )}
+      </Show>
+      <div class="cad-editor__field" data-param="document">
+        <span>Document</span>
+        <div class="cad-editor__document-field" data-drop="document">
+          <Show when={inserted()}>
+            {(d) => (
+              <button class="cad-editor__button cad-editor__document-open" title={`Open ${d().info.title}${d().info.datatype ? ` (${d().info.datatype})` : ""}`} onClick={() => props.onOpen(d().doc)}>
+                <Icon name={d().info.icon} />
+                <span>{d().info.title}</span>
+                <Show when={hasPath()}>
+                  <span class="cad-editor__muted">/{d().path!.join("/")}</span>
+                </Show>
+              </button>
+            )}
+          </Show>
+          <CommitInput value={props.pending.url ?? ""} label="Document URL" title="An automerge: URL or a Patchwork link" commit={(url) => props.inserts.setDocument(url)} onNotice={props.editor.setNotice} />
+        </div>
+      </div>
+      <Show when={target()}>
+        {(t) => (
+          <div class="cad-editor__field" data-param="target">
+            <span>For</span>
+            <span>{props.inserts.targetLabel(t())}</span>
+          </div>
+        )}
+      </Show>
+      {/* For a field, the dialog is about a value for it alone. */}
+      <Show when={!target() && roles().length > 0}>
+        <div class="cad-editor__field" data-param="role">
+          <span>Use as</span>
+          <div class="cad-editor__segmented" role="radiogroup" aria-label="Use as">
+            <For each={roles()}>
+              {(role) => (
+                <button role="radio" class="cad-editor__segment" aria-checked={false} disabled={disabled()} title={role.title} onClick={() => void props.inserts.choose(role.id)}>
+                  {role.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+      <Show when={module()?.kind !== "problem" && module()}>
+        {(m) => (
+          <div class="cad-editor__field" data-param="preview">
+            <span>Preview</span>
+            <Preview module={m()} mimeType={mimeType()} picker={m().kind === "data" ? picker() : undefined} />
+          </div>
+        )}
+      </Show>
     </section>
   );
 }

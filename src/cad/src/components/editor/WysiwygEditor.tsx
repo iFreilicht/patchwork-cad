@@ -31,7 +31,8 @@ import { createParams } from "./parameters.ts";
 import { ParamsDialog } from "./ParamsDialog.tsx";
 import { createDocumentInfo } from "../documentInfo.ts";
 import { createDocuments, type DocumentRow } from "./documents.ts";
-import { DocumentDialog } from "./DocumentDialog.tsx";
+import { DocumentDialog, InsertDialog } from "./DocumentDialog.tsx";
+import { createInserts, type PendingInsert } from "./inserts.ts";
 import { UNDO_IGNORE } from "../../model/locks.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -59,6 +60,8 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const editor = createEditor(props.handle, model, ui);
   const documentInfo = createDocumentInfo();
   const documents = createDocuments({ handle: props.handle, editor, model, configurations: params.configurations.list, info: documentInfo, element: props.element });
+  // Documents dropped, pasted or inserted (research/21, "Dropping, pasting, inserting").
+  const inserts = createInserts({ handle: props.handle, editor, model, documents, params, info: documentInfo, element: props.element });
   const bodies = createBodies(editor, ui);
   const resultHovered = editor.resultHovered;
   const presence = joinPresence(props.element, props.handle, "editor");
@@ -141,6 +144,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const dialogCode = createMemo<ReturnType<typeof codeEntry>>((previous) => codeEntry() ?? previous);
   const dialogView = createMemo<ReturnType<typeof selectedView>>((previous) => selectedView() ?? previous);
   const dialogDocument = createMemo<DocumentRow | undefined>((previous) => selectedDocument() ?? previous);
+  const dialogInsert = createMemo<PendingInsert | undefined>((previous) => inserts.pending() ?? previous);
   /** The documents an entry uses, with their titles, for "Edit ‹document›". */
   const documentsOf = (index: number) => editor.documentsOf(index).flatMap((id) => {
     const row = documents.rows().find((r) => r.id === id);
@@ -563,7 +567,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const s = editor.selection();
     if (!s) return "";
     if (s.kind === "feature" || s.kind === "script") return `${s.kind}:${editor.selectedIndex() ?? ""}`;
-    return s.kind === "configuration" || s.kind === "view" || s.kind === "document" ? `${s.kind}:${s.id}` : s.kind;
+    return s.kind === "configuration" || s.kind === "view" || s.kind === "document" ? `${s.kind}:${s.id}` : s.kind === "insert" ? `insert:${inserts.pending()?.url ?? ""}` : s.kind;
   };
 
   /** Documents held back at their locks, with what their newer version brings (research/21, "Following and pinning"). */
@@ -576,6 +580,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       return r.statements.map((s) => ({ specifier: s.specifier, title: documents.title(r) + (r.path ?? ""), state: state.state, label: state.label }));
     });
   const heldLines = () => documents.rows().flatMap((r) => (r.held ? r.statements.map((s) => s.line) : []));
+  const openUrl = (url: string) => props.element.dispatchEvent(new CustomEvent("patchwork:open-document", { detail: { url }, bubbles: true, composed: true }));
   const openDocument = (specifier: string) => {
     const row = documents.rows().find((r) => r.statements.some((s) => s.specifier === specifier));
     if (row) documents.open(row);
@@ -586,11 +591,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
 
   return (
     <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
-      <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} />
+      <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} onInsert={() => inserts.begin(undefined, undefined, "toolbar")} />
       <Show when={ui.browserOpen()}>
-        <Browser editor={editor} bodies={bodies} views={views} params={params} documents={documents} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} />
+        <Browser editor={editor} bodies={bodies} views={views} params={params} documents={documents} peers={browserPeers()} onHoverConfiguration={setConfigurationHovered} embedConfiguration={(configuration) => createEmbed(props.handle, { configuration })} dragging={inserts.dragging()} />
       </Show>
-      <div class="cad-editor__stage" ref={stage}>
+      <div class="cad-editor__stage" ref={stage} tabindex="-1" data-drop="insert">
         <Viewer
           shapes={rolledBack() || model.shapes() ? shown() : undefined}
           pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
@@ -635,6 +640,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           <Match when={selectedDocument()}>
             <DocumentDialog documents={documents} row={dialogDocument()!} editor={editor} onClose={() => editor.select(undefined, "dialog")} />
           </Match>
+          <Match when={inserts.pending()}>
+            <InsertDialog inserts={inserts} pending={dialogInsert()!} editor={editor} onOpen={openUrl} onClose={() => editor.select(undefined, "dialog")} />
+          </Match>
         </Switch>
         <Show when={viewMenu()}>{(m) => <Menu items={m().items} label={m().label} at={m()} wrap={stage} down onClose={() => setViewMenu(undefined)} />}</Show>
         <Show when={pickError()}>{(message) => <p class="cad-editor__banner" role="alert">Can't refer to that: {message()}</p>}</Show>
@@ -647,7 +655,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         <Show when={editor.syntaxError()}>{(message) => <p class="cad-editor__banner">The code doesn't parse ({message()}); the timeline shows its last valid state.</p>}</Show>
       </div>
       <Show when={codeOpen()}>
-        <div class="cad-editor__code">
+        <div class="cad-editor__code" data-drop="import">
           <CodeEditor
             handle={props.handle}
             undo={undo.manager}
@@ -704,7 +712,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onOpen: () => toggle({ kind: "params" }),
         }}
       />
-      <StatusBar model={model} notice={editor.notice()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} action={inserts.status()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }

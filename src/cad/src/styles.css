@@ -1734,3 +1734,42 @@
 .cad-model__document-title[data-state="unavailable"] {
   color: var(--cad-model-danger);
 }
+
+/* ---------- Dropping, pasting, inserting (research/21) ---------- */
+
+/* Focusable for a paste, which goes to the focused element; a click there shouldn't draw a ring. */
+.cad-editor__stage:focus,
+.cad-editor__browser:focus,
+.cad-editor__timeline-wrap:focus {
+  outline: none;
+}
+
+/* What a drop where a document is dragged would land on, outlined as a pick target is. */
+[data-drop-target="true"] {
+  outline: 2px solid var(--cad-model-accent);
+  outline-offset: -2px;
+}
+
+/* A value of a preview that can be picked for a field, or imported alone. */
+.cad-editor__tree-pick {
+  padding: 0 2px;
+  border: 1px dotted var(--cad-model-accent-text);
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cad-editor__tree-pick:hover {
+  background: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
+}
+
+.cad-model__action {
+  color: var(--cad-model-accent-text);
+}
+
+/* A branch of a picker's tree that leads to a value that fits the field. */
+.cad-editor__tree summary[data-leads="true"] .cad-editor__tree-key {
+  text-decoration: underline dotted;
+}

@@ -7,7 +7,7 @@ export type BuildResult =
   | { ok: false; source: string; params: BuildParams | undefined; imports: Imports; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings };
 
 type Request = Exclude<WorkerRequest, { type: "build" }>;
-type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" | "refsMade" }>;
+type Answer = Extract<WorkerResponse, { type: "rolledBack" | "picked" | "resultMeshed" | "differenceMeshed" | "checked" | "located" | "refsMade" | "exported" }>;
 
 export interface EngineStats {
   /** Builds requested with build(). */
@@ -117,6 +117,12 @@ export class Engine {
     return answer.type === "checked" ? { error: answer.error, problems: answer.problems, failures: answer.failures } : { error: undefined, problems: 0, failures: [] };
   }
 
+  /** What the JS module of document `specifier` exports, as far as it is JSON, run with `imports`, which hold it and the documents it imports; rejects with what it threw. */
+  async exports(specifier: string, imports: Imports): Promise<unknown> {
+    const answer = await this.#request({ type: "exports", id: this.#nextId++, specifier, imports });
+    return answer.type === "exported" ? answer.value : undefined;
+  }
+
   dispose(): void {
     clearTimeout(this.#watchdog);
     this.#worker.terminate();
@@ -141,7 +147,7 @@ export class Engine {
         this.#loaded = true;
         this.#callbacks.onReady(message.timings);
       } else if (message.type === "init-failed") this.#callbacks.onInitFailed(message.message);
-      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "differenceMeshed" || message.type === "checked" || message.type === "located" || message.type === "refsMade" || message.type === "requestFailed") {
+      else if (message.type === "rolledBack" || message.type === "picked" || message.type === "resultMeshed" || message.type === "differenceMeshed" || message.type === "checked" || message.type === "located" || message.type === "refsMade" || message.type === "exported" || message.type === "requestFailed") {
         const pending = this.#pending.get(message.id);
         this.#pending.delete(message.id);
         if (message.type === "requestFailed") pending?.reject(new Error(message.message));

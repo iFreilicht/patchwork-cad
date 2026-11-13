@@ -5,7 +5,7 @@
  * state, what uses it, and the edits of its import as splices of the code.
  */
 import { batch, createMemo, type Accessor } from "solid-js";
-import type { DocHandle, UrlHeads } from "@automerge/automerge-repo";
+import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
 import { moduleKey, type ImportedModule, type ImportType } from "../../kernel/imports.ts";
 import { analyze } from "../../model/analyze.ts";
 import { isLinked } from "../../model/configurations.ts";
@@ -48,6 +48,18 @@ export type DocumentState = "following" | "pinned" | "newer" | "unavailable" | "
 
 /** How the dialog's As offers a document to the model (research/21, "The document dialog"). */
 export type As = "data" | "code" | "text" | "bytes";
+
+/**
+ * What dragging a row carries (research/21, "The documents list"): the document with the path its
+ * import names, without heads, so that a drop elsewhere in Patchwork shows the document as it is now,
+ * as the row's title does, and a drop on this model's fields finds its import, whose id has no heads
+ * either; a linked value's document without the path, so that a drop on a field offers its values.
+ */
+export const rowDragUrl = (row: Pick<DocumentRow, "role" | "specifier">): AutomergeUrl | undefined => {
+  const doc = docOf(row.specifier);
+  if (!doc) return undefined;
+  return row.role === "link" ? doc : (withoutHeads(row.specifier) as AutomergeUrl);
+};
 
 export interface Documents {
   rows: Accessor<DocumentRow[]>;

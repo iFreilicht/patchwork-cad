@@ -10,8 +10,12 @@ export interface Reference {
   selected: boolean;
 }
 
-/** Kernel and build state: errors with their kind and line, failures of entries without a dialog, OCCT load and build times, the editor's last refused action, and the reference of the hovered or selected face or edge. */
-export function StatusBar(props: { model: Model; notice?: string | undefined; problems?: string[]; reference?: Reference | undefined; context?: string | undefined }) {
+/**
+ * Kernel and build state: errors with their kind and line, failures of entries without a dialog, OCCT
+ * load and build times, the editor's last refused action, what a drop where a document is dragged
+ * would do, and the reference of the hovered or selected face or edge.
+ */
+export function StatusBar(props: { model: Model; notice?: string | undefined; problems?: string[]; reference?: Reference | undefined; context?: string | undefined; action?: string | undefined }) {
   const { init, initError, error, last, building } = props.model;
   const [copied, setCopied] = createSignal<string>();
   /** Values main returned that the evaluator dropped, e.g. a string. */
@@ -37,6 +41,7 @@ export function StatusBar(props: { model: Model; notice?: string | undefined; pr
       <Show when={dropped()}>{(n) => <span class="cad-model__warning">main returned {n() === 1 ? "a value that isn't a shape; it isn't" : `${n()} values that aren't shapes; they aren't`} shown</span>}</Show>
       <For each={props.problems ?? []}>{(problem) => <span class="cad-model__error">{problem}</span>}</For>
       <Show when={props.context}>{(context) => <span class="cad-model__context">{context()}</span>}</Show>
+      <Show when={props.action}>{(action) => <span class="cad-model__action">{action()}</span>}</Show>
       <Show when={props.notice}>{(message) => <span class="cad-model__error cad-model__notice">{message()}</span>}</Show>
       <Show when={props.reference}>
         {(reference) => (

@@ -1,6 +1,7 @@
-import { decodeHeads, isImmutableString, isValidAutomergeUrl, type AutomergeUrl, type DocHandle, type UrlHeads } from "@automerge/automerge-repo";
+import { decodeHeads, isImmutableString, isValidAutomergeUrl, parseAutomergeUrl, stringifyAutomergeUrl, type AutomergeUrl, type DocHandle, type UrlHeads, type UrlOptions } from "@automerge/automerge-repo";
 import { hasHeads } from "@automerge/automerge";
 import { documentImports, moduleKey, type ImportedModule, type Imports, type ImportType } from "../kernel/imports.ts";
+import type { NewImport } from "../model/documents.ts";
 
 /** A document a model imports, directly or through an imported JS file, as one read found it. */
 export interface ImportedDocument {
@@ -55,6 +56,71 @@ export const withHeads = (specifier: string, heads: readonly string[]) => `${wit
 /** Whether two versions are the same, in whatever order their heads are. */
 export const sameHeads = (a: readonly string[] | undefined, b: readonly string[] | undefined) => !!a && !!b && a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
 
+/** A value's place in a document: keys of maps, and indices of lists. */
+export type ValuePath = readonly (string | number)[];
+
+/** The path a URL names in its document; undefined if it has a segment other than a key or an index, e.g. a cursor range into text. */
+export function valuePath(url: string): ValuePath | undefined {
+  let segments;
+  try {
+    segments = parseAutomergeUrl(withoutHeads(url) as AutomergeUrl).segments ?? [];
+  } catch {
+    return undefined;
+  }
+  const path: (string | number)[] = [];
+  for (const s of segments) {
+    if (s.AUTOMERGE_REF_KIND === "key") path.push(s.key);
+    else if (s.AUTOMERGE_REF_KIND === "index") path.push(s.index);
+    else return undefined;
+  }
+  return path;
+}
+
+/**
+ * The URL of the value at `path` of document `doc`, in automerge-repo's path syntax (`automerge:<id>/rows/@3/width`,
+ * research/17, "Building blocks"): what a configuration links to, and what a model imports one value of a document by.
+ */
+export function valueUrl(doc: AutomergeUrl, path: ValuePath): AutomergeUrl {
+  const segments: NonNullable<UrlOptions["segments"]> = path.map((p) => (typeof p === "number" ? { AUTOMERGE_REF_KIND: "index", index: p } : { AUTOMERGE_REF_KIND: "key", key: p }));
+  return stringifyAutomergeUrl({ documentId: parseAutomergeUrl(doc).documentId, segments });
+}
+
+/** The value at `path` in `value`, if it is there. */
+export function valueAt(value: unknown, path: ValuePath): unknown {
+  let at = value;
+  for (const p of path) {
+    if (!at || typeof at !== "object" || !Object.hasOwn(at, p)) return undefined;
+    at = (at as Record<string | number, unknown>)[p];
+  }
+  return at;
+}
+
+/**
+ * Where the values that `fits` takes are in `value`, depth first in key order, for a picker: the
+ * paths to the first `paths` of them, searching the first `keys` keys of each map or list and at
+ * most `nodes` values, so that a large document stays cheap. `complete` is whether all of it was
+ * searched: only then does finding none mean there is none.
+ */
+export function fittingValues(value: unknown, fits: (value: unknown) => boolean, limits: { keys: number; nodes: number; paths: number }): { paths: ValuePath[]; complete: boolean } {
+  const paths: ValuePath[] = [];
+  let nodes = 0;
+  let complete = true;
+  const visit = (at: unknown, path: (string | number)[]): boolean => {
+    if (++nodes > limits.nodes) return (complete = false);
+    if (fits(at)) {
+      paths.push(path);
+      if (paths.length >= limits.paths) return false;
+    }
+    if (!at || typeof at !== "object") return true;
+    const entries = Object.entries(at);
+    if (entries.length > limits.keys) complete = false;
+    for (const [key, v] of entries.slice(0, limits.keys)) if (!visit(v, [...path, Array.isArray(at) ? Number(key) : key])) return false;
+    return true;
+  };
+  visit(value, []);
+  return { paths, complete: complete && paths.length < limits.paths };
+}
+
 /** MIME types of a file document that is JS, and of one that is JSON. */
 const JS_TYPES = new Set(["application/javascript", "text/javascript", "application/x-javascript"]);
 /** MIME types that don't say what a file is: the sidebar's for anything the browser doesn't know, and the file tool's default. */
@@ -72,7 +138,19 @@ export interface FileLike {
   name?: unknown;
 }
 
-export const isFile = (value: unknown): value is FileLike => !!value && typeof value === "object" && "content" in value;
+/**
+ * Whether a document is a file (research/21, "Files as modules"): of Patchwork's `file` datatype, a
+ * CAD model, or a document without a datatype that has a file's `content` (text or bytes) and
+ * `mimeType`, as JS libraries made by scripts are. Any other document is data, also one with a
+ * `content` key.
+ */
+export function isFile(value: unknown): value is FileLike {
+  if (!value || typeof value !== "object" || !("content" in value)) return false;
+  const type = (value as { "@patchwork"?: { type?: unknown } })["@patchwork"]?.type;
+  if (type === "file" || type === "cad-model") return true;
+  const { content, mimeType } = value as FileLike;
+  return type === undefined && typeof mimeType === "string" && (typeof content === "string" || content instanceof Uint8Array || isImmutableString(content));
+}
 
 /**
  * What a file is, from its `mimeType`, and from its `extension` where the MIME type is generic or
@@ -126,6 +204,21 @@ export function importKinds(value: unknown): ("data" | "code" | "text" | "bytes"
   if (kind === "json") return ["data", ...(text ? (["text"] as const) : []), "bytes"];
   if (kind === "image") return ["bytes"];
   return [...(text ? (["text"] as const) : []), "bytes"];
+}
+
+/**
+ * How Import imports a document (research/21, "Dropping, pasting, inserting"): in the first way
+ * `importKinds` allows, which is the one that makes sense as a value (code for JS, data for JSON and
+ * any other document, text for SVG and other text, bytes for images and other binary files), a value
+ * that a URL's path names as data; code pinned to the document's current version `heads`, everything
+ * else following (research/21, "Following and pinning"); a JS file as a namespace, which may have no
+ * default export. Undefined if it can't be imported, e.g. a CAD model.
+ */
+export function defaultImport(url: AutomergeUrl, value: unknown, heads: readonly string[], local: string): NewImport | undefined {
+  const as = withoutHeads(url) !== docOf(url) ? "data" : importKinds(value)[0];
+  if (!as) return undefined;
+  const specifier = as === "code" && !headsOf(url) ? withHeads(url, heads) : url;
+  return { specifier, type: as === "text" || as === "bytes" ? as : undefined, binding: as === "code" ? { kind: "namespace", local } : { kind: "default", local } };
 }
 
 /** The supported ways of importing a document, for messages. */

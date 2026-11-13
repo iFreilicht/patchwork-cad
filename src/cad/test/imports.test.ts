@@ -3,7 +3,7 @@
 // heads or following their document.
 import { ImmutableString, initSubduction, Repo, stringifyAutomergeUrl } from "@automerge/automerge-repo";
 import { beforeAll, expect, test, vi } from "vitest";
-import { createImports, fileBytes, fileKind, fileText, importKinds, moduleOf } from "../src/components/imports.ts";
+import { createImports, fileBytes, fileKind, fileText, importKinds, isFile, moduleOf } from "../src/components/imports.ts";
 import { dataModule, documentImports, moduleKey, textModule } from "../src/kernel/imports.ts";
 import { prepare, prepareImported, PrepareError } from "../src/kernel/prepare.ts";
 
@@ -120,6 +120,18 @@ test("what a file is: its MIME type, else its extension, and its content as text
   expect(fileBytes({ content: "Grüße" })).toEqual(utf8);
   expect(fileBytes({ content: new ImmutableString("Grüße") })).toEqual(utf8);
   expect(fileBytes({ content: utf8 })).toBe(utf8);
+});
+
+test("a file is a document of the file datatype, a CAD model, or one without a datatype with a file's content and MIME type", () => {
+  expect(isFile({ "@patchwork": { type: "file" }, content: new Uint8Array(), mimeType: "application/octet-stream" })).toBe(true);
+  expect(isFile({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" })).toBe(true);
+  expect(isFile({ content: "export const a = 1;", mimeType: "application/javascript" })).toBe(true);
+  // Data that happens to have a `content` key.
+  expect(isFile({ content: "Hello", title: "Note" })).toBe(false);
+  expect(isFile({ "@patchwork": { type: "sheet" }, content: "a", mimeType: "text/plain" })).toBe(false);
+  expect(isFile({ content: { a: 1 }, mimeType: "text/plain" })).toBe(false);
+  expect(importKinds({ content: "Hello", title: "Note" })).toEqual(["data"]);
+  expect(moduleOf({ content: "Hello", w: 3 })).toEqual({ kind: "data", value: { content: "Hello", w: 3 } });
 });
 
 test("a file is code, data, text or bytes as its attribute asks, where its kind allows", () => {

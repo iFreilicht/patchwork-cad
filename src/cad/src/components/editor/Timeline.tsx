@@ -607,7 +607,7 @@ export function Timeline(props: {
   );
 
   return (
-    <div class="cad-editor__timeline-wrap" ref={wrap}>
+    <div class="cad-editor__timeline-wrap" ref={wrap} tabindex="-1" data-drop="import">
       <nav
         class="cad-editor__timeline"
         aria-label="Timeline"

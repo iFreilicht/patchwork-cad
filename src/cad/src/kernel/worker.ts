@@ -358,7 +358,7 @@ async function check(id: number, source: string, buildParams: BuildParams | unde
   }
 }
 
-function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): void {
+function answer(request: Exclude<WorkerRequest, { type: "build" | "check" | "exports" }>): void {
   const bodies = bodiesOf(lastTrace);
   if (request.type === "rollback") {
     const index = lastTrace.findIndex((t) => t.name === request.feature);
@@ -408,6 +408,17 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" }>): v
   }
 }
 
+/** What the JS module of document `specifier` exports, as far as it is JSON: its functions, bodies and the like are left out. */
+async function exportsOf(id: number, specifier: string, imports: Imports): Promise<void> {
+  try {
+    const url = resolver(imports)(specifier, undefined);
+    const module = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
+    post({ type: "exported", id, value: json({ ...module }) });
+  } catch (error) {
+    post({ type: "requestFailed", id, message: String((error as Error)?.message ?? error) });
+  }
+}
+
 /** Builds and checks run one after another: both use the feature library's one build context. */
 let queue: Promise<void> = Promise.resolve();
 const enqueue = (job: () => Promise<void>) => (queue = queue.then(job, job));
@@ -416,6 +427,11 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
   if (request.type === "check") {
     enqueue(() => check(request.id, request.source, request.params, request.imports ?? {}));
+    return;
+  }
+  if (request.type === "exports") {
+    // After the running build: the module may use the feature library's build context.
+    enqueue(() => exportsOf(request.id, request.specifier, request.imports));
     return;
   }
   if (request.type !== "build") {

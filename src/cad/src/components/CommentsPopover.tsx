@@ -6,7 +6,9 @@ import type { CommentStore } from "./comments.ts";
 /**
  * The threads on a timeline entry or a face or edge, each in Patchwork's `comment-thread` tool, and
  * a button to start another. It opens above or below a point in `wrap`'s coordinates, and closes
- * on a click outside or Escape; threads started here and never written are removed then.
+ * on a click outside or Escape; threads started here and never written are removed then. A press
+ * outside that becomes a drag keeps it, e.g. a document dragged from Patchwork's sidebar into a
+ * draft, which embeds it (research/21, "Dropping, pasting, inserting").
  */
 export function CommentsPopover(props: {
   comments: CommentStore;
@@ -37,7 +39,10 @@ export function CommentsPopover(props: {
     setFresh([...fresh(), url]);
   };
   const urls = () => [...new Set([...props.threads.map(props.comments.urlOf), ...fresh()])];
-  const outside = (event: PointerEvent) => !el.contains(event.target as Node) && props.onClose();
+  /** Whether the last press was outside: its click closes the popover, a drag doesn't click. */
+  let pressedOutside = false;
+  const press = (event: PointerEvent) => (pressedOutside = !el.contains(event.target as Node));
+  const outside = (event: MouseEvent) => pressedOutside && !el.contains(event.target as Node) && props.onClose();
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
     // Closing it is all Escape does: not the dialog, too.
@@ -48,12 +53,14 @@ export function CommentsPopover(props: {
     if (props.createNow) create();
     // After the click that opened it.
     setTimeout(() => {
-      document.addEventListener("pointerdown", outside, true);
+      document.addEventListener("pointerdown", press, true);
+      document.addEventListener("click", outside, true);
       document.addEventListener("keydown", escape, true);
     });
   });
   onCleanup(() => {
-    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("pointerdown", press, true);
+    document.removeEventListener("click", outside, true);
     document.removeEventListener("keydown", escape, true);
     for (const url of created) props.comments.discardEmptyDraft(url);
   });
