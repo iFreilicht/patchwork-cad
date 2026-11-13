@@ -1099,7 +1099,7 @@ export function Viewer(props: ViewerProps) {
     const textures = new Map<HTMLCanvasElement, THREE.CanvasTexture>();
     let drawnCanvases: { canvas: ShownCanvas; mesh: THREE.Mesh }[] = [];
     /** The documents shown, by canvas id: kept while their URL and tool stay, so that the tool isn't mounted again. */
-    const documentViews = new Map<string, { key: string; object: CSS3DObject; frame: HTMLDivElement; view: HTMLElement; corners: THREE.Vector3[] }>();
+    const documentViews = new Map<string, { key: string; object: CSS3DObject; frame: HTMLDivElement; view: HTMLElement; doc: NonNullable<ShownCanvas["document"]>; corners: THREE.Vector3[] }>();
     /**
      * Hides documents seen edge on or reaching behind the camera: their box on the screen degenerates,
      * and a tool that sizes a canvas by it, as tldraw does, makes one larger than browsers allow
@@ -1119,18 +1119,18 @@ export function Viewer(props: ViewerProps) {
         d.object.visible = !edgeOn && !behind;
       }
     };
-    /** Puts each view into its frame once the renderer has put the frame into the page: a `<patchwork-view>` connected before that never mounts its tool. */
+    /**
+     * Puts each view into its frame once the renderer has put the frame into the page, and gives it its
+     * document only then, in the same task: a `<patchwork-view>` that gets `doc-url` while it isn't
+     * connected starts loading at once (its `attributeChangedCallback`), asks for the document with an
+     * event no provider can hear, waits for the answer forever, and doesn't start again once connected.
+     */
     const connectDocuments = () => {
       for (const d of documentViews.values()) {
         if (!d.frame.isConnected || d.view.isConnected) continue;
+        d.view.setAttribute("doc-url", d.doc.url);
+        if (d.doc.tool) d.view.setAttribute("tool-id", d.doc.tool);
         d.frame.append(d.view);
-        // Experiment: one that stays empty is connected again, which mounts its tool.
-        setTimeout(() => {
-          if (!d.view.isConnected || d.view.querySelector(".patchwork-view-content")?.childElementCount) return;
-          console.warn("[cad] document canvas: reconnecting an empty <patchwork-view>");
-          d.view.remove();
-          d.frame.append(d.view);
-        }, 2000);
       }
     };
     const placeDocuments = (list: ShownCanvas[]) => {
@@ -1155,12 +1155,10 @@ export function Viewer(props: ViewerProps) {
           const view = document.createElement("patchwork-view");
           // The part of a tldraw drawing it shows, which the tool reads as it mounts.
           if (doc.camera) presetCamera(doc.url, doc.camera);
-          view.setAttribute("doc-url", doc.url);
-          if (doc.tool) view.setAttribute("tool-id", doc.tool);
           view.style.display = "block";
           view.style.width = "100%";
           view.style.height = "100%";
-          d = { key, object: new CSS3DObject(frame), frame, view, corners: [] };
+          d = { key, object: new CSS3DObject(frame), frame, view, doc, corners: [] };
           // The pointer goes to the 3D view, which orbits, picks and takes the wheel; CSS3DObject sets it to `auto`.
           frame.style.pointerEvents = "none";
           documentViews.set(c.id, d);

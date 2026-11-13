@@ -108,7 +108,11 @@ test("documents on canvases: tldraw, markdown and data, read-only and live", asy
     { ...base, id: "m", name: "notes", image: docs["notes.md"], tool: "file", plane: { origin: [-15, 0, 0], normal: [1, 0, 0], xDir: [0, 1, 0] }, center: [5, 8], width: 24, aspect: 1 },
     { ...base, id: "d", name: "sizes", image: docs["sizes"], tool: "raw", plane: { origin: [0, 0, -0.5], normal: [0, 0, 1], xDir: [1, 0, 0] }, center: [10, 5], width: 30, aspect: 0.6 },
   ]);
-  await page.waitForTimeout(8000);
+  // Every document's tool mounts, without connecting its view again (research/22).
+  await expect
+    .poll(() => page.evaluate(() => [...document.querySelectorAll(".cad-model__document-canvas patchwork-view")].map((v) => (v.querySelector(".patchwork-view-content")?.childElementCount ?? 0) > 0)), { timeout: 30_000 })
+    .toEqual([true, true, true]);
+  await page.waitForTimeout(3000);
   await zoomOut(page, 6);
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${shots}/experiment-documents-all.png` });
