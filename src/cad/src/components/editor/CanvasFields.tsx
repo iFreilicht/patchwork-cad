@@ -1,6 +1,7 @@
 import { createEffect, createSignal, For, Show, type Accessor } from "solid-js";
 import { calibratedWidth, imageDistance, imagePoint, isFrame, onPlane, ORIGIN_PLANES, originPlane, originPlaneOf, planeLabel, type OriginPlane } from "../../model/canvases.ts";
 import type { Canvas, PlaneFrame } from "../../types.ts";
+import { DEFAULT_DOCUMENT_ASPECT } from "../documentCanvases.ts";
 import type { CanvasStore, ImageState, PlacedCanvas } from "../canvases.ts";
 import { Icon } from "../icons.tsx";
 import type { Overlay } from "../Viewer.tsx";
@@ -29,7 +30,16 @@ export interface Calibration {
  * Calibrate's state: started for a canvas, it ends with that canvas's dialog and when a field starts
  * picking. Setting the width scales the canvas about its centre, which stays where it is.
  */
-export function createCalibration(props: { canvases: CanvasStore; placed: Accessor<PlacedCanvas[]>; image(url: string): ImageState; selected: Accessor<string | undefined>; picking: Accessor<boolean>; stopPicking(): void }): Calibration {
+export function createCalibration(props: {
+  canvases: CanvasStore;
+  placed: Accessor<PlacedCanvas[]>;
+  image(url: string): ImageState;
+  selected: Accessor<string | undefined>;
+  picking: Accessor<boolean>;
+  stopPicking(): void;
+  /** What else scaling a canvas sets, e.g. a document's fit, so that its scale stays when the document grows. */
+  onScale?(canvas: Canvas): Parameters<CanvasStore["update"]>[1];
+}): Calibration {
   const [state, setState] = createSignal<{ id: string; points: [number, number][] }>();
   createEffect(() => {
     const s = state();
@@ -40,7 +50,8 @@ export function createCalibration(props: { canvases: CanvasStore; placed: Access
     const s = state();
     const placed = s && props.placed().find((p) => p.canvas.id === s.id);
     const image = placed && props.image(placed.canvas.image);
-    return s && placed?.frame && image?.status === "ready" ? { points: s.points, canvas: placed.canvas, frame: placed.frame, aspect: image.aspect } : undefined;
+    const aspect = image?.status === "ready" ? image.aspect : image?.status === "document" ? (placed!.canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT) : undefined;
+    return s && placed?.frame && aspect !== undefined ? { points: s.points, canvas: placed.canvas, frame: placed.frame, aspect } : undefined;
   };
   return {
     state,
@@ -59,7 +70,7 @@ export function createCalibration(props: { canvases: CanvasStore; placed: Access
       const width = calibratedWidth(c.aspect, [c.points[0]!, c.points[1]!], distance);
       if (width === undefined) return "The two points are the same.";
       setState(undefined);
-      props.canvases.update(c.canvas.id, { width });
+      props.canvases.update(c.canvas.id, { ...props.onScale?.(c.canvas), width });
       return undefined;
     },
     overlays() {
@@ -86,6 +97,22 @@ export interface CanvasOptions {
   placed: Accessor<PlacedCanvas[]>;
   image(url: string): ImageState;
   calibration: Calibration;
+  /** Experiment: a document canvas's fit and editing in place. */
+  documents?: DocumentCanvasOptions;
+}
+
+/** Experiment: what a canvas of a document that isn't an image offers besides an image's fields. */
+export interface DocumentCanvasOptions {
+  /** Whether its document's part on the canvas can be fitted to what it holds, as a tldraw drawing's. */
+  fits(canvas: Canvas): boolean;
+  /** Shows all of the document on the canvas. */
+  fit(canvas: Canvas): void;
+  /** Whether it can be edited in place: following its document, which is loaded. */
+  editable(canvas: Canvas): boolean;
+  /** The canvas edited in place, if any. */
+  editing: Accessor<string | undefined>;
+  edit(canvas: Canvas): void;
+  done(): void;
 }
 
 /** Rounded for showing, as a field shows a stored value. */
@@ -153,10 +180,12 @@ export function CanvasFields(props: { canvas: Canvas; options: CanvasOptions; ed
   const placed = () => props.options.placed().find((p) => p.canvas.id === c().id);
   const origin = () => (isFrame(c().plane) ? originPlaneOf(c().plane as PlaneFrame) : undefined);
   const image = () => props.options.image(c().image);
+  const isDocument = () => image().status === "document";
   const aspect = () => {
     const i = image();
-    return i.status === "ready" ? i.aspect : undefined;
+    return i.status === "ready" ? i.aspect : i.status === "document" ? (c().aspect ?? DEFAULT_DOCUMENT_ASPECT) : undefined;
   };
+  const docs = () => (isDocument() ? props.options.documents : undefined);
   const calibrating = () => {
     const s = props.options.calibration.state();
     return s?.id === c().id ? s : undefined;
@@ -259,6 +288,39 @@ export function CanvasFields(props: { canvas: Canvas; options: CanvasOptions; ed
           </button>
         </div>
       </div>
+      <Show when={docs()}>
+        {(d) => (
+          <>
+            <div class="cad-editor__field" data-param="height">
+              <span>Height</span>
+              <div class="cad-editor__refs">
+                <div class="cad-editor__scalar cad-editor__canvas-size">
+                  <NumberInput label="Height" value={c().width * (aspect() ?? DEFAULT_DOCUMENT_ASPECT)} valid={(n) => n > 0} commit={(height) => update({ aspect: height / c().width })} />
+                </div>
+                <Show when={d().fits(c())}>
+                  <button class="cad-editor__button" title="Show all of the drawing on the canvas" onClick={() => d().fit(c())}>
+                    Fit
+                  </button>
+                </Show>
+              </div>
+            </div>
+            <div class="cad-editor__field" data-param="edit">
+              <span>Document</span>
+              <div class="cad-editor__refs">
+                <button
+                  class="cad-editor__button"
+                  aria-pressed={d().editing() === c().id}
+                  disabled={d().editing() !== c().id && !d().editable(c())}
+                  title={d().editable(c()) ? "Edit it here, face on" : "A pinned version can't be edited"}
+                  onClick={() => (d().editing() === c().id ? d().done() : d().edit(c()))}
+                >
+                  {d().editing() === c().id ? "Done" : "Edit in place"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </Show>
       {/* Its value doesn't read the Show's accessor: the field's blur, when it is removed, reads it after the Show has switched. */}
       <Show when={distance() !== undefined}>
         <div class="cad-editor__field" data-param="distance">

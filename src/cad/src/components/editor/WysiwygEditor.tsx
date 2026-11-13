@@ -40,6 +40,9 @@ import { HOME } from "../../model/views.ts";
 import { createCanvasImages, createCanvasStore, onFace, placeCanvases, placeNewCanvas } from "../canvases.ts";
 import { canvasCorners } from "../../model/canvases.ts";
 import { headsOf, withHeads, withoutHeads } from "../imports.ts";
+import { DEFAULT_DOCUMENT_ASPECT, DOCUMENT_PX, fitCamera, isTldraw, tldrawBounds } from "../documentCanvases.ts";
+import { onPlane } from "../../model/canvases.ts";
+import type { Canvas, DocumentCamera } from "../../types.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -494,6 +497,38 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     selected: () => selectedDocument()?.canvas?.id,
     picking: () => !!editor.pickTarget(),
     stopPicking: () => editor.setPickTarget(undefined),
+    // A document's part on the canvas is fixed once it is scaled, so that the scale stays when the document grows.
+    onScale: (canvas) => (canvas.view ? {} : (fittedView(canvas) ? { view: fittedView(canvas)! } : {})),
+  });
+  // Experiment: documents that aren't images on canvases, fitted and edited in place (research/21, "Canvas").
+  /** All of a tldraw drawing on its canvas, laid out as the canvas shows it. */
+  const fittedView = (canvas: Canvas): DocumentCamera | undefined => {
+    const value = documentInfo(withoutHeads(canvas.image)).value;
+    const bounds = isTldraw(value) ? tldrawBounds(value) : undefined;
+    return bounds && fitCamera(bounds, DOCUMENT_PX, DOCUMENT_PX * (canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT));
+  };
+  /** The canvas edited in place, which the camera looks at face on. */
+  const [editing, setEditing] = createSignal<string>();
+  const editCanvas = (canvas: Canvas) => {
+    const placed = placedCanvases().find((p) => p.canvas.id === canvas.id);
+    if (!placed?.frame) return;
+    const aspect = canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT;
+    // In the room beside the dialog, which lies over the view's left: the view shows more to the left of the canvas.
+    const view = stage.getBoundingClientRect();
+    const dialog = stage.querySelector(".cad-editor__dialog")?.getBoundingClientRect();
+    const covered = dialog && view.width > 0 ? Math.min(0.6, Math.max(0, (dialog.right - view.left) / view.width)) : 0;
+    const width = (canvas.width * 1.1) / (1 - covered);
+    const [x, y] = canvas.center;
+    const target = onPlane(placed.frame, [x - (covered / 2) * width, y]);
+    const camera: CameraState = { direction: [...placed.frame.normal], target, extent: [width, canvas.width * aspect * 1.1], projection: views.current()?.projection ?? "perspective" };
+    setGoTo(camera);
+    saveCamera(camera);
+    setEditing(canvas.id);
+  };
+  // Editing ends with the canvas's dialog.
+  createEffect(() => {
+    const id = editing();
+    if (id && selectedDocument()?.canvas?.id !== id) setEditing(undefined);
   });
   /** The canvases this user shows, with their images drawn: the selected one is outlined, a hovered row's too. */
   const shownCanvases = createMemo((): ShownCanvas[] =>
@@ -504,13 +539,21 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       const highlight = editor.isSelected({ kind: "document", id: row }) ? "accent" : editor.hoveredDocument() === row ? "hover" : undefined;
       if (image.status === "document") {
         // Experiment: read-only at the document's current version, as tools are at fixed heads, unless shown live.
+        // While it is edited in place, the URL stays, so that the canvas's own view isn't mounted again for every edit.
         const heads = documentInfo(withoutHeads(canvas.image)).heads;
-        const url = canvas.live || headsOf(canvas.image) || !heads ? canvas.image : withHeads(canvas.image, heads);
-        return [{ id: canvas.id, document: { url, tool: canvas.tool, bare: canvas.bare }, corners: canvasCorners(canvas, frame, canvas.aspect ?? 0.75), opacity: canvas.opacity, through: canvas.through, highlight }];
+        const url = canvas.live || editing() === canvas.id || headsOf(canvas.image) || !heads ? canvas.image : withHeads(canvas.image, heads);
+        const camera = canvas.view ?? fittedView(canvas);
+        return [{ id: canvas.id, document: { url, tool: canvas.tool, bare: canvas.bare, camera }, corners: canvasCorners(canvas, frame, canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT), opacity: canvas.opacity, through: canvas.through, highlight }];
       }
       return [{ id: canvas.id, image: image.image, corners: canvasCorners(canvas, frame, image.aspect), opacity: canvas.opacity, through: canvas.through, highlight }];
     }),
   );
+  /** The document edited in place, as the view lays it over its canvas: live, at its URL without heads. */
+  const editedDocument = () => {
+    const canvas = canvasStore.list().find((c) => c.id === editing());
+    return canvas && { id: canvas.id, url: withoutHeads(canvas.image), tool: canvas.tool, camera: canvas.view ?? fittedView(canvas) };
+  };
+
   /** Opens an annotation from its row, at the pin that holds it. */
   const showAnnotation = (id: string) => pins.show(id, stage);
   /** The features that made the open pin's face or edge, which are marked as if it were hovered (research/21, "Annotation"). */
@@ -670,8 +713,11 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     if (event.key !== "Escape" || event.defaultPrevented) return;
     const target = event.target as Node;
     if (target !== document.body && !props.element.contains(target)) return;
-    // A field that picks stops picking first, and so does Calibrate.
+    // A document edited in place takes its own Escape.
+    if ((event.target as Element).closest?.(".cad-model__document-edit")) return;
+    // A field that picks stops picking first, and so does Calibrate, and editing in place.
     if (editor.pickTarget()) editor.setPickTarget(undefined);
+    else if (editing()) setEditing(undefined);
     else if (calibration.state()) calibration.stop();
     else if (editor.selection()) editor.select(undefined, "dialog");
     else return;
@@ -769,9 +815,15 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           canvases={shownCanvases()}
           canvasPick={calibration.state()?.id}
           onCanvasPick={calibration.pick}
+          editing={editedDocument()}
+          onEditCamera={(id, view) => canvasStore.update(id, { view })}
           sketches={shownSketches()}
           view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
-          onViewChange={saveCamera}
+          onViewChange={(view) => {
+            // Moving the camera ends editing in place, whose overlay is laid out for the camera it started with.
+            setEditing(undefined);
+            saveCamera(view);
+          }}
           onApi={(api) => (viewer = api)}
           home={views.views.home()}
           faceRefs={faceRefs(model)}
@@ -800,7 +852,23 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
               row={dialogDocument()!}
               editor={editor}
               annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }}
-              canvas={{ canvases: canvasStore, placed: placedCanvases, image: canvasImage, calibration }}
+              canvas={{
+                canvases: canvasStore,
+                placed: placedCanvases,
+                image: canvasImage,
+                calibration,
+                documents: {
+                  fits: (canvas) => isTldraw(documentInfo(withoutHeads(canvas.image)).value),
+                  fit: (canvas) => {
+                    const view = fittedView(canvas);
+                    if (view) canvasStore.update(canvas.id, { view });
+                  },
+                  editable: (canvas) => !headsOf(canvas.image) && documentInfo(withoutHeads(canvas.image)).status === "ready",
+                  editing,
+                  edit: editCanvas,
+                  done: () => setEditing(undefined),
+                },
+              }}
               onClose={() => editor.select(undefined, "dialog")}
             />
           </Match>

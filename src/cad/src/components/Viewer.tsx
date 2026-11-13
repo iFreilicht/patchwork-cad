@@ -13,6 +13,8 @@ import { cameraOf, corners, DEFAULT_MARGINS, expand, fitLens, fitted, inside, ma
 import { contactToken } from "./presence.ts";
 import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 import { iconElement } from "./icons.tsx";
+import { DOCUMENT_PX, presetCamera, scaleCamera, storedCamera } from "./documentCanvases.ts";
+import type { DocumentCamera } from "../types.ts";
 
 export type EntityKind = "face" | "edge";
 
@@ -90,7 +92,7 @@ export interface ShownCanvas {
   /** The image, drawn once, which the view makes a texture of. */
   image?: HTMLCanvasElement | undefined;
   /** Experiment: any other document, shown live by its tool in a `<patchwork-view>` placed on the plane. */
-  document?: { url: string; tool?: string | undefined; bare?: boolean | undefined } | undefined;
+  document?: { url: string; tool?: string | undefined; bare?: boolean | undefined; camera?: DocumentCamera | undefined } | undefined;
   /** Its corners in world coordinates, counterclockwise from the image's bottom left. */
   corners: [number, number, number][];
   opacity: number;
@@ -148,6 +150,13 @@ export interface ViewerProps {
   /** While points of a canvas are picked, e.g. to calibrate it: its id. A click on it gives the point, as fractions of its image from the bottom left. */
   canvasPick?: string | undefined;
   onCanvasPick?: (id: string, point: [number, number]) => void;
+  /**
+   * Experiment: a document canvas edited in place, laid over its rectangle on the screen without a
+   * 3D transform, at `url`, editable, once the camera has stopped; it is placed for the camera at
+   * the start, and should end when the camera moves. Where its tldraw camera was left is reported.
+   */
+  editing?: { id: string; url: string; tool?: string | undefined; camera?: DocumentCamera | undefined } | undefined;
+  onEditCamera?: (id: string, camera: DocumentCamera) => void;
 }
 
 export interface FaceRefs {
@@ -897,6 +906,7 @@ export function Viewer(props: ViewerProps) {
       renderer.render(scene, camera);
       for (const layer of cssLayers) if (layer.scene.children.length) layer.css.render(layer.scene, camera);
       connectDocuments();
+      placeEditing();
       if (!collapsed()) renderCube();
       frameId = requestAnimationFrame(tick);
     };
@@ -1042,8 +1052,6 @@ export function Viewer(props: ViewerProps) {
     /** A texture per drawn image, kept while a canvas shows it. */
     const textures = new Map<HTMLCanvasElement, THREE.CanvasTexture>();
     let drawnCanvases: { canvas: ShownCanvas; mesh: THREE.Mesh }[] = [];
-    /** The width in CSS pixels a document is laid out at, before it is scaled to the canvas's width. */
-    const DOCUMENT_PX = 900;
     /** The documents shown, by canvas id: kept while their URL and tool stay, so that the tool isn't mounted again. */
     const documentViews = new Map<string, { key: string; object: CSS3DObject; frame: HTMLDivElement; view: HTMLElement }>();
     /** Puts each view into its frame once the renderer has put the frame into the page: a `<patchwork-view>` connected before that never mounts its tool. */
@@ -1079,6 +1087,8 @@ export function Viewer(props: ViewerProps) {
           const frame = document.createElement("div");
           frame.className = `cad-model__document-canvas${doc.bare ? " cad-model__document-canvas--bare" : ""}`;
           const view = document.createElement("patchwork-view");
+          // The part of a tldraw drawing it shows, which the tool reads as it mounts.
+          if (doc.camera) presetCamera(doc.url, doc.camera);
           view.setAttribute("doc-url", doc.url);
           if (doc.tool) view.setAttribute("tool-id", doc.tool);
           view.style.display = "block";
@@ -1103,6 +1113,58 @@ export function Viewer(props: ViewerProps) {
         const layer = cssLayers[c.through ? 1 : 0]!;
         if (d.object.parent !== layer.scene) layer.scene.add(d.object);
       }
+    };
+    /** The document edited in place: its overlay, the URL it shows, and the width it was laid out at. */
+    let edit: { id: string; url: string; overlay: HTMLDivElement; width: number } | undefined;
+    /** Where a canvas is on the screen, in the view's pixels: the box of its corners. */
+    const screenBox = (corners: [number, number, number][]) => {
+      const rect = canvas.getBoundingClientRect();
+      const points = corners.map((p) => new THREE.Vector3(...p).project(camera)).map((v) => [((v.x + 1) / 2) * rect.width, ((1 - v.y) / 2) * rect.height] as const);
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    };
+    const endEdit = () => {
+      if (!edit) return;
+      const left = storedCamera(edit.url);
+      if (left) props.onEditCamera?.(edit.id, scaleCamera(left, edit.width, DOCUMENT_PX));
+      edit.overlay.remove();
+      const frame = documentViews.get(edit.id)?.frame;
+      if (frame) frame.style.visibility = "";
+      edit = undefined;
+      delete container.dataset["editing"];
+    };
+    /** Starts, follows or ends editing in place, as the render loop goes: the overlay is made once the camera has stopped, at the size the canvas has then. */
+    const placeEditing = () => {
+      const want = props.editing;
+      if (edit && (want?.id !== edit.id || want.url !== edit.url)) endEdit();
+      if (!want) return;
+      const drawn = drawnCanvases.find((d) => d.canvas.id === want.id);
+      if (!drawn) return;
+      const box = screenBox(drawn.canvas.corners);
+      if (!edit) {
+        if (turn || box.width < 40 || box.height < 40) return;
+        const width = Math.round(box.width);
+        const overlay = document.createElement("div");
+        overlay.className = "cad-model__document-edit";
+        overlay.style.width = `${width}px`;
+        overlay.style.height = `${Math.round(box.height)}px`;
+        container.append(overlay);
+        // The same part of the drawing as on the canvas, at this size.
+        if (want.camera) presetCamera(want.url, scaleCamera(want.camera, DOCUMENT_PX, width));
+        const view = document.createElement("patchwork-view");
+        view.setAttribute("doc-url", want.url);
+        if (want.tool) view.setAttribute("tool-id", want.tool);
+        view.style.display = "block";
+        view.style.width = "100%";
+        view.style.height = "100%";
+        overlay.append(view);
+        edit = { id: want.id, url: want.url, overlay, width };
+        container.dataset["editing"] = want.id;
+      }
+      edit.overlay.style.transform = `translate(${box.x}px, ${box.y}px)`;
+      const frame = documentViews.get(edit.id)?.frame;
+      if (frame) frame.style.visibility = "hidden";
     };
     /** Removes the drawn canvases: their geometries and own materials; the outlines' materials are the highlights'. */
     const clearCanvases = () => {
@@ -1553,6 +1615,7 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
       cube.dispose();
       dispose([...group.children, ...sketchGroup.children, ...overlayGroup.children, ...highlightGroup.children]);
+      endEdit();
       clearCanvases();
       for (const texture of textures.values()) texture.dispose();
       for (const m of markers.values()) m.label.remove();

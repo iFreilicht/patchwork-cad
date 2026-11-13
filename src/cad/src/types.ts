@@ -163,6 +163,15 @@ export interface Canvas {
   live?: boolean;
   /** Experiment: our stylesheet hides the tool's own chrome, for tools we know (tldraw). */
   bare?: boolean;
+  /** Experiment: the part of a tldraw drawing it shows, as tldraw's camera for the document laid out 900 pixels wide; fitted to the drawing if not given. */
+  view?: DocumentCamera;
+}
+
+/** tldraw's camera: a page point is at `(point + camera) * z` on the screen. */
+export interface DocumentCamera {
+  x: number;
+  y: number;
+  z: number;
 }
 
 /** A document shown as a pin on a face, edge or feature, or on the model as a whole (research/21, "Annotation"). */

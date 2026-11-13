@@ -1890,3 +1890,15 @@
 .cad-model__document-canvas--bare .tl-container {
   background: transparent !important;
 }
+
+/* Experiment: a document edited in place, over its canvas, face on. */
+.cad-model__document-edit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  overflow: hidden;
+  background: var(--cad-model-bg);
+  outline: 2px solid var(--cad-model-accent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+}

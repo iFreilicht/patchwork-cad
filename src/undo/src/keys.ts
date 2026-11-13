@@ -25,6 +25,15 @@ const isMac = () => typeof navigator !== "undefined" && /Mac|iP(hone|[oa]d)/.tes
 /** Form fields keep the browser's own undo of their text; CodeMirror's editable content doesn't. */
 const ownsUndo = (el: Element) => el.closest("input, textarea, select") !== null || (el.closest("[contenteditable]") !== null && el.closest(".cm-editor") === null);
 
+/** Whether `el` is in another tool's view nested in a bound element, e.g. a document edited inside a tool: that tool takes its own keys. */
+const inNestedView = (el: Element) => {
+  for (let at: Element | null = el; at; at = at.parentElement) {
+    if (bound.has(at)) return false;
+    if (at.localName === "patchwork-view") return !!boundFor(at.parentElement);
+  }
+  return false;
+};
+
 /** The innermost bound element containing `el`. */
 const boundFor = (el: Element | null): Element | undefined => {
   for (let at = el; at; at = at.parentElement) if (bound.has(at)) return at;
@@ -38,7 +47,7 @@ function onKeyDown(event: KeyboardEvent) {
   const redo = (key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey && !isMac());
   if (!undo && !redo) return;
   const target = (event.composedPath()[0] as Element | undefined) ?? document.activeElement;
-  if (target instanceof Element && ownsUndo(target)) return;
+  if (target instanceof Element && (ownsUndo(target) || inNestedView(target))) return;
   // Without a focused tool (e.g. after clicking a 3D view, which takes no focus), the tool last used.
   const el = (target instanceof Element ? boundFor(target) : undefined) ?? (lastUsed?.isConnected ? lastUsed : undefined);
   const manager = el && bound.get(el);

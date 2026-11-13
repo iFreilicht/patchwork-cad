@@ -286,7 +286,8 @@ test("a document the model imports, dropped in the view, can be an annotation; a
   const view = await viewer(page).boundingBox();
   await drag(page, "notes.txt", { x: view!.x + 20, y: view!.y + view!.height - 20 });
   const insert = page.locator('.cad-editor__dialog[data-feature="insert"]');
-  await expect(insert.getByRole("radio")).toHaveText(["Import", "Annotation"]);
+  // Canvas too, as the experiment of research/21 ("Canvas") shows any document on one.
+  await expect(insert.getByRole("radio")).toHaveText(["Canvas", "Import", "Annotation"]);
   await insert.getByRole("radio", { name: "Annotation" }).click();
   await expect.poll(() => annotationsOf(page)).toEqual([{ id: expect.any(String) as unknown as string, doc: docs["notes.txt"]! }]);
 

@@ -4,10 +4,10 @@
  * current heads or editable. Screenshots only; nothing here is a claim the tool keeps.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, clickHome, clickViewCube, createModel, docUrl, editorView, setModelSource, timelineEntry } from "../cad.ts";
+import { CAD_MODULES, clickHome, hideSidebars, clickViewCube, createModel, docUrl, editorView, setModelSource, timelineEntry } from "../cad.ts";
 import { sidebarDocuments, type Repo } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { bootToFrame, createViaMenu } from "../ui.ts";
+import { bootToFrame, createViaMenu, pressMod } from "../ui.ts";
 
 test.use({ siteModules: CAD_MODULES });
 // tldraw loads its fonts and icons from its CDN, which the egress proxy refuses.
@@ -133,4 +133,91 @@ test("documents on canvases: tldraw, markdown and data, read-only and live", asy
   await one("markdown-doc-readonly", { id: "k1", name: "notes", image: docs["Bracket notes"], aspect: 0.75 });
   await one("tldraw-readonly-bare", { id: "t4", name: "sketch", image: drawing, tool: "tldraw5", bare: true });
   await one("tldraw-readonly-half", { id: "t3", name: "sketch", image: drawing, tool: "tldraw5", opacity: 0.5 });
+});
+
+const shapeCount = (page: Page, url: string) =>
+  page.evaluate(async (u) => Object.values(((await (window as unknown as { repo: Repo }).repo.find(u)).doc() as { store: Record<string, { typeName?: string }> }).store).filter((r) => r.typeName === "shape").length, url);
+
+test("a tldraw drawing fitted to its canvas, and edited in place; a markdown document too", async ({ users }) => {
+  const [a] = await users(1);
+  const page = a!.page;
+  await bootToFrame(page);
+  const drawing = await tldraw(page);
+  const docs = await sidebarDocuments(page, { "Bracket notes": { data: { "@patchwork": { type: "markdown" }, content: NOTES } } });
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await hideSidebars(page);
+  await setModelSource(page, PLATE, "replace");
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+
+  const base = { angle: 0, opacity: 1, through: false };
+  const behind = { origin: [0, 20, 0], normal: [0, -1, 0], xDir: [1, 0, 0] };
+  await setCanvases(page, [
+    { ...base, id: "t", name: "sketch", image: drawing, tool: "tldraw5", bare: true, plane: behind, center: [10, 2.5], width: 44 },
+    { ...base, id: "m", name: "notes", image: docs["Bracket notes"], plane: { origin: [-15, 0, 0], normal: [1, 0, 0], xDir: [0, 1, 0] }, center: [5, 8], width: 24, aspect: 1 },
+  ]);
+  await clickViewCube(page, [0, -1, 0]);
+  await page.waitForTimeout(800);
+  await zoomOut(page, 5);
+  await page.waitForTimeout(5000);
+  await page.screenshot({ path: `${shots}/experiment-tldraw-fitted.png` });
+
+  // Its dialog: Height, Fit and Edit in place besides an image's fields.
+  await page.getByRole("list", { name: "Canvases", exact: true }).locator(".cad-editor__browser-name").first().click();
+  await expect(page.locator(".cad-editor__dialog")).toHaveAttribute("data-role", "canvas");
+  await page.screenshot({ path: `${shots}/experiment-tldraw-dialog.png` });
+
+  // Edited in place: face on, live, with tldraw's own UI; a rectangle drawn there is in the drawing, and tldraw's undo takes it back.
+  const before = await shapeCount(page, drawing);
+  await page.getByRole("button", { name: "Edit in place", exact: true }).click();
+  const overlay = page.locator(".cad-model__document-edit");
+  await overlay.locator(".tl-canvas").waitFor({ timeout: 30_000 });
+  await page.waitForTimeout(2000);
+  await page.screenshot({ path: `${shots}/experiment-tldraw-edit.png` });
+  const box = (await overlay.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.keyboard.press("r");
+  const from = [box.x + box.width * 0.4, box.y + box.height * 0.55];
+  await page.mouse.move(from[0]!, from[1]!);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(from[0]! + i * box.width * 0.02, from[1]! + i * box.height * 0.015);
+  await page.mouse.up();
+  await page.screenshot({ path: `${shots}/experiment-tldraw-after-drag.png` });
+  await expect.poll(() => shapeCount(page, drawing)).toBe(before + 1);
+  await page.keyboard.press("Escape");
+  await page.screenshot({ path: `${shots}/experiment-tldraw-edit-drawn.png` });
+  // The CAD editor's undo, Mod+Z (Ctrl under the harness's Windows emulation), leaves a key pressed in the drawing to tldraw.
+  const cadCanvases = () => page.evaluate(async (u) => JSON.stringify(((await (window as unknown as { repo: Repo }).repo.find(u)).doc() as { cad?: unknown }).cad), docUrl(page));
+  const cadBefore = await cadCanvases();
+  await pressMod(page, "z");
+  await page.waitForTimeout(800);
+  expect(await cadCanvases()).toBe(cadBefore);
+  // tldraw takes its undo from the host, macOS here, whatever the emulated platform.
+  await page.keyboard.press("Meta+z");
+  await expect.poll(() => shapeCount(page, drawing)).toBe(before);
+  await expect(overlay).toHaveCount(1);
+  await page.keyboard.press("Meta+Shift+z");
+  await expect.poll(() => shapeCount(page, drawing)).toBe(before + 1);
+
+  // Done: back to the read-only canvas, which shows the new rectangle.
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(overlay).toHaveCount(0);
+  await page.waitForTimeout(5000);
+  await page.screenshot({ path: `${shots}/experiment-tldraw-done.png` });
+
+  // The markdown document, edited in place from the side.
+  await page.getByRole("list", { name: "Canvases", exact: true }).locator(".cad-editor__browser-name").nth(1).click();
+  await page.getByRole("button", { name: "Edit in place", exact: true }).click();
+  await overlay.locator(".cm-content").waitFor({ timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  await overlay.locator(".cm-content").click();
+  await pressMod(page, "End");
+  await page.keyboard.type("\nAdded in the CAD editor.");
+  await page.waitForTimeout(1000);
+  await page.screenshot({ path: `${shots}/experiment-markdown-edit.png` });
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(overlay).toHaveCount(0);
+  await zoomOut(page, 3);
+  await page.waitForTimeout(4000);
+  await page.screenshot({ path: `${shots}/experiment-markdown-done.png` });
 });
