@@ -2,6 +2,7 @@ packages:
   - research/08-module-evaluation/experiment
   - research/16-undo-redo/tldraw
   - src/cad
+  - src/drawio
   - src/features
   - src/harness
   - src/undo

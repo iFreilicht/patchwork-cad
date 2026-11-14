@@ -122,10 +122,14 @@ test("what a file is: its MIME type, else its extension, and its content as text
   expect(fileBytes({ content: utf8 })).toBe(utf8);
 });
 
-test("a file is a document of the file datatype, a CAD model, or one without a datatype with a file's content and MIME type", () => {
+test("a file is a document of the file datatype, a CAD model, one without a datatype with a file's content and MIME type, or one of another datatype with an extension too", () => {
   expect(isFile({ "@patchwork": { type: "file" }, content: new Uint8Array(), mimeType: "application/octet-stream" })).toBe(true);
   expect(isFile({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" })).toBe(true);
   expect(isFile({ content: "export const a = 1;", mimeType: "application/javascript" })).toBe(true);
+  // A draw.io diagram (src/drawio), a .drawio.svg file of a datatype of its own.
+  const diagram = { "@patchwork": { type: "drawio" }, name: "Bracket", extension: "drawio.svg", mimeType: "image/svg+xml", content: "<svg/>" };
+  expect(isFile(diagram)).toBe(true);
+  expect(isFile(diagram) && fileKind(diagram)).toBe("svg");
   // Data that happens to have a `content` key.
   expect(isFile({ content: "Hello", title: "Note" })).toBe(false);
   expect(isFile({ "@patchwork": { type: "sheet" }, content: "a", mimeType: "text/plain" })).toBe(false);

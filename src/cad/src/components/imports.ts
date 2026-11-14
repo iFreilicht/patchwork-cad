@@ -140,16 +140,18 @@ export interface FileLike {
 
 /**
  * Whether a document is a file (research/21, "Files as modules"): of Patchwork's `file` datatype, a
- * CAD model, or a document without a datatype that has a file's `content` (text or bytes) and
- * `mimeType`, as JS libraries made by scripts are. Any other document is data, also one with a
- * `content` key.
+ * CAD model, a document without a datatype that has a file's `content` (text or bytes) and
+ * `mimeType`, as JS libraries made by scripts are, or a document of another datatype that has a
+ * file's `content`, `mimeType` and `extension` too, as a draw.io diagram (src/drawio) is. Any other
+ * document is data, also one with a `content` key.
  */
 export function isFile(value: unknown): value is FileLike {
   if (!value || typeof value !== "object" || !("content" in value)) return false;
   const type = (value as { "@patchwork"?: { type?: unknown } })["@patchwork"]?.type;
   if (type === "file" || type === "cad-model") return true;
-  const { content, mimeType } = value as FileLike;
-  return type === undefined && typeof mimeType === "string" && (typeof content === "string" || content instanceof Uint8Array || isImmutableString(content));
+  const { content, mimeType, extension } = value as FileLike;
+  const fileContent = typeof mimeType === "string" && (typeof content === "string" || content instanceof Uint8Array || isImmutableString(content));
+  return fileContent && (type === undefined || typeof extension === "string");
 }
 
 /**

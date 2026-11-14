@@ -7,6 +7,8 @@ import { createViaMenu, editor, pressMod } from "./ui.ts";
 /** The CAD tool package (src/cad), served as a static module. Build it first (`pnpm --filter patchwork-cad build`). */
 export const CAD_DIR = join(HARNESS_DIR, "..", "cad");
 export const CAD_MODULES = { cad: CAD_DIR };
+/** The draw.io tool package (src/drawio), which brings draw.io's web app; build it inside `nix develop`. */
+export const DRAWIO_DIR = join(HARNESS_DIR, "..", "drawio");
 
 /**
  * M1 from the naming benchmark (research/03), written with replicad: a block

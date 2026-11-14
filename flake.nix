@@ -32,10 +32,19 @@
               subduction.packages.${system}.subduction_cli
             ];
 
+            # draw.io's web app, which the drawio tool's build copies next to its bundle.
+            DRAWIO_WEBAPP = import ./src/drawio/webapp.nix { inherit pkgs; };
+
             # Playwright uses the Nix-provided browsers (no download).
             PLAYWRIGHT_BROWSERS_PATH = pkgs.playwright-driver.browsers;
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
           };
+        }
+      );
+
+      packages = forAllSystems (
+        _: pkgs: {
+          drawio-webapp = import ./src/drawio/webapp.nix { inherit pkgs; };
         }
       );
 
