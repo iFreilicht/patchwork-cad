@@ -22,8 +22,8 @@ import { bridge, editorUi, editorXml, mergeInto, type DrawioWindow, type EditorU
 import { DiagramPresence, presenceColor } from "./presence.ts";
 import { diagramOf, EMPTY_DIAGRAM, textOfDataUri } from "./svg.ts";
 
-/** draw.io's web app, next to the bundle: this module is a chunk in dist/assets (vite.config.ts). */
-const WEBAPP = new URL("../drawio/index.html", import.meta.url);
+/** draw.io's web app, next to the bundle: this module is a chunk in dist/assets (vite.config.ts). The build copies it there, so vite finds nothing to bundle. */
+const WEBAPP = new URL(/* @vite-ignore */ "../drawio/index.html", import.meta.url);
 
 /**
  * Embed mode, without the buttons that save or close: every change is saved as it is made. Not
