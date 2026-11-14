@@ -40,6 +40,41 @@ const sameSvg = (svg: string) => svg.replace(/\bge-svg-[\w-]+/g, "ge-svg-drawio"
 
 type Message = { event: string; data?: string };
 
+/**
+ * Whether what `element` shows is dark: as Patchwork's theme has it (its stylesheet's `color-scheme`,
+ * the theme following the browser's light or dark mode), else as the browser prefers. `onChange`
+ * follows a change of either; the returned function stops it.
+ */
+function colorScheme(element: HTMLElement, onChange: (dark: boolean) => void): { dark(): boolean; stop(): void } {
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const dark = () => {
+    const schemes = getComputedStyle(element).colorScheme.split(/\s+/);
+    const light = schemes.includes("light");
+    return schemes.includes("dark") === light ? query.matches : !light;
+  };
+  let last = dark();
+  const check = () => {
+    if (dark() === last) return;
+    last = !last;
+    onChange(last);
+  };
+  // A theme is an attribute on the root, and a stylesheet that loads after it is set.
+  const observer = new MutationObserver((records) => {
+    for (const record of records) for (const node of record.addedNodes) if (node instanceof HTMLLinkElement) node.addEventListener("load", check, { once: true });
+    check();
+  });
+  observer.observe(document.documentElement, { attributes: true });
+  observer.observe(document.head, { childList: true });
+  query.addEventListener("change", check);
+  return {
+    dark,
+    stop() {
+      observer.disconnect();
+      query.removeEventListener("change", check);
+    },
+  };
+}
+
 export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement): () => void {
   element.style.position = "relative";
   element.style.height = "100%";
@@ -51,6 +86,8 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
   iframe.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0";
   const url = new URL(WEBAPP);
   for (const [key, value] of Object.entries(EDITOR_PARAMS)) url.searchParams.set(key, value);
+  const scheme = colorScheme(element, (dark) => ui?.setDarkMode(dark));
+  url.searchParams.set("dark", scheme.dark() ? "1" : "0");
   iframe.src = url.href;
   element.append(iframe);
   const post = (message: object) => iframe.contentWindow?.postMessage(JSON.stringify(message), "*");
@@ -142,6 +179,7 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
       // The editor shows the document now; draw.io's plugin API reaches it from here on.
       ui = editorUi(win());
       if (!ui) return console.warn("draw.io's editor is out of reach: changes are not saved");
+      ui.setDarkMode(scheme.dark());
       shadow = parseDiagram(editorXml(ui));
       shown = bridge(win(), ui, (view) => presence.set(view));
       showPeers();
@@ -183,6 +221,7 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
     window.removeEventListener("message", onMessage);
     handle.off("change", onChange);
     offPeers();
+    scheme.stop();
     unsubscribe();
     shown?.destroy();
     presence.stop();

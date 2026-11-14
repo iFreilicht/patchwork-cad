@@ -34,6 +34,7 @@ export interface EditorUi {
   editor: { graph: Graph };
   currentPage?: { getId(): string } | null;
   getCurrentFile(): DrawioFile | null;
+  setDarkMode(dark: boolean): void;
   getPagesForXml(xml: string): unknown;
   getFileData(forceXml: boolean, forceSvg?: boolean, forceHtml?: boolean, embeddedCallback?: unknown, ignoreSelection?: boolean, currentPage?: boolean, node?: unknown, compact?: boolean, file?: unknown, uncompressed?: boolean): string;
   addListener(name: string, listener: () => void): void;

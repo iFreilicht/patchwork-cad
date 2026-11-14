@@ -79,6 +79,56 @@ test("a change from elsewhere is merged into the open editor", async ({ users })
   await expect.poll(async () => (await diagramOf(page, url)).content, { timeout: 15_000 }).toContain("From elsewhere");
 });
 
+test.describe("dark", () => {
+  test.use({ colorScheme: "dark" });
+
+  test("the editor is light or dark as Patchwork is, and the diagram's SVG the same either way", async ({ users }, info) => {
+    const [a] = await users(1);
+    const page = a!.page;
+    await bootToFrame(page);
+    await createViaMenu(page, "draw.io Diagram");
+    const url = docUrl(page);
+    const frame = editorFrame(page);
+    await expect(frame.locator(".geDiagramContainer")).toBeVisible({ timeout: 60_000 });
+    const dark = frame.locator(".geEditor.geDarkMode");
+    await expect(dark).toHaveCount(1);
+    const box = { tag: "mxCell", attributes: { id: "box", value: "Box", style: "rounded=0;whiteSpace=wrap;html=1;", vertex: "1", parent: "1" }, content: '<mxGeometry x="40" y="40" width="160" height="80" as="geometry"/>' };
+    const setBox = (present: boolean) =>
+      page.evaluate(
+        async ([u, cell, add]) => {
+          const handle = await (window as unknown as { repo: Repo }).repo.find(u!);
+          handle.change((d) => {
+            const p = (d as { pages: { cells: Record<string, unknown>; order: string[] }[] }).pages[0]!;
+            if (add) {
+              p.cells["box"] = cell;
+              p.order.push("box");
+            } else {
+              delete p.cells["box"];
+              p.order.splice(p.order.indexOf("box"), 1);
+            }
+          });
+        },
+        [url, box, present] as const,
+      );
+    const content = async () => (await diagramOf(page, url)).content;
+    await setBox(true);
+    await expect.poll(content, { timeout: 15_000 }).toContain('data-cell-id="box"');
+    const inDark = await content();
+    if (shots) await page.screenshot({ path: `${shots}/drawio-dark-${info.project.name}.png` });
+
+    // The browser turns light, and Patchwork's theme with it: the editor follows, without reloading.
+    await page.emulateMedia({ colorScheme: "light" });
+    await expect(dark).toHaveCount(0, { timeout: 10_000 });
+    await expect(frame.locator(".geDiagramContainer").getByText("Box")).toBeVisible();
+    // The same diagram exported in light mode is the same file.
+    await setBox(false);
+    await expect.poll(content, { timeout: 15_000 }).not.toContain('data-cell-id="box"');
+    await setBox(true);
+    await expect.poll(content, { timeout: 15_000 }).toContain('data-cell-id="box"');
+    expect(await content()).toBe(inDark);
+  });
+});
+
 test("a version that can't be edited is shown as its picture", async ({ users }) => {
   const [a] = await users(1);
   const page = a!.page;
