@@ -176,7 +176,14 @@ importers:
         version: 5.0.3(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2))
 
   src/drawio:
+    dependencies:
+      '@inkandswitch/patchwork-providers':
+        specifier: 0.5.3
+        version: 0.5.3(@automerge/automerge-repo@2.6.0-subduction.48)
     devDependencies:
+      '@automerge/automerge':
+        specifier: 3.4.1
+        version: 3.4.1
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48

@@ -9,12 +9,14 @@ import { CAD_DIR, DRAWIO_DIR, createModel, hideSidebars, docUrl, editorView, set
 import { drag, sidebarDocuments, type Repo } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame, createViaMenu } from "../ui.ts";
+import { docPathWith } from "../cad.ts";
 
 test.use({ siteModules: { cad: CAD_DIR, drawio: DRAWIO_DIR } });
 
 const shots = process.env["CAD_SHOTS"];
 
-type Diagram = { name: string; extension: string; mimeType: string; content: string };
+type Cell = { tag: string; attributes: Record<string, string>; content: string };
+type Diagram = { name: string; extension: string; mimeType: string; content: string; pages?: { id: string; cells: Record<string, Cell>; order: string[] }[] };
 const diagramOf = (page: Page, url: string) => page.evaluate(async (u) => JSON.parse(JSON.stringify((await (window as unknown as { repo: Repo }).repo.find(u)).doc())) as Diagram, url);
 const editorFrame = (page: Page): FrameLocator => page.frameLocator("iframe.drawio-editor");
 
@@ -55,7 +57,7 @@ test("a new diagram is edited in draw.io's editor, and each change is saved as a
   await expect.poll(async () => (await diagramOf(page, url)).content, { timeout: 15_000 }).not.toBe(before);
 });
 
-test("a change from elsewhere is loaded into the open editor", async ({ users }) => {
+test("a change from elsewhere is merged into the open editor", async ({ users }) => {
   const [a] = await users(1);
   const page = a!.page;
   await bootToFrame(page);
@@ -63,14 +65,18 @@ test("a change from elsewhere is loaded into the open editor", async ({ users })
   const url = docUrl(page);
   const frame = editorFrame(page);
   await expect(frame.locator(".geDiagramContainer")).toBeVisible({ timeout: 60_000 });
-  await page.evaluate(
-    async ([u, svg]) => (await (window as unknown as { repo: Repo }).repo.find(u!)).change((d) => (d["content"] = svg)),
-    [url, boxSvg("From elsewhere", 160, 80)] as const,
-  );
+  // Another tab adds a cell to the diagram's records, as a collaborator's editor does.
+  await page.evaluate(async (u) => {
+    const handle = await (window as unknown as { repo: Repo }).repo.find(u);
+    handle.change((d) => {
+      const p = (d as { pages: { cells: Record<string, unknown>; order: string[] }[] }).pages[0]!;
+      p.cells["ext"] = { tag: "mxCell", attributes: { id: "ext", value: "From elsewhere", style: "rounded=0;whiteSpace=wrap;html=1;", vertex: "1", parent: "1" }, content: '<mxGeometry x="40" y="40" width="160" height="80" as="geometry"/>' };
+      p.order.push("ext");
+    });
+  }, url);
   await expect(frame.locator(".geDiagramContainer").getByText("From elsewhere")).toBeVisible({ timeout: 15_000 });
-  // Loading it is no change of the editor's: the content stays as it was written.
-  await page.waitForTimeout(2000);
-  expect((await diagramOf(page, url)).content).toBe(boxSvg("From elsewhere", 160, 80));
+  // The SVG follows: the editor exports it again.
+  await expect.poll(async () => (await diagramOf(page, url)).content, { timeout: 15_000 }).toContain("From elsewhere");
 });
 
 test("a version that can't be edited is shown as its picture", async ({ users }) => {
@@ -132,4 +138,81 @@ export default function main() {
     [docs["Bracket sketch"]!, boxSvg("Square", 100, 100)] as const,
   );
   await expect.poll(aspect, { timeout: 30_000 }).toBe(1);
+});
+
+/** Runs `fn` with draw.io's editor of the page's diagram, through its plugin API, as the tool reaches it. */
+async function inEditor<T>(page: Page, fn: string): Promise<T> {
+  const frame = page.frames().find((f) => f.url().includes("/drawio/index.html"));
+  if (!frame) throw new Error("no draw.io editor on the page");
+  return frame.evaluate((body) => {
+    let ui: unknown;
+    (window as unknown as { Draw: { loadPlugin(cb: (u: unknown) => void): void } }).Draw.loadPlugin((u) => (ui = u));
+    return new Function("ui", body)(ui) as T;
+  }, fn);
+}
+
+/** Two users with the same new diagram open, each in the draw.io tool. */
+async function twoEditors(users: (n: number) => Promise<{ page: Page }[]>) {
+  const [a, b] = await users(2);
+  if (!a || !b) throw new Error("users(2) returned fewer than two users");
+  await bootToFrame(a.page);
+  await createViaMenu(a.page, "draw.io Diagram");
+  await bootToFrame(b.page, docPathWith(a.page));
+  for (const p of [a.page, b.page]) await expect(editorFrame(p).locator(".geDiagramContainer")).toBeVisible({ timeout: 60_000 });
+  return { a: a.page, b: b.page, url: docUrl(a.page) };
+}
+
+const labels = (page: Page) => inEditor<string[]>(page, "const m = ui.editor.graph.model; return Object.values(m.cells).filter((c) => c.vertex).map((c) => c.value).sort();");
+
+test("two users' edits at once merge per shape, and per property of the same shape", async ({ users }) => {
+  const { a, b, url } = await twoEditors(users);
+  // Each adds a shape at the same time.
+  await Promise.all([
+    inEditor(a, 'const g = ui.editor.graph; g.insertVertex(g.getDefaultParent(), "fromA", "From A", 20, 20, 120, 60);'),
+    inEditor(b, 'const g = ui.editor.graph; g.insertVertex(g.getDefaultParent(), "fromB", "From B", 220, 20, 120, 60);'),
+  ]);
+  for (const p of [a, b]) await expect.poll(() => labels(p), { timeout: 20_000 }).toEqual(["From A", "From B"]);
+  await expect.poll(async () => Object.keys((await diagramOf(a, url)).pages?.[0]?.cells ?? {}).sort(), { timeout: 20_000 }).toEqual(["0", "1", "fromA", "fromB"]);
+
+  // One moves A's shape while the other colours it: both stay.
+  await Promise.all([
+    inEditor(a, 'const g = ui.editor.graph; g.moveCells([g.model.getCell("fromA")], 0, 100);'),
+    inEditor(b, 'const g = ui.editor.graph; g.setCellStyles("fillColor", "#ffcc00", [g.model.getCell("fromA")]);'),
+  ]);
+  const shape = (p: Page) => inEditor<[number, string]>(p, 'const c = ui.editor.graph.model.getCell("fromA"); return [c.geometry.y, c.style];');
+  for (const p of [a, b]) await expect.poll(() => shape(p), { timeout: 20_000 }).toEqual([120, expect.stringContaining("fillColor=#ffcc00")]);
+
+  // Both move B's shape: one move stays, the same in both editors and the document.
+  await Promise.all([
+    inEditor(a, 'const g = ui.editor.graph; g.moveCells([g.model.getCell("fromB")], 0, 50);'),
+    inEditor(b, 'const g = ui.editor.graph; g.moveCells([g.model.getCell("fromB")], 0, 200);'),
+  ]);
+  const y = (p: Page) => inEditor<number>(p, 'return ui.editor.graph.model.getCell("fromB").geometry.y;');
+  const stored = async () => /\by="(\d+)"/.exec((await diagramOf(a, url)).pages?.[0]?.cells["fromB"]?.content ?? "")?.[1];
+  const agreed = async () => {
+    const all = [await y(a), await y(b), Number(await stored())];
+    return all.every((v) => v === all[0]) ? all[0] : all;
+  };
+  await expect.poll(agreed, { timeout: 20_000 }).toEqual(expect.any(Number));
+  expect([70, 220]).toContain(await agreed());
+  // Neither editor reloaded: the move is still the first user's to undo.
+  expect(await inEditor<number>(a, "return ui.editor.undoManager.history.length;")).toBeGreaterThan(0);
+});
+
+test("collaborators see each other's pointer, with their name, and selection in their colour", async ({ users }, info) => {
+  const { a, b } = await twoEditors(users);
+  await inEditor(a, 'const g = ui.editor.graph; g.insertVertex(g.getDefaultParent(), "shared", "Shared", 120, 80, 160, 80);');
+  await expect.poll(() => labels(b), { timeout: 20_000 }).toEqual(["Shared"]);
+  // The first user points into the diagram and selects the shape.
+  const box = (await a.locator("iframe.drawio-editor").boundingBox())!;
+  await a.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.5, { steps: 5 });
+  await inEditor(a, 'const g = ui.editor.graph; g.setSelectionCell(g.model.getCell("shared"));');
+  const peerCursor = editorFrame(b).locator(".patchwork-peer-cursor");
+  await expect(peerCursor).toHaveCount(1, { timeout: 15_000 });
+  // Their selection: draw.io's own highlight of the cell, in their colour.
+  await expect.poll(() => inEditor<number>(b, 'return [...ui.editor.graph.container.querySelectorAll("[stroke]")].filter((p) => p.getAttribute("stroke") !== "none" && p.getAttribute("stroke-width") === "3").length;'), { timeout: 15_000 }).toBeGreaterThan(0);
+  if (shots) await b.screenshot({ path: `${shots}/drawio-presence-${info.project.name}.png` });
+  // Gone when they leave.
+  await a.close();
+  await expect(peerCursor).toHaveCount(0, { timeout: 30_000 });
 });
