@@ -13,7 +13,7 @@ A document can play several roles in a model; the role, not the document's type,
 | Text, bytes | a file's content, for the roles below | any file | code (import) | done ([Files as modules](#files-as-modules)) |
 | Sketch geometry | the curves of a drawing, as a profile | SVG, later DXF and tldraw drawings | code | SVG done ([Sketch from a drawing](#sketch-from-a-drawing)) |
 | Text | a font's outlines | TTF files | code | an SVG's texts done ([Sketch from a drawing](#sketch-from-a-drawing)); text of its own later |
-| Body | a solid or mesh | STEP and STL files, other models | code | with assemblies |
+| Body | a solid or mesh | STEP and STL files, other models | code | STEP [suggested](#files-as-modules); STL and other models with assemblies |
 | Decal | an image on faces, part of the product | PNG, JPEG, SVG | code | [suggested](#decal) |
 | Canvas | an image on a plane, to trace or compare | PNG, JPEG, SVG, [draw.io diagrams](../src/drawio/) | the `cad` field | done ([Canvas](#canvas)) |
 | Annotation | itself, shown at a place on the model | any document | the `cad` field | done ([Annotation](#annotation)) |
@@ -231,7 +231,9 @@ A model with `automerge:` imports is "Portable only within the Automerge network
 4. **Canvases:** a textured plane, its dialog and Calibrate; no kernel work. Done ([Implementation](#implementation)).
 5. **Sketch from SVG:** the richer `Profile` and picking among a sketch's profiles, as an item of its own before sketch constraints; then drops onto faces. Done ([Implementation](#implementation)).
 6. **Decals:** appearance on bodies, the projector.
-7. **Fonts and STEP/STL bodies,** with assemblies.
+7. **Text feature:** text of its own in a sketch, in the fonts `svg()` already draws its texts in ([Sketch from a drawing](#sketch-from-a-drawing)).
+8. **STEP bodies:** a STEP file as a body with [`body()`](11-adopting-shapes.md#body), joined or cut as any other ([Files as modules](#files-as-modules)); no assemblies needed.
+9. **STL meshes and other models,** with assemblies. An STL file is a mesh: replicad's `importSTL` "converts through OpenCascade's BRep representation", which "can be relatively long depending on how much tesselation has been done to your STL" and "can fail in bad ways", while `importSTLAsMesh` "directly creates a MeshShape from the triangle data" ([replicad.d.ts](../node_modules/.pnpm/replicad@1.1.0/node_modules/replicad/dist/replicad.d.ts)). Another model is a placed component.
 
 ## Implementation
 
