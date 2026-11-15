@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, untrack } from "solid-js";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
@@ -268,7 +268,7 @@ export interface ViewerTestHook {
   canvases(): { id: string; opacity: number; through: boolean; highlight: string | undefined; world: [number, number, number][]; corners: { x: number; y: number }[] }[];
   /** Where a point of a canvas's image, as fractions of it from the bottom left, is on the screen. */
   canvasPoint(id: string, u: number, v: number): { x: number; y: number } | undefined;
-  /** The regions drawn, and for each a point on the screen where a click picks it, if one is in the view. */
+  /** The regions drawn, whether they are drawn as chosen and as hovered, and for each a point on the screen where a click picks it, if one is in the view. */
   regions(): { key: string; chosen: boolean; hovered: boolean; point: { x: number; y: number } | undefined }[];
 }
 
@@ -1138,23 +1138,25 @@ export function Viewer(props: ViewerProps) {
     const regionMaterials = { chosen: highlightFace(accent, 0.5), hovered: highlightFace(hover, 0.45), chosenHovered: highlightFace(accent, 0.75), other: highlightFace(themeColor(container, "--cad-model-fg"), 0.14) };
     const [hoveredRegion, setHoveredRegion] = createSignal<string>();
     let drawnRegions: { region: ShownRegion; mesh: THREE.Mesh }[] = [];
+    const regionMaterial = (region: ShownRegion, hovered: string | undefined) =>
+      region.key === hovered ? (region.chosen ? regionMaterials.chosenHovered : regionMaterials.hovered) : region.chosen ? regionMaterials.chosen : regionMaterials.other;
     createEffect(() => {
       for (const d of drawnRegions) d.mesh.geometry.dispose();
       regionGroup.clear();
+      // Drawn as they are now: the effect that follows hovering may have run before this one.
+      const hovered = untrack(hoveredRegion);
       drawnRegions = (props.regions ?? []).map((region) => {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute("position", new THREE.Float32BufferAttribute(region.triangles, 3));
-        const mesh = new THREE.Mesh(geometry, regionMaterials.other);
+        const mesh = new THREE.Mesh(geometry, regionMaterial(region, hovered));
         regionGroup.add(mesh);
         return { region, mesh };
       });
-      if (!drawnRegions.some((d) => d.region.key === hoveredRegion())) setHoveredRegion(undefined);
+      if (hovered !== undefined && !drawnRegions.some((d) => d.region.key === hovered)) setHoveredRegion(undefined);
     });
     createEffect(() => {
-      // After the regions are drawn anew, as the effect before draws them.
-      void props.regions;
       const hovered = hoveredRegion();
-      for (const d of drawnRegions) d.mesh.material = d.region.key === hovered ? (d.region.chosen ? regionMaterials.chosenHovered : regionMaterials.hovered) : d.region.chosen ? regionMaterials.chosen : regionMaterials.other;
+      for (const d of drawnRegions) d.mesh.material = regionMaterial(d.region, hovered);
       container.dataset["regionHovered"] = hovered ?? "";
       props.onRegionHover?.(hovered);
     });
@@ -1788,7 +1790,9 @@ export function Viewer(props: ViewerProps) {
             const at = { x: Math.round(p.x), y: Math.round(p.y) };
             if (document.elementFromPoint(at.x, at.y) === canvas && regionAt(at.x, at.y) === region.key) point = at;
           }
-          return { key: region.key, chosen: region.chosen, hovered: hoveredRegion() === region.key, point };
+          // As drawn, by the material it is drawn with.
+          const drawn = mesh.material;
+          return { key: region.key, chosen: drawn === regionMaterials.chosen || drawn === regionMaterials.chosenHovered, hovered: drawn === regionMaterials.hovered || drawn === regionMaterials.chosenHovered, point };
         }),
       peerMarkers: () =>
         [...markers].map(([key, m]) => {
