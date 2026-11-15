@@ -55,6 +55,8 @@ test("a new diagram is edited in draw.io's editor, and each change is saved as a
   const before = content;
   await shapes.nth(4).click();
   await expect.poll(async () => (await diagramOf(page, url)).content, { timeout: 15_000 }).not.toBe(before);
+  // Saved, nothing is lost on leaving: draw.io doesn't ask before the page is reloaded or closed.
+  await expect.poll(() => inEditor<[boolean, unknown]>(page, "return [ui.editor.modified, window.onbeforeunload ? window.onbeforeunload() ?? null : null];")).toEqual([false, null]);
 });
 
 test("a change from elsewhere is merged into the open editor", async ({ users }) => {

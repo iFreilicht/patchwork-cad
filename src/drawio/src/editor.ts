@@ -31,7 +31,7 @@ interface DrawioFile {
   mergeFile(file: object, success: () => void, error: (e: unknown) => void): void;
 }
 export interface EditorUi {
-  editor: { graph: Graph };
+  editor: { graph: Graph; modified: boolean; setModified(modified: boolean): void };
   currentPage?: { getId(): string } | null;
   getCurrentFile(): DrawioFile | null;
   setDarkMode(dark: boolean): void;

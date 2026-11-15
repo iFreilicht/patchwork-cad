@@ -139,10 +139,13 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
       changed();
     }
     shadow = pages;
+    // The document has what the editor shows: nothing is lost on leaving, which draw.io would otherwise ask about.
+    ui.editor.setModified(false);
     const doc = handle.doc();
     if (!doc.pages || diagramXml(doc.pages) === diagramXml(pages)) return;
     // Others' changes: the editor then shows the document, the base of this user's next changes.
     if (mergeInto(win(), ui, xml, diagramXml(doc.pages))) shadow = JSON.parse(JSON.stringify(doc.pages)) as PageRecord[];
+    ui.editor.setModified(false);
     changed();
   };
 
