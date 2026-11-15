@@ -6,7 +6,7 @@
 import { Shape as ReplicadShape, type AnyShape } from "replicad";
 import { describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
 import { key, piece, type Name } from "./names.ts";
-import { listToArray, oc, progress, subShapes, type Shape } from "./oc.ts";
+import { listToArray, oc, progress, ShapeIndex, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
 import { copyOf, propagate, withTopology, type Hist, type History } from "./topo.ts";
 import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
@@ -90,6 +90,7 @@ export const sketch = defineFeature<{ plane: Frame | Ref; profile: Profile; body
   ...schemas.sketch,
   fallback: (p, name, message) => new Sketch(name, PLANES["XY"]!, p.profile, message),
   build({ plane, profile, body }, ctx) {
+    if (profile?.kind === "paths" && profile.error) throw new FeatureError(profile.error);
     const placed = (frame: Frame) => {
       const made = new Sketch(ctx.name, frame, profile);
       // Its regions are found here, so that curves that can't be intersected fail the sketch.
@@ -155,8 +156,9 @@ export const extrude = defineFeature<
     const baseEdges = subShapes(base, "edge");
     const toolFaces = subShapes(tool, "face");
     const toolHist: Hist[] = toolFaces.map(() => new Map());
+    const toolIndex = new ShapeIndex(toolFaces);
     const nameFace = (target: Shape, n: Name) => {
-      const i = toolFaces.findIndex((x) => x.IsSame(target));
+      const i = toolIndex.indexOf(target);
       if (i >= 0) toolHist[i]!.set(key(n), n);
     };
     // Names that several faces get are numbered, in the order of the base's edges or faces.

@@ -3,7 +3,7 @@
  * names the faces and edges of its result from OCCT's Generated/Modified/IsDeleted history.
  */
 import { copied, key, piece, type Name } from "./names.ts";
-import { listToArray, subShapes, type Kind, type Shape } from "./oc.ts";
+import { listToArray, ShapeIndex, subShapes, type Kind, type Shape } from "./oc.ts";
 
 /** Names of one entity by key. A face carries several after a merge. */
 export type Hist = Map<string, Name>;
@@ -47,16 +47,18 @@ export function propagate(h: History, inputs: Topo[], generators: { from: Shape;
   const edges = subShapes(result, "edge");
   const faceHist: Hist[] = faces.map(() => new Map());
   const edgeHist: Hist[] = edges.map(() => new Map());
-  const pool = [...faces, ...edges];
-  const assignTo = (targets: Shape[], hists: Hist[]) => (s: Shape, names: Iterable<Name>) => {
-    const i = targets.findIndex((x) => x.IsSame(s));
+  const pool = new ShapeIndex([...faces, ...edges]);
+  const faceIndex = new ShapeIndex(faces);
+  const edgeIndex = new ShapeIndex(edges);
+  const assignTo = (targets: ShapeIndex, hists: Hist[]) => (s: Shape, names: Iterable<Name>) => {
+    const i = targets.indexOf(s);
     if (i >= 0) add(hists[i]!, names);
   };
   const follow = (sources: Shape[], hists: Hist[], assign: (s: Shape, names: Iterable<Name>) => void) =>
     sources.forEach((s, i) => {
       // Fillet and chamfer report some untouched edges as deleted although they are still in the
       // result (research/03, kernel findings). Presence in the result wins.
-      if (h.IsDeleted(s) && !pool.some((x) => x.IsSame(s))) return;
+      if (h.IsDeleted(s) && pool.indexOf(s) < 0) return;
       const names = [...hists[i]!.values()];
       const mods = listToArray(h.Modified(s));
       if (mods.length === 0) assign(s, names);
@@ -65,10 +67,10 @@ export function propagate(h: History, inputs: Topo[], generators: { from: Shape;
     });
 
   for (const input of inputs) {
-    follow(input.faces, input.faceHist, assignTo(faces, faceHist));
-    follow(input.edges, input.edgeHist, assignTo(edges, edgeHist));
+    follow(input.faces, input.faceHist, assignTo(faceIndex, faceHist));
+    follow(input.edges, input.edgeHist, assignTo(edgeIndex, edgeHist));
   }
-  for (const g of generators) for (const s of listToArray(h.Generated(g.from))) assignTo(faces, faceHist)(s, [g.name]);
+  for (const g of generators) for (const s of listToArray(h.Generated(g.from))) assignTo(faceIndex, faceHist)(s, [g.name]);
   namingTime.ms += performance.now() - t0;
   return withTopology(result, faces, faceHist, edges, edgeHist);
 }
@@ -83,9 +85,10 @@ export function copyOf(t: Topo, by: string): Topo {
 export function withTopology(shape: Shape, faces: Shape[], faceHist: Hist[], edges = subShapes(shape, "edge"), edgeHist: Hist[] = edges.map(() => new Map())): Topo {
   const t0 = performance.now();
   const edgeFaces = edges.map(() => [] as number[]);
+  const edgeIndex = new ShapeIndex(edges);
   faces.forEach((f, fi) => {
     for (const e of subShapes(f, "edge")) {
-      const ei = edges.findIndex((x) => x.IsSame(e));
+      const ei = edgeIndex.indexOf(e);
       if (ei >= 0 && !edgeFaces[ei]!.includes(fi)) edgeFaces[ei]!.push(fi);
     }
   });

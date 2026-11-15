@@ -35,6 +35,9 @@
             # draw.io's web app, which the drawio tool's build copies next to its bundle.
             DRAWIO_WEBAPP = import ./src/drawio/webapp.nix { inherit pkgs; };
 
+            # Fonts that SVG texts are drawn in: the CAD tool's build bundles them, the feature library's tests read them.
+            CAD_FONTS = "${pkgs.liberation_ttf}/share/fonts/truetype";
+
             # Playwright uses the Nix-provided browsers (no download).
             PLAYWRIGHT_BROWSERS_PATH = pkgs.playwright-driver.browsers;
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";

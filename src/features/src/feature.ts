@@ -122,7 +122,7 @@ export type Profile =
   | { kind: "polygon"; points: [number, number][]; ids: string[] }
   | { kind: "circle"; center: [number, number]; radius: number; id: string }
   /** Paths of lines, Bézier curves and arcs, e.g. of an SVG (`svg()`), what is filled, and what of the source couldn't be drawn. */
-  | { kind: "paths"; paths: Path[]; fills: Fill[]; warnings: string[] };
+  | { kind: "paths"; paths: Path[]; fills: Fill[]; warnings: string[]; error?: string };
 
 // ---------- build context and trace ----------
 

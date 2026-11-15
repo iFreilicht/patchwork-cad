@@ -7,7 +7,7 @@
 import { cast } from "replicad";
 import { add, cross, scale, type Vec } from "./geom.ts";
 import { printFeatureName } from "./names.ts";
-import { listToArray, oc, progress, subShapes, type Shape } from "./oc.ts";
+import { listToArray, oc, progress, ShapeIndex, subShapes, type Shape } from "./oc.ts";
 
 export type Point = [number, number];
 
@@ -91,9 +91,15 @@ export function samplePath(p: Path, tolerance: number): Point[] {
 export function extentOf(paths: readonly Path[]): { min: Point; max: Point } | undefined {
   const pts = paths.flatMap((p) => [p.start, ...p.segments.flatMap((s) => (s.curve.kind === "arc" ? sampleCurve(p.start, s.curve, Infinity) : s.curve.kind === "bezier" ? [...s.curve.controls, s.curve.to] : [s.curve.to]))]);
   if (!pts.length) return undefined;
-  const xs = pts.map((p) => p[0]);
-  const ys = pts.map((p) => p[1]);
-  return { min: [Math.min(...xs), Math.min(...ys)], max: [Math.max(...xs), Math.max(...ys)] };
+  const min: Point = [Infinity, Infinity];
+  const max: Point = [-Infinity, -Infinity];
+  for (const [x, y] of pts) {
+    min[0] = Math.min(min[0], x);
+    min[1] = Math.min(min[1], y);
+    max[0] = Math.max(max[0], x);
+    max[1] = Math.max(max[1], y);
+  }
+  return { min, max };
 }
 
 /** Winding number of a closed polyline around `p`. */
@@ -224,6 +230,7 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
   if (!splitter.IsDone()) throw new Error("the sketch's curves could not be intersected");
   const result = splitter.Shape();
   const edges = subShapes(result, "edge");
+  const edgeIndex = new ShapeIndex(edges);
   const ids: string[][] = edges.map(() => []);
   const piecesOf = (s: Shape) => {
     const modified = listToArray(splitter.Modified(s));
@@ -231,10 +238,10 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
   };
   for (const { edge, id } of sources)
     for (const piece of piecesOf(edge)) {
-      const i = edges.findIndex((e) => e.IsSame(piece));
+      const i = edgeIndex.indexOf(piece);
       if (i >= 0 && !ids[i]!.includes(id)) ids[i]!.push(id);
     }
-  const outer = new Set(subShapes(big, "edge").flatMap(piecesOf).flatMap((p) => edges.flatMap((e, i) => (e.IsSame(p) ? [i] : []))));
+  const outer = new Set(subShapes(big, "edge").flatMap(piecesOf).map((p) => edgeIndex.indexOf(p)));
   const loops = paths.filter((p) => p.closed).map((p) => ({ id: p.id, poly: samplePath(p, tolerance / 10) }));
   const yDir = yDirOf(fr);
   const toSketch = (x: number, y: number, z: number): Point => {
@@ -244,7 +251,7 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
   const regions: Region[] = [];
   for (const face of subShapes(result, "face")) {
     const own = subShapes(face, "edge");
-    if (own.some((e) => [...outer].some((i) => edges[i]!.IsSame(e)))) continue;
+    if (own.some((e) => outer.has(edgeIndex.indexOf(e)))) continue;
     const mesh = cast(face).mesh({ tolerance, angularTolerance: 0.2 });
     const triangles = mesh.triangles.flatMap((v) => toSketch(mesh.vertices[3 * v]!, mesh.vertices[3 * v + 1]!, mesh.vertices[3 * v + 2]!));
     if (!triangles.length) continue;
@@ -308,37 +315,72 @@ export function contains(r: Region, p: Point): boolean {
   return false;
 }
 
+/** A compound of shapes. */
+function compound(shapes: readonly Shape[]): Shape {
+  const o = oc();
+  const c = new o.TopoDS_Compound();
+  const builder = new o.TopoDS_Builder();
+  builder.MakeCompound(c);
+  for (const s of shapes) builder.Add(c, s);
+  builder.delete();
+  return c;
+}
+
 /**
  * The base face of an extrusion of some of the regions, joined where they touch, and each of its
- * edges with the ids of the segments it lies on. Pieces of a segment that the join puts together
- * again are one edge.
+ * edges, in the face's own order, with the ids of the segments it lies on. Pieces of a segment that
+ * the join puts together again are one edge.
  */
 export function joinRegions(chosen: readonly Region[], pieces: readonly Piece[]): { face: Shape; edges: { edge: Shape; ids: string[] }[] } {
   const o = oc();
-  const idsOf = (e: Shape) => pieces.find((p) => p.edge.IsSame(e))?.ids ?? [];
-  if (chosen.length === 1) {
-    const face = chosen[0]!.face;
-    return { face, edges: subShapes(face, "edge").map((edge) => ({ edge, ids: idsOf(edge) })) };
-  }
-  const join = new o.BRepAlgoAPI_BuilderAlgo();
-  const args = new o.NCollection_List_TopoDS_Shape();
-  for (const r of chosen) args.Append(r.face);
-  join.SetArguments(args);
-  join.Build(progress());
-  if (!join.IsDone()) throw new Error("the profiles could not be joined");
-  join.SimplifyResult(true, true, 1e-3);
-  const face = join.Shape();
-  const result = subShapes(face, "edge");
-  const ids: string[][] = result.map(() => []);
-  for (const piece of new Set(chosen.flatMap((r) => subShapes(r.face, "edge")))) {
-    const modified = listToArray(join.Modified(piece));
-    for (const m of modified.length ? modified : [piece]) {
-      const i = result.findIndex((e) => e.IsSame(m));
-      if (i >= 0) for (const id of idsOf(piece)) if (!ids[i]!.includes(id)) ids[i]!.push(id);
+  const index = new ShapeIndex(pieces.map((p) => p.edge));
+  const idsOf = (e: Shape) => pieces[index.indexOf(e)]?.ids ?? [];
+  // Regions that share an edge are joined; the others stay as they are, which spares the join e.g. the letters of a text.
+  const group = chosen.map((_, i) => i);
+  const root = (i: number): number => (group[i] === i ? i : (group[i] = root(group[i]!)));
+  const owner = new Map<number, number>();
+  chosen.forEach((r, i) => {
+    for (const e of subShapes(r.face, "edge")) {
+      const k = index.indexOf(e);
+      const other = owner.get(k);
+      if (other === undefined) owner.set(k, i);
+      else group[root(i)] = root(other);
     }
+  });
+  const groups = new Map<number, Region[]>();
+  chosen.forEach((r, i) => groups.set(root(i), [...(groups.get(root(i)) ?? []), r]));
+  const faces: Shape[] = [];
+  const named = new ShapeIndex();
+  const ids: string[][] = [];
+  const name = (edge: Shape, of: string[]) => {
+    let i = named.indexOf(edge);
+    if (i < 0) ids[(i = named.push(edge))] = [];
+    for (const id of of) if (!ids[i]!.includes(id)) ids[i]!.push(id);
+  };
+  for (const members of groups.values()) {
+    if (members.length === 1) {
+      faces.push(members[0]!.face);
+      for (const e of subShapes(members[0]!.face, "edge")) name(e, idsOf(e));
+      continue;
+    }
+    const join = new o.BRepAlgoAPI_BuilderAlgo();
+    const args = new o.NCollection_List_TopoDS_Shape();
+    for (const r of members) args.Append(r.face);
+    join.SetArguments(args);
+    join.Build(progress());
+    if (!join.IsDone()) throw new Error("the profiles could not be joined");
+    join.SimplifyResult(true, true, 1e-3);
+    const joined = join.Shape();
+    faces.push(...subShapes(joined, "face"));
+    const result = new ShapeIndex(subShapes(joined, "edge"));
+    for (const piece of subShapes(compound(members.map((r) => r.face)), "edge")) {
+      const modified = listToArray(join.Modified(piece));
+      for (const m of modified.length ? modified : [piece]) if (result.indexOf(m) >= 0) name(m, idsOf(piece));
+    }
+    join.delete();
   }
-  join.delete();
-  return { face, edges: result.map((edge, i) => ({ edge, ids: ids[i]! })) };
+  const face = faces.length === 1 ? faces[0]! : compound(faces);
+  return { face, edges: subShapes(face, "edge").map((edge) => ({ edge, ids: ids[named.indexOf(edge)] ?? [] })) };
 }
 
 // ---------- references to regions ----------

@@ -21,14 +21,46 @@ const shapeEnum = (kind: Kind | "vertex" | "solid") =>
  * (and TopExp::MapShapes), so indices match replicad's `faces`/`edges`.
  */
 export function subShapes(s: Shape, kind: Kind | "vertex" | "solid"): Shape[] {
-  const out: Shape[] = [];
+  const out = new ShapeIndex();
   const ex = new (oc().TopExp_Explorer)(s, shapeEnum(kind), oc().TopAbs_ShapeEnum.TopAbs_SHAPE);
   for (; ex.More(); ex.Next()) {
     const c = ex.Current();
-    if (!out.some((x) => x.IsSame(c))) out.push(c);
+    if (out.indexOf(c) < 0) out.push(c);
   }
   ex.delete();
-  return out;
+  return out.shapes;
+}
+
+/** OCCT's hash of a shape: of its TShape and location, which IsSame compares, so that shapes that are the same have the same hash. */
+const hashOf = (s: Shape) => oc().ReplicadShapeHasher.HashCode(s, 2147483647);
+
+/**
+ * Shapes in order, found by IsSame without comparing with each: only with those of the same hash.
+ * A large sketch, e.g. of text, has thousands of edges, and comparing each with all is quadratic.
+ */
+export class ShapeIndex {
+  readonly shapes: Shape[] = [];
+  private readonly buckets = new Map<number, number[]>();
+
+  constructor(shapes: Iterable<Shape> = []) {
+    for (const s of shapes) this.push(s);
+  }
+
+  /** Adds a shape at the end, and returns its index. */
+  push(s: Shape): number {
+    const i = this.shapes.push(s) - 1;
+    const h = hashOf(s);
+    const bucket = this.buckets.get(h);
+    if (bucket) bucket.push(i);
+    else this.buckets.set(h, [i]);
+    return i;
+  }
+
+  /** The index of the first shape that IsSame as `s`, or -1. */
+  indexOf(s: Shape): number {
+    for (const i of this.buckets.get(hashOf(s)) ?? []) if (this.shapes[i]!.IsSame(s)) return i;
+    return -1;
+  }
 }
 
 /** Copies an OCCT shape list into an array. */
