@@ -13,7 +13,7 @@ import { analyze } from "../../model/analyze.ts";
 import { isLinked } from "../../model/configurations.ts";
 import { documentId, documentStatements, follow as followEdits, pin as pinEdits, removeStatement, renameImport, replaceDocument, setType as setTypeEdits, usedAnywhere, type DocumentStatement } from "../../model/documents.ts";
 import { apply } from "../../model/splice.ts";
-import type { Annotation, CadModelDoc, Canvas, Configuration } from "../../types.ts";
+import type { Annotation, CadModelDoc, Configuration, StoredCanvas } from "../../types.ts";
 import type { AnnotationStore } from "../annotations.tsx";
 import type { CanvasStore, ImageState } from "../canvases.ts";
 import type { HeldDocument, Model } from "../createModel.ts";
@@ -48,7 +48,7 @@ export interface DocumentRow {
   /** For an annotation, the annotation. */
   annotation?: Annotation;
   /** For a canvas, the canvas. */
-  canvas?: Canvas;
+  canvas?: StoredCanvas;
 }
 
 /** The selection's id of an annotation's row: one row per annotation, as a document may be pinned to several places. */

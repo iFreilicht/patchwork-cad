@@ -38,7 +38,7 @@ import { getRegistry, type ToolDescription } from "@inkandswitch/patchwork-plugi
 import { createAnnotationStore, placeAnnotations } from "../annotations.tsx";
 import { HOME } from "../../model/views.ts";
 import { createCanvasImages, createCanvasStore, onFace, placeCanvases, placeNewCanvas } from "../canvases.ts";
-import { canvasCorners } from "../../model/canvases.ts";
+import { canvasCorners, centredAt, storedPlacement } from "../../model/canvases.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 
 const EDITOR_TOOL_ID = "cad-model";
@@ -201,7 +201,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       void model.engine.pick(entity.body, "face", entity.index).then(
         ({ code, ref }) => {
           const placed = ref && code ? onFace(shape, entity.index, annotations.anchorOf(entity, ref, code)) : undefined;
-          if (placed) canvasStore.update(canvas.id, placed);
+          // Its image centred there, as far as it is drawn.
+          const image = placedCanvases().find((c) => c.canvas.id === canvas.id)?.image;
+          if (placed) canvasStore.update(canvas.id, { plane: placed.plane, ...(image ? storedPlacement(centredAt(image.placement, image.box, placed.center)) : {}) });
           else setPickError(ref && code ? "the face isn't planar" : "it has no reference");
         },
         (error: unknown) => setPickError(String((error as Error)?.message ?? error)),
@@ -483,25 +485,24 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     },
   });
   // Canvases (research/21, "Canvas"): where each is, whether this user shows it, and Calibrate.
-  const placedCanvases = placeCanvases({ list: canvasStore.list, model, shown, complete: () => !rolledBack() });
+  const placedCanvases = placeCanvases({ list: canvasStore.list, model, shown, complete: () => !rolledBack(), image: canvasImage });
   const canvasVisible = (id: string) => ui.visibility()[`canvas:${id}`] ?? true;
   const setCanvasVisible = (id: string, visible: boolean) => ui.setVisibility(`canvas:${id}`, visible ? undefined : false);
   const calibration = createCalibration({
     canvases: canvasStore,
     placed: placedCanvases,
-    image: canvasImage,
     selected: () => selectedDocument()?.canvas?.id,
     picking: () => !!editor.pickTarget(),
     stopPicking: () => editor.setPickTarget(undefined),
+    setNotice: (notice) => editor.setNotice(notice),
   });
   /** The canvases this user shows, with their images drawn: the selected one is outlined, a hovered row's too. */
   const shownCanvases = createMemo((): ShownCanvas[] =>
-    placedCanvases().flatMap(({ canvas, frame }) => {
-      const image = canvasImage(canvas.image);
-      if (!frame || image.status !== "ready" || !canvasVisible(canvas.id)) return [];
+    placedCanvases().flatMap(({ canvas, frame, image }) => {
+      if (!frame || !image || !canvasVisible(canvas.id)) return [];
       const row = canvasRowId(canvas.id);
       const highlight = editor.isSelected({ kind: "document", id: row }) ? "accent" : editor.hoveredDocument() === row ? "hover" : undefined;
-      return [{ id: canvas.id, image: image.image, corners: canvasCorners(canvas, frame, image.aspect), opacity: canvas.opacity, through: canvas.through, highlight }];
+      return [{ id: canvas.id, image: image.image, corners: canvasCorners(image.placement, frame, image.box), opacity: canvas.opacity, through: canvas.through, highlight }];
     }),
   );
   /** Opens an annotation from its row, at the pin that holds it. */
@@ -762,6 +763,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           canvases={shownCanvases()}
           canvasPick={calibration.state()?.id}
           onCanvasPick={calibration.pick}
+          onCanvasHover={calibration.hover}
           sketches={shownSketches()}
           view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
           onViewChange={saveCamera}
@@ -793,7 +795,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
               row={dialogDocument()!}
               editor={editor}
               annotation={{ annotations, views: viewItems(views.views).map((v) => ({ id: v.id, name: v.name })), toolName, goToView }}
-              canvas={{ canvases: canvasStore, placed: placedCanvases, image: canvasImage, calibration }}
+              canvas={{ canvases: canvasStore, placed: placedCanvases, calibration }}
               onClose={() => editor.select(undefined, "dialog")}
             />
           </Match>

@@ -16,7 +16,7 @@ import { applyToText, apply, setProp, type Edit } from "../../model/splice.ts";
 import { timeline } from "../../model/timeline.ts";
 import type { CadAnchor, CadModelDoc } from "../../types.ts";
 import type { AnnotationStore, AnnotationPlaces } from "../annotations.tsx";
-import { isImage, type CanvasPlacement, type CanvasStore } from "../canvases.ts";
+import { imageBox, isImage, type CanvasPlacement, type CanvasStore } from "../canvases.ts";
 import type { Entity } from "../Viewer.tsx";
 import { annotationRowId, canvasRowId } from "./documents.ts";
 
@@ -305,11 +305,14 @@ export function createInserts(props: {
   };
 
   /** Shows the pending insert's image on a plane: on the face it was dropped on, centred where it was, else on XY; and selects the canvas. */
-  const canvas = (p: PendingInsert) => {
+  const canvas = async (p: PendingInsert) => {
     const d = documentOf(p);
     if (!p.url || !d) return;
+    // Its scale is per unit of the image.
+    const box = await imageBox(d.info.value);
+    if (!box) return editor.setNotice("The image has no size.");
     const place = props.placeCanvas(p.face, p.anchor, p.point);
-    const id = props.canvases.add(p.url, baseName(p.url, d.info.value, p.name), place.plane, place.center, place.width);
+    const id = props.canvases.add(p.url, baseName(p.url, d.info.value, p.name), place.plane, place.center, place.width, box);
     editor.select({ kind: "document", id: canvasRowId(id) }, "dialog");
     editor.setNotice(place.notice);
   };

@@ -142,9 +142,14 @@ export interface ViewerProps {
   onPin?: (key: string, at: { x: number; y: number }) => void;
   onPinHover?: (key: string | undefined) => void;
   canvases?: ShownCanvas[] | undefined;
-  /** While points of a canvas are picked, e.g. to calibrate it: its id. A click on it gives the point, as fractions of its image from the bottom left. */
+  /**
+   * While points of a canvas are picked, e.g. to calibrate it: its id. A click on it gives the point,
+   * as fractions of its image from the bottom left; the pointer over it, the point it is over, and
+   * nothing of the model is hovered meanwhile.
+   */
   canvasPick?: string | undefined;
   onCanvasPick?: (id: string, point: [number, number]) => void;
+  onCanvasHover?: (id: string, point: [number, number] | undefined) => void;
 }
 
 export interface FaceRefs {
@@ -1015,6 +1020,7 @@ export function Viewer(props: ViewerProps) {
       dispose([...overlayGroup.children]);
       overlayGroup.clear();
       for (const overlay of props.overlays ?? []) overlayGroup.add(...overlayMaterials.map((material, i) => Object.assign(new LineSegments2(segments(overlay), material), { renderOrder: i })));
+      container.dataset["overlays"] = String(props.overlays?.length ?? 0);
     });
 
     // ---------- canvases (research/21, "Canvas") ----------
@@ -1240,6 +1246,12 @@ export function Viewer(props: ViewerProps) {
     let down: { x: number; y: number } | undefined;
     const onPointerMove = (event: PointerEvent) => {
       if (event.buttons) return;
+      if (props.canvasPick) {
+        if (hovered()) setHovered(undefined);
+        props.onCanvasHover?.(props.canvasPick, canvasAt(props.canvasPick, event.clientX, event.clientY));
+        if (props.onPointer) props.onPointer(pointAt(event.clientX, event.clientY));
+        return;
+      }
       const entity = hoverAt(event.clientX, event.clientY);
       if (!same(entity, hovered())) setHovered(entity);
       if (props.onPointer) props.onPointer(pointAt(event.clientX, event.clientY));
@@ -1270,6 +1282,7 @@ export function Viewer(props: ViewerProps) {
     };
     const onPointerLeave = () => {
       setHovered(undefined);
+      if (props.canvasPick) props.onCanvasHover?.(props.canvasPick, undefined);
       props.onPointer?.(undefined);
     };
 

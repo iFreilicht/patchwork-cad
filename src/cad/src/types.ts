@@ -127,7 +127,7 @@ export interface CadData {
   /** Documents shown at places on the model (research/21, "Annotation"). */
   annotations?: Annotation[];
   /** Images on planes, to trace or compare (research/21, "Canvas"). */
-  canvases?: Canvas[];
+  canvases?: StoredCanvas[];
 }
 
 /** A plane: its origin, its normal, and the direction of its x axis, as the feature library's `Frame`. */
@@ -137,25 +137,48 @@ export interface PlaneFrame {
   xDir: [number, number, number];
 }
 
-/** An image drawn on a plane or a planar face, in the editor's view only (research/21, "Canvas"). */
-export interface Canvas {
+/** A canvas's fields but where its image lies. */
+interface CanvasCommon {
   id: string;
   name: string;
   /** The image document; with heads, a version of it. */
   image: AutomergeUrl;
   /** An origin plane's frame, or a planar face, anchored as a comment is, whose frame a sketch on it has. */
   plane: PlaneFrame | CadAnchor;
-  /** The image's centre in the plane's coordinates. */
-  center: [number, number];
-  /** Its rotation about the plane's normal, in degrees. */
+  /** Its rotation about the plane's normal, in degrees, about the pinned point. */
   angle: number;
-  /** Its width in model units; its height follows the image's aspect. */
-  width: number;
   /** From 0, invisible, to 1. */
   opacity: number;
   /** Drawn over the model, as Fusion's "Display Through". */
   through: boolean;
 }
+
+/** An element of an SVG, by an attribute that names it, e.g. `id`, and by its name for people, should its id change. */
+export interface CanvasAnchor {
+  attribute: string;
+  value: string;
+  name?: string;
+}
+
+/** An image drawn on a plane or a planar face, in the editor's view only (research/21, "Canvas"). */
+export interface Canvas extends CanvasCommon {
+  /** The point of the image that is pinned, in its units (an SVG's user units, a bitmap's pixels), y down; its anchor's centre as it was picked. */
+  at: [number, number];
+  /** Where that point is, in the plane's coordinates. */
+  position: [number, number];
+  /** Model units per unit of the image. */
+  scale: number;
+  /** The element of an SVG the image is pinned by: its centre is at `position`, however the image changes. */
+  anchor?: CanvasAnchor;
+}
+
+/** A canvas as stored before scales: its centre and width, the height from the image's aspect. Pinned by its image's centre, and stored as a `Canvas` on its first edit. */
+export interface LegacyCanvas extends CanvasCommon {
+  center: [number, number];
+  width: number;
+}
+
+export type StoredCanvas = Canvas | LegacyCanvas;
 
 /** A document shown as a pin on a face, edge or feature, or on the model as a whole (research/21, "Annotation"). */
 export interface Annotation {

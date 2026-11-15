@@ -1,5 +1,5 @@
 import type { AutomergeUrl } from "@automerge/automerge-repo";
-import type { CadAnchor, CadModelDoc, Canvas, PlaneFrame } from "../types.ts";
+import type { CadAnchor, CadModelDoc, Canvas, CanvasAnchor, LegacyCanvas, PlaneFrame, StoredCanvas } from "../types.ts";
 
 /**
  * Canvases (research/21-embedding.md, "Canvas"): images on planes, to trace or compare, kept in the
@@ -7,7 +7,7 @@ import type { CadAnchor, CadModelDoc, Canvas, PlaneFrame } from "../types.ts";
  * build returns. The edits run inside a `change` of the model document.
  */
 
-export const canvases = (doc: CadModelDoc | undefined): Canvas[] => doc?.cad?.canvases ?? [];
+export const canvases = (doc: CadModelDoc | undefined): StoredCanvas[] => doc?.cad?.canvases ?? [];
 
 type Vec = [number, number, number];
 
@@ -35,17 +35,22 @@ export function removeCanvas(doc: CadModelDoc, id: string): void {
 const canonical = (value: unknown): string =>
   JSON.stringify(value, (_, v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
 
-/** What a canvas's dialog edits: any of its fields but its id. */
-export type CanvasPatch = Partial<Omit<Canvas, "id">>;
+/** What a canvas's dialog edits: any of its fields but its id; an anchor of `null` is removed. */
+export type CanvasPatch = Partial<Omit<Canvas, "id" | "anchor">> & { anchor?: CanvasAnchor | null };
 
-/** Sets the given fields of a canvas; a field that is the same already is left alone, so that it makes no change. */
+/**
+ * Sets the given fields of a canvas; a field that is the same already is left alone, so that it makes
+ * no change. A canvas stored with a centre and width loses them once it has a scale.
+ */
 export function updateCanvas(doc: CadModelDoc, id: string, patch: CanvasPatch): void {
-  const c = doc.cad?.canvases?.find((x) => x.id === id);
+  const c = doc.cad?.canvases?.find((x) => x.id === id) as Record<string, unknown> | undefined;
   if (!c) return;
-  for (const [key, value] of Object.entries(copy(patch)) as [keyof CanvasPatch, Canvas[keyof CanvasPatch]][]) {
-    if (canonical(c[key]) === canonical(value)) continue;
-    (c as unknown as Record<string, unknown>)[key] = value;
+  for (const [key, value] of Object.entries(copy(patch))) {
+    if (value === null) {
+      if (key in c) delete c[key];
+    } else if (canonical(c[key]) !== canonical(value)) c[key] = value;
   }
+  if ("scale" in c) for (const key of ["center", "width"]) if (key in c) delete c[key];
 }
 
 // ---------- planes ----------
@@ -137,48 +142,117 @@ export const planeCoordinates = (frame: PlaneFrame, p: readonly number[]): [numb
   return [Math.round(dot(d, frame.xDir) * 1000) / 1000 + 0, Math.round(dot(d, yDirOf(frame)) * 1000) / 1000 + 0];
 };
 
-/**
- * A point of a canvas's image, by its fractions of the image's width and height from its bottom
- * left (`[0.5, 0.5]` is the centre), in the plane's coordinates; `aspect` is the image's height over
- * its width.
- */
-export function imagePoint(canvas: Pick<Canvas, "center" | "angle" | "width">, aspect: number, [u, v]: readonly [number, number]): [number, number] {
-  const a = (canvas.angle * Math.PI) / 180;
-  const dx = (u - 0.5) * canvas.width;
-  const dy = (v - 0.5) * canvas.width * aspect;
-  return [canvas.center[0] + dx * Math.cos(a) - dy * Math.sin(a), canvas.center[1] + dx * Math.sin(a) + dy * Math.cos(a)];
+// ---------- the image on the plane ----------
+
+/** An image's extent in its own units, y down: an SVG's `viewBox`, or its width and height from 0; a bitmap's pixels. */
+export interface ImageBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-/** A canvas's corners in world coordinates, counterclockwise from the image's bottom left. */
-export const canvasCorners = (canvas: Pick<Canvas, "center" | "angle" | "width">, frame: PlaneFrame, aspect: number): Vec[] =>
-  ([[0, 0], [1, 0], [1, 1], [0, 1]] as const).map((uv) => onPlane(frame, imagePoint(canvas, aspect, uv)));
+/** An element of an SVG that can be an anchor, and its bounding box in the SVG's user units. */
+export interface ImageElement {
+  attribute: string;
+  value: string;
+  /** Its name for people, as its editor keeps it, if it has one. */
+  name?: string | undefined;
+  box: ImageBox;
+  /** Its text, shortened, for people. */
+  label?: string | undefined;
+}
+
+/** Where an image lies on its plane: its point `at` at `position`, `scale` model units per unit of it, turned by `angle` about it. */
+export type Placement = Pick<Canvas, "at" | "position" | "scale" | "angle">;
+
+export const isLegacy = (canvas: StoredCanvas): canvas is LegacyCanvas => !("scale" in canvas);
+
+const centreOf = (box: ImageBox): [number, number] => [box.x + box.width / 2, box.y + box.height / 2];
+
+/**
+ * The element an anchor names, if the image has it: by its attribute, else by its name, if one
+ * element alone has it, as editors that number ids to keep them unique renumber them.
+ */
+export function anchorElement(anchor: CanvasAnchor, elements: readonly ImageElement[]): ImageElement | undefined {
+  const exact = elements.find((e) => e.attribute === anchor.attribute && e.value === anchor.value);
+  if (exact || anchor.name === undefined) return exact;
+  const named = elements.filter((e) => e.name === anchor.name);
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/**
+ * Where a canvas's image lies, for the image as it is now: pinned by its anchor's centre if the image
+ * has the anchor, else by `at`; a canvas stored with a centre and width by its image's centre.
+ * `anchorLost` if it has an anchor that the image's elements, once known, don't have.
+ */
+export function placementOf(canvas: StoredCanvas, box: ImageBox, elements?: readonly ImageElement[]): { placement: Placement; anchorLost: boolean } {
+  if (isLegacy(canvas)) return { placement: { at: centreOf(box), position: canvas.center, scale: canvas.width / box.width, angle: canvas.angle }, anchorLost: false };
+  const element = canvas.anchor && elements && anchorElement(canvas.anchor, elements);
+  const placement = { at: element ? centreOf(element.box) : canvas.at, position: canvas.position, scale: canvas.scale, angle: canvas.angle };
+  return { placement, anchorLost: !!canvas.anchor && !!elements && !element };
+}
+
+/** A placement's fields as stored, rounded: what an edit of a canvas stored with a centre and width writes with it. */
+export const storedPlacement = (p: Placement): Placement => ({ at: roundAll([...p.at]), position: roundAll([...p.position]), scale: round(p.scale), angle: round(p.angle) });
+
+/** A point of the image, in its units, in the plane's coordinates. */
+export function toPlane(p: Placement, [x, y]: readonly [number, number]): [number, number] {
+  const a = (p.angle * Math.PI) / 180;
+  const dx = (x - p.at[0]) * p.scale;
+  const dy = -(y - p.at[1]) * p.scale;
+  return [p.position[0] + dx * Math.cos(a) - dy * Math.sin(a), p.position[1] + dx * Math.sin(a) + dy * Math.cos(a)];
+}
+
+/** A point of the image by its fractions of the box from its bottom left (`[0.5, 0.5]` is the centre), in the image's units. */
+export const fromFractions = (box: ImageBox, [u, v]: readonly [number, number]): [number, number] => [box.x + u * box.width, box.y + (1 - v) * box.height];
+
+/** A point of a canvas's image, by its fractions of the image from its bottom left, in the plane's coordinates. */
+export const imagePoint = (p: Placement, box: ImageBox, uv: readonly [number, number]): [number, number] => toPlane(p, fromFractions(box, uv));
+
+/** A box of the image, the whole image or its anchor's, as its corners in world coordinates, counterclockwise from its bottom left. */
+export const canvasCorners = (p: Placement, frame: PlaneFrame, box: ImageBox): Vec[] =>
+  ([[0, 0], [1, 0], [1, 1], [0, 1]] as const).map((uv) => onPlane(frame, imagePoint(p, box, uv)));
+
+/** The placement that pins the image by `at` instead, leaving it where it is. */
+export const repinned = (p: Placement, at: readonly [number, number]): Placement => ({ ...p, at: [at[0], at[1]], position: toPlane(p, at) });
+
+/** The placement that puts the image's centre at `point` of the plane. */
+export function centredAt(p: Placement, box: ImageBox, point: readonly [number, number]): Placement {
+  const now = toPlane(p, centreOf(box));
+  return { ...p, position: [p.position[0] + point[0] - now[0], p.position[1] + point[1] - now[1]] };
+}
+
+/** The named element of the image whose box has the point, the smallest of them; undefined if none has. */
+export function elementAt(elements: readonly ImageElement[], [x, y]: readonly [number, number]): ImageElement | undefined {
+  const inside = elements.filter(({ box: b }) => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height);
+  return inside.sort((a, b) => a.box.width * a.box.height - b.box.width * b.box.height)[0];
+}
 
 /**
  * Calibrate (research/21, "Canvas"), as Fusion's: two points of the image, as fractions of it, are
- * `distance` apart; the width that makes them so, with the image's aspect. Undefined if the points
- * are the same or the distance isn't positive.
+ * `distance` apart; the scale that makes them so. Undefined if the points are the same or the
+ * distance isn't positive.
  */
-export function calibratedWidth(aspect: number, points: readonly [readonly [number, number], readonly [number, number]], distance: number): number | undefined {
+export function calibratedScale(box: ImageBox, points: readonly [readonly [number, number], readonly [number, number]], distance: number): number | undefined {
   const [[u0, v0], [u1, v1]] = points;
-  // Their distance at a width of 1.
-  const unit = Math.hypot(u1 - u0, (v1 - v0) * aspect);
+  // Their distance in the image's units.
+  const unit = Math.hypot((u1 - u0) * box.width, (v1 - v0) * box.height);
   if (!(unit > 1e-9) || !(distance > 0)) return undefined;
   return round(distance / unit);
 }
 
 /** How far apart two points of the image are on the canvas, in model units. */
-export const imageDistance = (canvas: Pick<Canvas, "width">, aspect: number, [[u0, v0], [u1, v1]]: readonly [readonly [number, number], readonly [number, number]]) =>
-  Math.hypot(u1 - u0, (v1 - v0) * aspect) * canvas.width;
+export const imageDistance = (p: Pick<Placement, "scale">, box: ImageBox, [[u0, v0], [u1, v1]]: readonly [readonly [number, number], readonly [number, number]]) =>
+  Math.hypot((u1 - u0) * box.width, (v1 - v0) * box.height) * p.scale;
 
-/** A new canvas of image `image`, named `name`, on `plane`, centred at `center` and `width` wide, half see-through. */
-export const newCanvas = (id: string, image: AutomergeUrl, name: string, plane: PlaneFrame | CadAnchor, center: [number, number], width: number): Canvas => ({
+/** A new canvas of image `image`, named `name`, on `plane`: its image's centre at `center`, `width` wide, half see-through. */
+export const newCanvas = (id: string, image: AutomergeUrl, name: string, plane: PlaneFrame | CadAnchor, center: [number, number], width: number, box: ImageBox): Canvas => ({
   id,
   name,
   image,
   plane,
-  center: [round(center[0]), round(center[1])],
-  angle: 0,
-  width: round(width),
+  ...storedPlacement({ at: centreOf(box), position: center, scale: width / box.width, angle: 0 }),
   opacity: 0.5,
   through: false,
 });

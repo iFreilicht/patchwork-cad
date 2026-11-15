@@ -687,8 +687,9 @@ function DocumentList(props: { heading: string; rows: DocumentRow[]; canvases?: 
             const visible = () => (row().canvas && props.canvases ? props.canvases.visible(row().canvas!.id) : undefined);
             const placement = () => {
               const c = row().canvas;
-              const p = c && props.canvases?.placed().find((x) => x.canvas.id === c.id)?.problem;
-              return p === "gone" ? "Its face isn't in the model" : p === "not planar" ? "Its face isn't planar" : undefined;
+              const placed = c && props.canvases?.placed().find((x) => x.canvas.id === c.id);
+              const p = placed?.problem;
+              return p === "gone" ? "Its face isn't in the model" : p === "not planar" ? "Its face isn't planar" : placed?.anchorLost ? "Its anchor isn't in the image" : undefined;
             };
             return (
               <li
