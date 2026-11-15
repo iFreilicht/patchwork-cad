@@ -5,10 +5,11 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { loadFonts, mayDrawText } from "./fonts.ts";
 import { dataModule, moduleKey, textModule, type ImportedModule, type Imports } from "./imports.ts";
 import { DERIVED, prepare, prepareImported, PrepareError, PROVIDED, type Resolve } from "./prepare.ts";
-import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, WorkerRequest, WorkerResponse } from "./protocol.ts";
+import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, SketchRegion, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -251,10 +252,40 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | fea
     names: t.names,
     outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
     warnings: t.warnings,
+    regions: t.sketch && !t.sketch.broken ? regionsOf(t.sketch) : undefined,
+    size: t.sketch && !t.sketch.broken ? sizeOf(t.sketch) : undefined,
     unused: t.sketch ? unused.has(t.sketch) : t.results.length > 0 && t.results.every((b) => unused.has(b)),
     ms: t.ms,
     namingMs: t.namingMs,
   }));
+
+/** A sketch's width and height on its plane, as far as its curves reach. */
+function sizeOf(sketch: features.Sketch): [number, number] | undefined {
+  const { paths } = pathsOf(sketch.profile);
+  const rough = extentOf(paths);
+  if (!rough) return undefined;
+  const tolerance = Math.max(rough.max[0] - rough.min[0], rough.max[1] - rough.min[1]) * 1e-5;
+  const min = [Infinity, Infinity];
+  const max = [-Infinity, -Infinity];
+  for (const p of paths)
+    for (const point of samplePath(p, tolerance))
+      for (const i of [0, 1]) {
+        min[i] = Math.min(min[i]!, point[i]!);
+        max[i] = Math.max(max[i]!, point[i]!);
+      }
+  return [max[0]! - min[0]!, max[1]! - min[1]!];
+}
+
+/** A sketch's regions, with the code a pick of each writes and its triangles in world coordinates. */
+function regionsOf(sketch: features.Sketch): SketchRegion[] {
+  const { origin, normal, xDir } = sketch.frame;
+  const yDir = [normal[1] * xDir[2] - normal[2] * xDir[1], normal[2] * xDir[0] - normal[0] * xDir[2], normal[0] * xDir[1] - normal[1] * xDir[0]] as const;
+  return sketch.regions.map((r, i) => {
+    const triangles: number[] = [];
+    for (let k = 0; k < r.triangles.length; k += 2) for (let a = 0; a < 3; a++) triangles.push(origin[a]! + xDir[a]! * r.triangles[k]! + yDir[a]! * r.triangles[k + 1]!);
+    return { code: String(pickRegion(sketch, i)), filled: r.filled, triangles };
+  });
+}
 
 /** Bodies of a trace by name: results, and whatever was visible before each feature. */
 function bodiesOf(trace: readonly TraceEntry[]): Map<string, features.Body> {
@@ -300,6 +331,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
     throw error;
   }
   await kernel;
+  if (mayDrawText(source, imports)) await loadFonts();
   const t1 = performance.now();
   buildModule = undefined;
   returned = undefined;
@@ -346,6 +378,7 @@ async function check(id: number, source: string, buildParams: BuildParams | unde
   try {
     const code = prepare(source, resolve);
     await kernel;
+    if (mayDrawText(source, imports)) await loadFonts();
     beginBuild({ lenient: true });
     // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
     const module = await browserEvaluator.evaluateModule<Record<string, unknown>>(code, { filename: "__entry__.ts", globals: { replicad, replicadShapeFns: undefined, oc: (await kernel).oc } });

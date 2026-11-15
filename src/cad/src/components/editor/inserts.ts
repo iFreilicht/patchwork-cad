@@ -4,7 +4,8 @@
  * the code pane, the timeline and the documents list Import, which is written at once; a number field
  * a value of the document for it; anywhere else nothing, and the document waits as a pending insert,
  * a selection with the document dialog, until the user chooses. A face preselects Annotation for any
- * document but an image or an SVG, which wait for Decal and Sketch; an image can be a canvas there.
+ * document but an image or an SVG: an SVG becomes a sketch on it, an image waits for Decal, and can
+ * be a canvas there.
  */
 import { batch, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { AutomergeUrl, DocHandle, UrlHeads } from "@automerge/automerge-repo";
@@ -37,13 +38,15 @@ import type { Editor, SelectionFrom } from "./state.ts";
  * own preselection rule (`preselects`) and its own fields in the dialog.
  */
 export interface Role {
-  id: "import" | "annotation" | "canvas";
+  id: "import" | "annotation" | "canvas" | "sketch";
   label: string;
   title: string;
   allows(value: unknown, path: boolean): boolean;
 }
 
 export const ROLES: readonly Role[] = [
+  // The curves of an SVG in a sketch, to extrude (research/21, "Sketch from a drawing").
+  { id: "sketch", label: "Sketch", title: "Draw its curves in a sketch, to extrude them", allows: (value, path) => !path && isFile(value) && fileKind(value) === "svg" },
   // An image on a plane, drawn in the view only (research/21, "Canvas").
   { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && (isImage(value) || (value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type !== "cad-model") },
   { id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 },
@@ -62,15 +65,21 @@ export type DropTarget =
 
 /**
  * The role a drop of a document whose value is `value` on a target preselects (research/21,
- * "Dropping, pasting, inserting"): on a face, Annotation, but for an image or an SVG, which are to be
- * a decal or a sketch.
+ * "Dropping, pasting, inserting"): on a face, Sketch for an SVG, nothing yet for an image, which is to
+ * be a decal, and Annotation for anything else.
  */
 export const preselects = (target: Pick<DropTarget, "kind">, value: unknown): Role["id"] | undefined => {
   if (target.kind === "import") return "import";
   if (target.kind !== "face") return undefined;
   const kind = isFile(value) ? fileKind(value) : undefined;
-  return kind === "image" || kind === "svg" ? undefined : "annotation";
+  return kind === "svg" ? "sketch" : kind === "image" ? undefined : "annotation";
 };
+
+/** Whether an SVG is sized in absolute units (mm, cm, in, pt, pc), which `svg()` keeps; one in pixels or without a size has no size of its own. */
+export function hasAbsoluteSize(text: string): boolean {
+  const root = /<svg\b[^>]*>/i.exec(text)?.[0] ?? "";
+  return /\s(?:width|height)\s*=\s*["']\s*[\d.]+(?:e[-+]?\d+)?\s*(?:mm|cm|in|pt|pc|q)\s*["']/i.test(root);
+}
 
 /** What a field target is called, in the dialog, the status bar and problems: "Distance of extrude1", "the default of w", "w in Wide". */
 export const targetLabel = (t: ValueTarget) => (t.kind === "argument" ? `${t.label} of ${t.feature}` : t.kind === "default" ? `the default of ${t.key}` : `${t.key} in ${t.name}`);
@@ -300,8 +309,42 @@ export function createInserts(props: {
     const doc = docOf(d.url);
     if (!doc) return;
     const [anchor, loaded] = await Promise.all([faceAnchor(face), load(d.url).catch(() => undefined)]);
-    if (withoutHeads(d.url) === doc && preselects({ kind: "face" }, loaded?.value) === "annotation") return annotate(d.url, anchor, loaded?.value);
+    const role = withoutHeads(d.url) === doc ? preselects({ kind: "face" }, loaded?.value) : undefined;
+    if (role === "annotation") return annotate(d.url, anchor, loaded?.value);
+    if (role === "sketch") return sketchOf(d.url, d.name, face, point);
     begin(d.url, undefined, "view", d.name, anchor, face, point);
+  };
+
+  /**
+   * Draws an SVG in a new sketch at the timeline marker (research/21, "Sketch from a drawing"): on the
+   * face it was dropped on, centred where it was dropped, or else on XY under the model; imported as
+   * text, once. A drawing sized in absolute units keeps its size, any other is about as wide as the
+   * model. The import and the sketch are one change, and the sketch is opened.
+   */
+  const sketchOf = async (url: AutomergeUrl, name: string | undefined, face: Entity | undefined, point: [number, number, number] | undefined) => {
+    const loaded = await load(url).catch((error: unknown) => ({ problem: String((error as Error)?.message ?? error) }));
+    if ("problem" in loaded) return editor.setNotice(`${titleOf(url, name)} can't be read: ${loaded.problem}.`);
+    const text = isFile(loaded.value) ? fileText(loaded.value) : undefined;
+    if (text === undefined) return editor.setNotice(`${titleOf(url, name)} isn't an SVG file.`);
+    const picked = face ? await props.model.engine.pick(face.body, "face", face.index).catch(() => undefined) : undefined;
+    const bodyIsVariable = !!face && props.model.trace().some((t) => t.variable && (t.result === face.body || t.names?.includes(face.body)));
+    const onFace = face && picked?.code && bodyIsVariable;
+    const anchor = onFace && picked.ref ? props.anchorOf(face, picked.ref, picked.code) : undefined;
+    const place = props.placeCanvas(onFace ? face : undefined, anchor, onFace ? point : undefined);
+    const round = (v: number) => +v.toFixed(2);
+    const plane = onFace && "entityName" in place.plane ? `plane: ${picked.code}, body: ${face.body}` : `plane: plane("XY")`;
+    const options = [...(hasAbsoluteSize(text) ? [] : [`width: ${place.width}`]), ...(place.center.some((v) => round(v) !== 0) ? [`center: [${place.center.map(round).join(", ")}]`] : [])];
+    editor.insertCall("sketch", (source, analysis) => {
+      const statements = documentStatements(source, analysis.program);
+      const id = documentId(url, "text");
+      const existing = statements.find((s) => s.id === id && s.name)?.name;
+      const local = existing ?? importName(baseName(url, loaded.value, name), namesIn(analysis));
+      const imported = existing ? undefined : defaultImport(url, loaded.value, loaded.heads, local);
+      if (!existing && imported?.type !== "text") return undefined;
+      const profile = `svg(${local}${options.length ? `, { ${options.join(", ")} }` : ""})`;
+      return { code: `sketch({ ${plane}, profile: ${profile} })`, edits: imported ? insertImports(source, analysis.program, [imported]) : [] };
+    });
+    editor.setNotice(face && !onFace ? (picked?.code ? "The face's body has no variable: the sketch is on XY." : "The face has no reference: the sketch is on XY.") : place.notice?.replace("canvas", "sketch"));
   };
 
   /** Shows the pending insert's image on a plane: on the face it was dropped on, centred where it was, else on XY; and selects the canvas. */
@@ -458,7 +501,10 @@ export function createInserts(props: {
     if (target.kind === "value") return (target.target.kind === "override" ? `Link ${title} to ${target.target.key}` : `Use ${title} for ${targetLabel(target.target)}`) + others;
     if (target.kind === "document") return (pending() ? `Insert ${title}` : `Replace with ${title}`) + others;
     if (target.kind === "insert") return `Insert ${title}${others}`;
-    if (target.kind === "face") return `${!first || preselects(target, props.info(docOf(first.url) ?? first.url).value) === "annotation" ? "Pin" : "Insert"} ${title} to the face${others}`;
+    if (target.kind === "face") {
+      const role = first ? preselects(target, props.info(docOf(first.url) ?? first.url).value) : "annotation";
+      return `${role === "annotation" ? `Pin ${title} to` : role === "sketch" ? `Sketch ${title} on` : `Insert ${title} to`} the face${others}`;
+    }
     return undefined;
   };
 
@@ -583,6 +629,7 @@ export function createInserts(props: {
       if (!p?.url) return;
       if (role === "annotation") return annotate(p.url, p.anchor, documentOf(p)?.info.value);
       if (role === "canvas") return canvas(p);
+      if (role === "sketch") return sketchOf(p.url, p.name, p.face, p.point);
       await importDocuments([{ url: p.url, ...(p.name ? { name: p.name } : {}) }]);
     },
     async pick(path) {

@@ -41,6 +41,16 @@ export interface Polyline {
   closed: boolean;
 }
 
+/** A region of a sketch: a part of its plane that its curves bound on every side. */
+export interface SketchRegion {
+  /** The code that names it, e.g. `sketch2.region("a", "b")`. */
+  code: string;
+  /** Whether a fill of the profile covers it, e.g. a letter but not its hole. */
+  filled: boolean;
+  /** Its triangles in world coordinates: x, y and z of each corner, three corners each. */
+  triangles: number[];
+}
+
 /** One executed feature call, from the feature library's trace. */
 export interface FeatureTrace {
   name: string;
@@ -63,6 +73,10 @@ export interface FeatureTrace {
   outline: Polyline[] | undefined;
   /** What of its input it couldn't use, e.g. an SVG's elements that aren't drawn. */
   warnings: string[] | undefined;
+  /** A sketch's width and height on its plane. */
+  size?: [number, number] | undefined;
+  /** A sketch's regions, which an extrusion picks (research/21, "Sketch from a drawing"). */
+  regions?: SketchRegion[] | undefined;
   /** The feature's body or sketch is used by no later feature and not returned by main, so it doesn't show. */
   unused: boolean;
   /** Milliseconds the feature took, and the part spent naming faces and edges. */

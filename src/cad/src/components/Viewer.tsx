@@ -113,6 +113,15 @@ export interface ShownCanvas {
   highlight?: "hover" | "accent" | undefined;
 }
 
+/** A region of a sketch to pick, e.g. an extrusion's profile (research/21, "Sketch from a drawing"). */
+export interface ShownRegion {
+  key: string;
+  /** Its triangles in world coordinates: x, y and z of each corner, three corners each. */
+  triangles: number[];
+  /** Chosen, e.g. extruded: accented. */
+  chosen: boolean;
+}
+
 export interface ViewerProps {
   shapes: MeshedShape[] | undefined;
   /** Which entities hover and click pick; nothing is pickable without it, and hover takes edges, else faces. */
@@ -167,6 +176,14 @@ export interface ViewerProps {
   canvasPick?: string | undefined;
   onCanvasPick?: (id: string, point: [number, number]) => void;
   onCanvasHover?: (id: string, point: [number, number] | undefined) => void;
+  /**
+   * While regions of a sketch are picked, e.g. an extrusion's profiles: fills on the sketch's plane,
+   * drawn over the model, the chosen ones accented. The pointer hovers the region it is over, a click
+   * gives it; nothing of the model is hovered or picked meanwhile.
+   */
+  regions?: ShownRegion[] | undefined;
+  onRegionPick?: (key: string) => void;
+  onRegionHover?: (key: string | undefined) => void;
   /**
    * Experiment: a document canvas edited in place, laid over its rectangle on the screen without a
    * 3D transform, at `url`, editable, once the camera has stopped; it is placed for the camera at
@@ -251,6 +268,8 @@ export interface ViewerTestHook {
   canvases(): { id: string; opacity: number; through: boolean; highlight: string | undefined; world: [number, number, number][]; corners: { x: number; y: number }[] }[];
   /** Where a point of a canvas's image, as fractions of it from the bottom left, is on the screen. */
   canvasPoint(id: string, u: number, v: number): { x: number; y: number } | undefined;
+  /** The regions drawn, and for each a point on the screen where a click picks it, if one is in the view. */
+  regions(): { key: string; chosen: boolean; hovered: boolean; point: { x: number; y: number } | undefined }[];
 }
 
 export type Projection = CameraState["projection"];
@@ -515,7 +534,9 @@ export function Viewer(props: ViewerProps) {
       }
       return upper;
     };
-    scene.add(group, canvasGroup, sketchGroup, overlayGroup, highlightGroup, peerGroup);
+    const regionGroup = new THREE.Group();
+    regionGroup.renderOrder = 1;
+    scene.add(group, canvasGroup, sketchGroup, regionGroup, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
     const cube = new ViewCube({
@@ -1111,6 +1132,42 @@ export function Viewer(props: ViewerProps) {
       container.dataset["overlays"] = String(props.overlays?.length ?? 0);
     });
 
+    // ---------- regions of a sketch (research/21, "Sketch from a drawing") ----------
+
+    // Over the model, as highlights are: a sketch on a face lies in it.
+    const regionMaterials = { chosen: highlightFace(accent, 0.5), hovered: highlightFace(hover, 0.45), chosenHovered: highlightFace(accent, 0.75), other: highlightFace(themeColor(container, "--cad-model-fg"), 0.14) };
+    const [hoveredRegion, setHoveredRegion] = createSignal<string>();
+    let drawnRegions: { region: ShownRegion; mesh: THREE.Mesh }[] = [];
+    createEffect(() => {
+      for (const d of drawnRegions) d.mesh.geometry.dispose();
+      regionGroup.clear();
+      drawnRegions = (props.regions ?? []).map((region) => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(region.triangles, 3));
+        const mesh = new THREE.Mesh(geometry, regionMaterials.other);
+        regionGroup.add(mesh);
+        return { region, mesh };
+      });
+      if (!drawnRegions.some((d) => d.region.key === hoveredRegion())) setHoveredRegion(undefined);
+    });
+    createEffect(() => {
+      // After the regions are drawn anew, as the effect before draws them.
+      void props.regions;
+      const hovered = hoveredRegion();
+      for (const d of drawnRegions) d.mesh.material = d.region.key === hovered ? (d.region.chosen ? regionMaterials.chosenHovered : regionMaterials.hovered) : d.region.chosen ? regionMaterials.chosen : regionMaterials.other;
+      container.dataset["regionHovered"] = hovered ?? "";
+      props.onRegionHover?.(hovered);
+    });
+    /** The region under a canvas position: the nearest, as they all lie in one plane and over the model. */
+    const regionAt = (clientX: number, clientY: number): string | undefined => {
+      if (!drawnRegions.length) return undefined;
+      const rect = canvas.getBoundingClientRect();
+      pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObjects(drawnRegions.map((d) => d.mesh), false)[0];
+      return hit && drawnRegions.find((d) => d.mesh === hit.object)?.region.key;
+    };
+
     // ---------- canvases (research/21, "Canvas") ----------
 
     /** A texture per drawn image, kept while a canvas shows it. */
@@ -1525,6 +1582,13 @@ export function Viewer(props: ViewerProps) {
     let down: { x: number; y: number } | undefined;
     const onPointerMove = (event: PointerEvent) => {
       if (event.buttons) return;
+      if (props.regions?.length) {
+        if (hovered()) setHovered(undefined);
+        const key = regionAt(event.clientX, event.clientY);
+        if (key !== hoveredRegion()) setHoveredRegion(key);
+        if (props.onPointer) props.onPointer(pointAt(event.clientX, event.clientY));
+        return;
+      }
       if (props.canvasPick) {
         if (hovered()) setHovered(undefined);
         props.onCanvasHover?.(props.canvasPick, canvasAt(props.canvasPick, event.clientX, event.clientY));
@@ -1547,6 +1611,12 @@ export function Viewer(props: ViewerProps) {
         if (uv) props.onCanvasPick?.(props.canvasPick, uv);
         return;
       }
+      // A region of a sketch, which hides the model's faces and edges while regions are picked.
+      if (props.regions?.length && event.button === 0) {
+        const key = regionAt(event.clientX, event.clientY);
+        if (key) props.onRegionPick?.(key);
+        return;
+      }
       if (event.button === 2 && props.onContextMenu) {
         const entity = props.pick ? undefined : hoverAt(event.clientX, event.clientY);
         props.onContextMenu(isBody(entity) ? entity : undefined, { x: event.clientX, y: event.clientY });
@@ -1561,6 +1631,7 @@ export function Viewer(props: ViewerProps) {
     };
     const onPointerLeave = () => {
       setHovered(undefined);
+      setHoveredRegion(undefined);
       if (props.canvasPick) props.onCanvasHover?.(props.canvasPick, undefined);
       props.onPointer?.(undefined);
     };
@@ -1705,6 +1776,20 @@ export function Viewer(props: ViewerProps) {
         const p = toScreen(a.clone().addScaledVector(b.clone().sub(a), u).addScaledVector(d.clone().sub(a), v));
         return { x: Math.round(p.x), y: Math.round(p.y) };
       },
+      regions: () =>
+        drawnRegions.map(({ region, mesh }) => {
+          // The centroid of a triangle that a click there hits, as regions may be concave or have holes.
+          const position = mesh.geometry.getAttribute("position");
+          let point: { x: number; y: number } | undefined;
+          for (let t = 0; t < position.count / 3 && !point; t++) {
+            const c = new THREE.Vector3();
+            for (let k = 0; k < 3; k++) c.add(new THREE.Vector3().fromBufferAttribute(position, 3 * t + k));
+            const p = toScreen(c.divideScalar(3));
+            const at = { x: Math.round(p.x), y: Math.round(p.y) };
+            if (document.elementFromPoint(at.x, at.y) === canvas && regionAt(at.x, at.y) === region.key) point = at;
+          }
+          return { key: region.key, chosen: region.chosen, hovered: hoveredRegion() === region.key, point };
+        }),
       peerMarkers: () =>
         [...markers].map(([key, m]) => {
           const p = toScreen(m.point);
@@ -1754,7 +1839,8 @@ export function Viewer(props: ViewerProps) {
       dotGeometry.dispose();
       pmrem.dispose();
       scene.environment?.dispose();
-      for (const m of [...ghostLines.values(), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, sketchMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
+      for (const d of drawnRegions) d.mesh.geometry.dispose();
+      for (const m of [...ghostLines.values(), ...Object.values(regionMaterials), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, sketchMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
       upper?.environment.dispose();
       upper?.renderer.dispose();

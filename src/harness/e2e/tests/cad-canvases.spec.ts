@@ -91,12 +91,12 @@ test("an image inserted as a canvas lies on XY; its dialog places, turns, scales
   await open(page);
   const docs = await sidebarDocuments(page, { "grid.svg": { file: "grid.svg", mimeType: "image/svg+xml", text: GRID_SVG } });
 
-  // Dropped in the view, it waits; Canvas is offered first, and puts it on XY under the model's centre, about as wide as the model.
+  // Dropped in the view, it waits; after Sketch, Canvas is offered, and puts it on XY under the model's centre, about as wide as the model.
   await drag(page, "grid.svg", await emptyView(page), false);
   await expect(status(page)).toContainText("Insert grid.svg");
   await page.mouse.up();
   const roles = dialog(page).getByRole("radiogroup", { name: "Use as" }).getByRole("radio");
-  await expect(roles).toHaveText(["Canvas", "Import", "Annotation"]);
+  await expect(roles).toHaveText(["Sketch", "Canvas", "Import", "Annotation"]);
   await roles.getByText("Canvas", { exact: true }).click();
   await expect.poll(() => canvasesOf(page).then((l) => l.length)).toBe(1);
   const [stored] = await canvasesOf(page);

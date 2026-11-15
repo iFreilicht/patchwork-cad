@@ -86,13 +86,13 @@ test("two users' annotations both stay; a removal wins over a concurrent change"
   expect(annotations(a.doc()).map((x) => x.id).sort()).toEqual(["y", "z"]);
 });
 
-test("a drop on a face preselects Annotation, but not for an image or an SVG; the code, the timeline and the list Import", () => {
+test("a drop on a face preselects Annotation, but nothing for an image and Sketch for an SVG; the code, the timeline and the list Import", () => {
   const file = (extension: string, mimeType: string) => ({ "@patchwork": { type: "file" }, name: "f", extension, mimeType, content: "x" });
   expect(preselects({ kind: "face" }, { title: "Notes" })).toBe("annotation");
   expect(preselects({ kind: "face" }, file("md", "text/markdown"))).toBe("annotation");
   expect(preselects({ kind: "face" }, undefined)).toBe("annotation");
   expect(preselects({ kind: "face" }, file("png", "image/png"))).toBeUndefined();
-  expect(preselects({ kind: "face" }, file("svg", "image/svg+xml"))).toBeUndefined();
+  expect(preselects({ kind: "face" }, file("svg", "image/svg+xml"))).toBe("sketch");
   expect(preselects({ kind: "import" }, file("png", "image/png"))).toBe("import");
   expect(preselects({ kind: "insert" }, { title: "Notes" })).toBeUndefined();
 });

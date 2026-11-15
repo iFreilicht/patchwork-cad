@@ -5,7 +5,7 @@
  */
 import { splice } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
-import type { AnyNode, ArrayExpression, Expression, Program } from "acorn";
+import type { AnyNode, ArrayExpression, CallExpression, Expression, Program } from "acorn";
 import type { CadModelDoc } from "../types.ts";
 import { FEATURES_MODULE, returnedOutputs, type Analysis, type FeatureCall, type Output, type Prop, type Span } from "./analyze.ts";
 import { graph, inputOf as consumedInput, type Graph, type Use } from "./deps.ts";
@@ -50,6 +50,28 @@ function removeFromList(items: Span[], index: number, container: Span): Edit {
   if (next) return { start: item.start, end: next.start, text: "" };
   if (previous) return { start: previous.end, end: item.end, text: "" };
   return { start: container.start + 1, end: container.end - 1, text: "" };
+}
+
+/**
+ * Sets option `key` of a call's options, its second argument, to the expression `text`, or removes it
+ * for undefined, e.g. `svg(logo, { width: 40 })`: the options are added after the first argument
+ * where it has none, and go with their last option.
+ */
+export function setOption(call: CallExpression, key: string, text: string | undefined): Edit[] {
+  const [first, options] = call.arguments;
+  if (!first) return [];
+  if (!options) return text === undefined ? [] : [{ start: first.end, end: first.end, text: `, { ${key}: ${text} }` }];
+  if (options.type !== "ObjectExpression") return [];
+  const props = options.properties.flatMap((p) => (p.type === "Property" && !p.computed && ((p.key.type === "Identifier" && p.key.name === key) || (p.key.type === "Literal" && p.key.value === key)) ? [p] : []));
+  const existing = props[0];
+  if (text !== undefined) {
+    if (existing) return [{ start: existing.value.start, end: existing.value.end, text }];
+    const last = options.properties.at(-1);
+    return last ? [{ start: last.end, end: last.end, text: `, ${key}: ${text}` }] : [{ start: options.start + 1, end: options.start + 1, text: ` ${key}: ${text} ` }];
+  }
+  if (!existing) return [];
+  if (options.properties.length === 1) return [{ start: first.end, end: options.end, text: "" }];
+  return [removeFromList(options.properties.map((p) => ({ start: p.start, end: p.end })), options.properties.indexOf(existing), options)];
 }
 
 export function removeProp(call: FeatureCall, key: string): Edit[] {
@@ -103,7 +125,7 @@ export function ensureImports(analysis: Analysis, names: readonly string[]): Edi
 
 /** Library functions a piece of generated code calls, so that they can be imported. */
 export const usedFunctions = (code: string): string[] =>
-  ["sketch", "extrude", "fillet", "chamfer", "combine", "move", "plane", "rect", "circle", "polygon", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
+  ["sketch", "extrude", "fillet", "chamfer", "combine", "move", "plane", "rect", "circle", "polygon", "svg", "edge", "any", "ref"].filter((f) => new RegExp(`(^|[^.\\w$])${f}\\b`).test(code));
 
 export function indentOf(source: string, offset: number): string {
   const lineStart = source.lastIndexOf("\n", offset - 1) + 1;

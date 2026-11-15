@@ -1,10 +1,11 @@
-import { createEffect, createSignal, For, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { schemas, type ParamSpec } from "@patchwork-cad/features/schema";
 import { parseExpressionAt, type Expression } from "acorn";
 import type { RefDiagnostic } from "@patchwork-cad/features/runtime";
 import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
-import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setProp, usedFunctions } from "../../model/splice.ts";
+import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setOption, setProp, usedFunctions } from "../../model/splice.ts";
+import { sketchVariable } from "./regions.ts";
 import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { ValueTarget } from "./inserts.ts";
 import { schemaOf, type Editor } from "./state.ts";
@@ -32,6 +33,9 @@ export function ExpressionInput(props: { value: string; placeholder?: string; la
   const [invalid, setInvalid] = createSignal(false);
   /** The value when the field got the focus. */
   let before = "";
+  // A field taken away while it has the focus blurs: what it holds then was committed as it was typed, or isn't a value.
+  let mounted = true;
+  onCleanup(() => (mounted = false));
   createEffect(() => {
     const value = props.value;
     if (document.activeElement !== input) input.value = value;
@@ -64,6 +68,7 @@ export function ExpressionInput(props: { value: string; placeholder?: string; la
         }
       }}
       onBlur={() => {
+        if (!mounted) return;
         commit(input.value.trim(), false);
         if (invalid() || (input.value.trim() === "" && !props.allowEmpty)) {
           input.value = props.value;
@@ -238,7 +243,7 @@ function ReferenceChip(props: { code: string; diagnostic: RefDiagnostic | undefi
   );
 }
 
-export function PickButton(props: { editor: Editor; param: string; kind: "face" | "edge" | "body" | "sketch" | "version"; multi: boolean; disabled: boolean; label?: string }) {
+export function PickButton(props: { editor: Editor; param: string; kind: "face" | "edge" | "body" | "sketch" | "version" | "region"; multi: boolean; disabled: boolean; label?: string }) {
   const active = () => props.editor.pickTarget()?.param === props.param;
   return (
     <button
@@ -347,7 +352,10 @@ function ProfileField(props: FieldProps) {
     <div class="cad-editor__profile">
       <select class="cad-editor__input" aria-label="Profile kind" disabled={props.disabled} value={kind()} onChange={(e) => replaceProfile(PROFILES[e.currentTarget.value]!)}>
         <For each={Object.keys(PROFILES)}>{(k) => <option value={k}>{k}</option>}</For>
-        <Show when={!PROFILES[kind()]}>
+        <Show when={kind() === "svg"}>
+          <option value="svg">svg</option>
+        </Show>
+        <Show when={!PROFILES[kind()] && kind() !== "svg"}>
           <option value="">{textOf(props.source, node()) || "—"}</option>
         </Show>
       </select>
@@ -366,6 +374,12 @@ function ProfileField(props: FieldProps) {
           {field("radius", ["radius"])}
         </div>
       </Show>
+      <Show when={kind() === "svg"}>
+        <code class="cad-editor__drawing" title="The drawing">
+          {textOf(props.source, (node() as { arguments?: Expression[] } | undefined)?.arguments?.[0])}
+        </code>
+        <SvgFields {...props} size={props.entry.trace?.size} />
+      </Show>
       <Show when={kind() === "polygon"}>
         <div class="cad-editor__grid cad-editor__grid--segments">
           <For each={segments()}>
@@ -379,6 +393,122 @@ function ProfileField(props: FieldProps) {
           </For>
         </div>
       </Show>
+    </div>
+  );
+}
+
+/**
+ * An extrusion's profiles (research/21, "Sketch from a drawing"): a chip per region it names, picked
+ * in the view, and Filled, which names all that the drawing fills. Without any, a sketch's only one.
+ */
+function RegionsField(props: FieldProps) {
+  const node = () => propNode(props.entry.call, props.name);
+  const items = () => {
+    const n = node();
+    if (!n) return [];
+    if (n.type !== "ArrayExpression") return [{ code: textOf(props.source, n), index: undefined }];
+    return elements(props.entry.call, props.name).map((s, index) => ({ code: props.source.slice(s.start, s.end), index }));
+  };
+  const diagnostic = (index: number | undefined) => props.entry.trace?.refs.find((d) => d.param === props.name && d.index === index);
+  const sketch = () => sketchVariable(props.entry.call);
+  const regions = () => {
+    const name = sketch();
+    const entry = props.editor.timeline().entries.find((e) => e.kind === "feature" && e.name === name);
+    return entry?.kind === "feature" ? entry.trace?.regions : undefined;
+  };
+  const filled = () => (sketch() ? `${sketch()}.filled` : undefined);
+  const remove = (index: number | undefined) => props.editor.editOpen((call) => (index === undefined ? setProp(call, props.name, "[]") : removeElement(call, props.name, index)));
+  return (
+    <div class="cad-editor__refs">
+      <For each={items()} fallback={<span class="cad-editor__muted">{regions()?.length === 1 ? "its only profile" : "none"}</span>}>
+        {(item) => (
+          <ReferenceChip
+            code={item.code}
+            diagnostic={diagnostic(item.index)}
+            disabled={props.disabled}
+            onRemove={() => remove(item.index)}
+            onSuggestion={(s) => props.editor.editOpen((call) => (item.index === undefined ? setProp(call, props.name, `[${s}]`) : replaceElement(call, props.name, item.index, s)))}
+          />
+        )}
+      </For>
+      <PickButton editor={props.editor} param={props.name} kind="region" multi disabled={props.disabled || !regions()?.length} label="Select profiles" />
+      <Show when={filled() && regions()?.some((r) => r.filled) && textOf(props.source, node()) !== filled()}>
+        <button class="cad-editor__button" title={`Every profile the drawing fills: ${filled()}`} disabled={props.disabled} onClick={() => props.editor.editOpen((call) => setProp(call, props.name, filled()!))}>
+          Filled
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+/** How an SVG profile is sized: as the drawing is, or to a width, a height or a scale. */
+const SVG_SIZES = ["natural", "width", "height", "scale"] as const;
+
+/** An SVG profile, `svg(logo, { width, center })`: the drawing, its size and where its middle lies (research/21, "Sketch from a drawing"). */
+function SvgFields(props: FieldProps & { size: [number, number] | undefined }) {
+  const profileOf = (call: FeatureCall) => {
+    const n = call.props?.find((p) => p.key === props.name)?.node;
+    return n?.type === "CallExpression" ? n : undefined;
+  };
+  const property = (call: FeatureCall, key: string) => {
+    const options = profileOf(call)?.arguments[1];
+    const p = options?.type === "ObjectExpression" ? options.properties.find((x) => x.type === "Property" && !x.computed && x.key.type === "Identifier" && x.key.name === key) : undefined;
+    return p?.type === "Property" ? p : undefined;
+  };
+  const option = (key: string) => property(props.entry.call, key)?.value as Expression | undefined;
+  const sizing = () => SVG_SIZES.find((k) => k !== "natural" && option(k)) ?? "natural";
+  const setOptionOf = (key: string, text: string | undefined) =>
+    props.editor.editOpen((call) => {
+      const node = profileOf(call);
+      return node ? setOption(node, key, text) : [];
+    });
+  /** Sizes it another way: the other option in place of the one it has, at the size it has now, or as drawn. */
+  const chooseSizing = (next: string) =>
+    props.editor.editOpen((call) => {
+      const node = profileOf(call);
+      const current = sizing();
+      if (!node || next === current) return [];
+      if (next === "natural") return setOption(node, current, undefined);
+      const value = next === "scale" ? "1" : String(+(props.size?.[next === "height" ? 1 : 0] ?? 10).toFixed(2));
+      if (current === "natural") return setOption(node, next, value);
+      const p = property(call, current)!;
+      return [{ start: p.key.start, end: p.value.end, text: `${next}: ${value}` }];
+    });
+  const center = (i: 0 | 1) => {
+    const n = option("center");
+    return n?.type === "ArrayExpression" ? textOf(props.source, n.elements[i] as Expression | undefined) : "";
+  };
+  const setCenter = (i: 0 | 1, t: string) => {
+    const xy = [center(0) || "0", center(1) || "0"];
+    xy[i] = t || "0";
+    return setOptionOf("center", xy.every((v) => v === "0") ? undefined : `[${xy.join(", ")}]`);
+  };
+  return (
+    <div class="cad-editor__grid">
+      <label class="cad-editor__subfield">
+        <span>Size</span>
+        <select class="cad-editor__input" aria-label="Size" disabled={props.disabled} value={sizing()} onChange={(e) => chooseSizing(e.currentTarget.value)}>
+          <For each={SVG_SIZES}>{(k) => <option value={k}>{k === "natural" ? "as drawn" : k}</option>}</For>
+        </select>
+      </label>
+      {/* A field of its own per option: text typed for the width is never committed as the height. */}
+      <Show when={sizing() !== "natural" && sizing()} keyed>
+        {(key) => (
+          <label class="cad-editor__subfield">
+            <span>{key}</span>
+            <ExpressionInput label={key} value={textOf(props.source, option(key))} disabled={props.disabled} onCommit={(t) => setOptionOf(key, t)} />
+          </label>
+        )}
+      </Show>
+      <label class="cad-editor__subfield">
+        <span>center x</span>
+        <ExpressionInput label="center x" value={center(0)} placeholder="0" allowEmpty disabled={props.disabled} onCommit={(t) => setCenter(0, t)} />
+      </label>
+      <label class="cad-editor__subfield">
+        <span>center y</span>
+        <ExpressionInput label="center y" value={center(1)} placeholder="0" allowEmpty disabled={props.disabled} onCommit={(t) => setCenter(1, t)} />
+      </label>
+      <Show when={props.size}>{(s) => <span class="cad-editor__muted" data-size>{`${+s()[0].toFixed(2)} × ${+s()[1].toFixed(2)}`}</span>}</Show>
     </div>
   );
 }
@@ -408,7 +538,7 @@ function Field(props: FieldProps): JSX.Element {
       // Code is edited in the code pane (research/11): body() entries have no dialog.
       return null;
     case "regions":
-      return null;
+      return <RegionsField {...props} />;
   }
 }
 
@@ -496,6 +626,13 @@ export function FeatureDialog(props: { editor: Editor; entry: FeatureEntry; onEd
           </Show>
         </p>
       </Show>
+      <For each={props.entry.trace?.warnings ?? []}>
+        {(warning) => (
+          <p class="cad-editor__problem" data-status="warning">
+            {warning}
+          </p>
+        )}
+      </For>
       <Show when={props.entry.trace?.unused}>
         <p class="cad-editor__problem" data-status="unused">
           Unused: no later feature uses this result, and the model doesn't return it.{" "}

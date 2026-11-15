@@ -490,6 +490,14 @@
   align-items: center;
 }
 
+/* An SVG profile's drawing, e.g. an import's name; a drawing written out in the code takes one line. */
+.cad-editor__drawing {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .cad-editor__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

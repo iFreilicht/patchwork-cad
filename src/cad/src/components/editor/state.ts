@@ -51,9 +51,10 @@ export interface PickTarget {
   param: string;
   /**
    * A face or edge of a body, or a body or sketch as a whole, which is picked as its variable
-   * (research/15, "Availability"); `version` is either, e.g. for the return (`param: "return"`).
+   * (research/15, "Availability"); `version` is either, e.g. for the return (`param: "return"`);
+   * `region` a region of the open extrusion's sketch (research/21, "Sketch from a drawing").
    */
-  kind: EntityKind | "body" | "sketch" | "version";
+  kind: EntityKind | "body" | "sketch" | "version" | "region";
   /** Whether picks are added to a list (edges, tools) or replace the value (a sketch plane, a target). */
   multi: boolean;
 }
@@ -123,6 +124,11 @@ export interface Editor {
   editOpen(edit: (call: FeatureCall, analysis: Analysis, source: string) => Edit[]): boolean;
   /** Adds a feature with default parameters and opens it. */
   insert(type: InsertableType): void;
+  /**
+   * Adds a feature of `type` whose call `code` makes, at the marker, and opens it; with `edits` of the
+   * code as it is, e.g. an import the call uses, in the same change.
+   */
+  insertCall(type: InsertableType, code: (source: string, analysis: Analysis) => { code: string; edits: Edit[] } | undefined): void;
   deleteOpen(): void;
   /** Fills the pick target with the picked entity's reference, or with its body's variable. */
   pick(entity: Entity): Promise<void>;
@@ -428,7 +434,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     return true;
   };
 
-  const insert = (type: InsertableType) => {
+  const insert = (type: InsertableType, custom?: Parameters<Editor["insertCall"]>[1]) => {
     const text = doc().content;
     const { analysis: a } = tryAnalyze(text);
     if (!a) return;
@@ -448,10 +454,12 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       .find((name) => name !== undefined && declaredBefore(name));
     const body = (returned.length === 1 ? returned[0] : undefined) ?? nextInput ?? lastOf(before, "body") ?? "undefined";
     const sketch = lastOf(before, "sketch");
-    const code = DEFAULTS[type]({ sketch: sketch ?? "undefined", body });
+    const made = custom ? custom(text, a) : { code: DEFAULTS[type]({ sketch: sketch ?? "undefined", body }), edits: [] };
+    if (!made) return;
+    const { code } = made;
     const consumes = type === "fillet" || type === "chamfer" || type === "combine" ? body : undefined;
     const hides = type === "extrude" ? sketch : undefined;
-    apply(handle, insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) }));
+    apply(handle, [...made.edits, ...insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) })]);
     const after = tryAnalyze(doc().content).analysis;
     const entries = after ? timeline(doc().content, after, []).entries : [];
     const index = entries.findIndex((e) => e.kind === "feature" && e.name === name);
@@ -462,7 +470,9 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       setAnchor({ cursor, name, index });
       setSelection({ kind: "feature", id: cursor, from: "toolbar" });
     });
-    setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : type === "combine" ? { param: "tools", kind: "body", multi: true } : undefined);
+    // An extrusion of a sketch with several profiles starts with picking them, as Fusion's does (research/21, "Sketch from a drawing").
+    const profiles = type === "extrude" ? (model.trace().find((t) => t.name === sketch)?.regions?.length ?? 0) : 0;
+    setPickTarget(type === "fillet" || type === "chamfer" ? { param: "edges", kind: "edge", multi: true } : type === "combine" ? { param: "tools", kind: "body", multi: true } : profiles > 1 ? { param: "regions", kind: "region", multi: true } : undefined);
   };
 
   const deleteOpen = () => {
@@ -925,7 +935,8 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     pickTarget,
     setPickTarget,
     editOpen,
-    insert,
+    insert: (type: InsertableType) => insert(type),
+    insertCall: insert,
     deleteOpen,
     pick,
     boundBody,

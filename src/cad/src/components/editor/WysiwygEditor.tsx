@@ -44,6 +44,7 @@ import { DEFAULT_DOCUMENT_ASPECT, DOCUMENT_PX, fitCamera, isTldraw, tldrawBounds
 import { onPlane } from "../../model/canvases.ts";
 import type { DocumentCamera, StoredCanvas } from "../../types.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
+import { chosenRegions, sketchVariable, toggleRegion } from "./regions.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 /** Experiment: a view of tldraw documents without UI or background, for canvases (research/22-document-canvases/tldraw-view). */
@@ -420,6 +421,33 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const hovered = [...(primary !== undefined && primary !== index ? self(entries[primary]?.span) : []), ...(resultHovered() ? self(editor.timeline().returned) : [])];
     if (index === undefined || !entries[index]) return hovered;
     return [...self(entries[index]!.span), ...[...editor.related().values()].map((r) => ({ ...entries[r.index]!.span, relation: r.relation, link: r.link })), ...hovered];
+  };
+
+  /**
+   * While an extrusion's profiles are picked (research/21, "Sketch from a drawing"): its sketch's
+   * regions in the view, those it extrudes accented; a click adds or removes one.
+   */
+  const pickedRegions = createMemo(() => {
+    const entry = editor.open();
+    if (editor.pickTarget()?.kind !== "region" || entry?.type !== "extrude") return undefined;
+    const sketch = sketchVariable(entry.call);
+    const regions = model.trace().find((t) => t.name === sketch)?.regions;
+    if (!regions) return undefined;
+    const chosen = chosenRegions(entry.call, entry.trace?.refs ?? [], regions.length);
+    return { regions, shown: regions.map((r, i) => ({ key: String(i), triangles: r.triangles, chosen: chosen.has(i) })) };
+  });
+  const [hoveredRegion, setHoveredRegion] = createSignal<string>();
+  const pickRegion = (key: string) => {
+    const regions = pickedRegions()?.regions;
+    if (!regions) return;
+    editor.editOpen((call, _, source) => toggleRegion(call, source, editor.open()?.trace?.refs ?? [], regions, Number(key)));
+  };
+  /** What a click on the hovered region does, for the status bar. */
+  const regionStatus = () => {
+    const picked = pickedRegions();
+    const key = hoveredRegion();
+    const region = key === undefined ? undefined : picked?.regions[Number(key)];
+    return region && `${picked!.shown[Number(key)]!.chosen ? "Remove" : "Add"} ${region.code}`;
   };
 
   /** The open sketch's profile, or the sketch of the open extrude, and the profiles of hovered sketches. */
@@ -807,7 +835,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       <div class="cad-editor__stage" ref={stage} tabindex="-1" data-drop="insert">
         <Viewer
           shapes={rolledBack() || model.shapes() ? shown() : undefined}
-          pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
+          pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" || editor.pickTarget()?.kind === "region" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
           onPick={pick}
           hoverHighlight={!editor.pickingVersion()}
           pickable={editor.boundBody() === undefined ? undefined : (body) => body === editor.boundBody()}
@@ -822,6 +850,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           peers={peerMarkers(peers())}
           overlays={[...overlays(), ...calibration.overlays()]}
           canvases={shownCanvases()}
+          regions={pickedRegions()?.shown}
+          onRegionPick={pickRegion}
+          onRegionHover={setHoveredRegion}
           canvasPick={calibration.state()?.id}
           onCanvasPick={calibration.pick}
           onCanvasHover={calibration.hover}
@@ -949,7 +980,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onOpen: () => toggle({ kind: "params" }),
         }}
       />
-      <StatusBar model={model} notice={editor.notice()} action={inserts.status() ?? calibration.status()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
+      <StatusBar model={model} notice={editor.notice()} action={inserts.status() ?? calibration.status() ?? regionStatus()} problems={[...undialogued(), ...heldBack(), ...params.problems()]} context={shownWith()} reference={selectedName.name() ? { code: selectedName.name()!, selected: true } : hoverName.name() ? { code: hoverName.name()!, selected: false } : undefined} />
     </div>
   );
 }

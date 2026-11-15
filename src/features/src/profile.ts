@@ -186,6 +186,11 @@ export interface Region {
   face: Shape;
   /** Its triangles in sketch coordinates: x and y of each corner, three corners each. */
   triangles: number[];
+  /**
+   * The closed path it is all of, running counterclockwise, whose curves split nothing: its edges in
+   * order, from which its face is made as a single loop's always was, so that its caps are meshed alike.
+   */
+  loop?: { edges: Shape[]; ids: string[] };
 }
 
 /** A piece of a curve, after the curves were split where they meet, and the ids of the segments it lies on. */
@@ -202,12 +207,12 @@ export interface Arrangement {
 /** The regions that `paths` enclose on `fr`, and the pieces their curves were split into. */
 export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Frame): Arrangement {
   const o = oc();
-  const sources: { edge: Shape; id: string }[] = [];
+  const sources: { edge: Shape; id: string; path: string }[] = [];
   for (const p of paths) {
     let at = p.start;
     for (const s of p.segments) {
       const edge = curveEdge(fr, at, s.curve);
-      if (edge) sources.push({ edge, id: s.id });
+      if (edge) sources.push({ edge, id: s.id, path: p.id });
       at = endOf(s.curve);
     }
   }
@@ -243,6 +248,28 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
     }
   const outer = new Set(subShapes(big, "edge").flatMap(piecesOf).map((p) => edgeIndex.indexOf(p)));
   const loops = paths.filter((p) => p.closed).map((p) => ({ id: p.id, poly: samplePath(p, tolerance / 10) }));
+  // Closed paths, counterclockwise, whose curves are in the result as they were: each may be a region of its own, all of it.
+  const whole = new Map<string, { edges: Shape[]; ids: string[] }>();
+  for (const l of loops) {
+    const own = sources.filter((x) => x.path === l.id);
+    const signed = l.poly.reduce((sum, [x, y], i) => sum + x * l.poly[(i + 1) % l.poly.length]![1] - l.poly[(i + 1) % l.poly.length]![0] * y, 0);
+    // Each curve one piece, which no other curve lies on; the splitter gives even such a curve anew, its ends merged with others'.
+    const unsplit = own.every((x) => {
+      const pieces = piecesOf(x.edge);
+      return pieces.length === 1 && ids[edgeIndex.indexOf(pieces[0]!)]?.length === 1;
+    });
+    // Made anew, as the splitter may have changed the edges it split with.
+    const path = paths.find((p) => p.id === l.id)!;
+    const fresh: Shape[] = [];
+    let at = path.start;
+    for (const g of path.segments) {
+      const edge = curveEdge(fr, at, g.curve);
+      if (edge) fresh.push(edge);
+      at = endOf(g.curve);
+    }
+    if (own.length && signed > 0 && unsplit && fresh.length === own.length) whole.set(l.id, { edges: fresh, ids: own.map((x) => x.id) });
+  }
+  const pathOf = new Map(sources.flatMap((x) => piecesOf(x.edge).map((piece) => [edgeIndex.indexOf(piece), x.path] as const)));
   const yDir = yDirOf(fr);
   const toSketch = (x: number, y: number, z: number): Point => {
     const d: Vec = [x - fr.origin[0], y - fr.origin[1], z - fr.origin[2]];
@@ -253,6 +280,8 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
     const own = subShapes(face, "edge");
     if (own.some((e) => outer.has(edgeIndex.indexOf(e)))) continue;
     const mesh = cast(face).mesh({ tolerance, angularTolerance: 0.2 });
+    // The triangulation stays on the face, and an extrusion's caps share it, which would mesh the body's caps as finely and otherwise than its other faces.
+    o.BRepTools.Clean(face, true);
     const triangles = mesh.triangles.flatMap((v) => toSketch(mesh.vertices[3 * v]!, mesh.vertices[3 * v + 1]!, mesh.vertices[3 * v + 2]!));
     if (!triangles.length) continue;
     const point = interiorPoint(triangles);
@@ -262,7 +291,10 @@ export function arrange(paths: readonly Path[], fills: readonly Fill[], fr: Fram
       return f.rule === "evenodd" ? w % 2 !== 0 : w !== 0;
     });
     const names = [...new Set(loops.filter((l) => inside.get(l.id) !== 0).map((l) => l.id))].sort();
-    regions.push({ loops: names, filled, point, area: area(face), face, triangles });
+    const paths = new Set(own.map((e) => pathOf.get(edgeIndex.indexOf(e))));
+    const [only] = paths;
+    const loop = paths.size === 1 && only !== undefined ? whole.get(only) : undefined;
+    regions.push({ loops: names, filled, point, area: area(face), face, triangles, ...(loop && loop.edges.length === own.length ? { loop } : {}) });
   }
   splitter.delete();
   return { regions, pieces: edges.map((edge, i) => ({ edge, ids: ids[i]! })).filter((p) => p.ids.length) };
@@ -335,6 +367,18 @@ export function joinRegions(chosen: readonly Region[], pieces: readonly Piece[])
   const o = oc();
   const index = new ShapeIndex(pieces.map((p) => p.edge));
   const idsOf = (e: Shape) => pieces[index.indexOf(e)]?.ids ?? [];
+  const single = chosen.length === 1 ? chosen[0]!.loop : undefined;
+  if (single) {
+    const wire = new o.BRepBuilderAPI_MakeWire();
+    for (const e of single.edges) wire.Add(o.TopoDS.Edge(e));
+    if (wire.IsDone()) {
+      const face = new o.BRepBuilderAPI_MakeFace(wire.Wire(), true).Face();
+      wire.delete();
+      // A single wire built edge by edge keeps its insertion order; it connects them with edges of its own.
+      return { face, edges: subShapes(face, "edge").map((edge, k) => ({ edge, ids: [single.ids[k]!] })) };
+    }
+    wire.delete();
+  }
   // Regions that share an edge are joined; the others stay as they are, which spares the join e.g. the letters of a text.
   const group = chosen.map((_, i) => i);
   const root = (i: number): number => (group[i] === i ? i : (group[i] = root(group[i]!)));

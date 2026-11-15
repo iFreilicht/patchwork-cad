@@ -375,7 +375,8 @@ test("body fields are filled by picking: in the view, the browser or the timelin
   await expect(versionChips(page, "tools")).toHaveText(["fillet1"]);
   await timelineEntry(page, "plate").click();
   await expect(page.locator(".cad-model__status")).toContainText("plate is the target of joined");
-  // In the view: the rolled-back view shows plate and fillet1; clicking fillet1 takes it out.
+  // In the view: the rolled-back view shows plate and fillet1; clicking fillet1 takes it out. Once built without boss as a tool: before, boss shows where fillet1 is.
+  await expect(page.locator(".cad-model__status")).not.toContainText("building", { timeout: 60_000 });
   await pickNear(page, "face", [30, 20, 20], "fillet1");
   await expect(versionChips(page, "tools")).toHaveText([]);
   await expect(timelineEntry(page, "joined")).toHaveAttribute("data-status", "failed");
