@@ -266,3 +266,49 @@ test("collaborators see each other's pointer, with their name, and selection in 
   await a.close();
   await expect(peerCursor).toHaveCount(0, { timeout: 30_000 });
 });
+
+test.describe("embedded documents", () => {
+  // codemirror-base's presence() bug, as in concurrent-edits.spec.ts: the embedded markdown editor reconfigures its presence.
+  test.use({ pageErrorsAllowed: ["RangeError: Field is not present in this state"] });
+
+  test("a document dropped in from the sidebar is a cell that shows it, which takes the pointer while it is selected; the SVG has its title", async ({ users }, info) => {
+    const [a] = await users(1);
+    const page = a!.page;
+    await bootToFrame(page);
+    const notes = "# Bracket notes\n\n- fillet the top edges\n";
+    const docs = await sidebarDocuments(page, { "Bracket notes": { data: { "@patchwork": { type: "markdown" }, content: notes } } });
+    await createViaMenu(page, "draw.io Diagram");
+    const url = docUrl(page);
+    await expect(editorFrame(page).locator(".geDiagramContainer")).toBeVisible({ timeout: 60_000 });
+    const box = (await editorFrame(page).locator(".geDiagramContainer").boundingBox())!;
+    await drag(page, "Bracket notes", { x: box.x + box.width * 0.6, y: box.y + box.height * 0.4 });
+
+    // A cell that names the document, titled by it, shown in Patchwork's embed frame.
+    await expect.poll(async () => Object.values((await diagramOf(page, url)).pages?.[0]?.cells ?? {}).flatMap((c) => (c.attributes["patchworkUrl"] ? [[c.tag, c.attributes["label"], c.attributes["patchworkUrl"]]] : [])), { timeout: 20_000 }).toEqual([["object", "Bracket notes", docs["Bracket notes"]]]);
+    const frame = page.locator("patchwork-view.drawio-embed");
+    await expect(frame).toHaveAttribute("doc-url", docs["Bracket notes"]!);
+    const line = frame.locator(".cm-line", { hasText: "fillet the top edges" });
+    await expect(line).toBeVisible({ timeout: 20_000 });
+    // Everything else reads its title in the SVG.
+    await expect.poll(async () => (await diagramOf(page, url)).content, { timeout: 20_000 }).toContain(">Bracket notes<");
+
+    // Deselected, a click on it selects the cell, as any other; selected, the document takes the next click and typing; Escape leaves it.
+    const at = (await frame.boundingBox())!;
+    await page.mouse.click(box.x + 20, box.y + box.height - 20);
+    await expect.poll(() => inEditor<number>(page, "return ui.editor.graph.getSelectionCells().length;")).toBe(0);
+    await expect(frame).not.toHaveClass(/drawio-embed--active/);
+    await page.mouse.click(at.x + at.width / 2, at.y + at.height / 2);
+    await expect.poll(() => inEditor<number>(page, "return ui.editor.graph.getSelectionCells().length;")).toBe(1);
+    await expect(frame).toHaveClass(/drawio-embed--active/);
+    await line.click();
+    await page.keyboard.press("End");
+    await page.keyboard.type(" and the bottom");
+    const markdown = () => page.evaluate(async (u) => String(((await (window as unknown as { repo: Repo }).repo.find(u)).doc() as { content: string }).content), docs["Bracket notes"]!);
+    await expect.poll(markdown).toContain("fillet the top edges and the bottom");
+    if (shots) await page.screenshot({ path: `${shots}/drawio-embed-${info.project.name}.png` });
+    await expect.poll(() => inEditor<number>(page, "return ui.editor.graph.getSelectionCells().length;")).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect(frame).not.toHaveClass(/drawio-embed--active/);
+    await expect.poll(() => inEditor<number>(page, "return ui.editor.graph.getSelectionCells().length;")).toBe(0);
+  });
+});

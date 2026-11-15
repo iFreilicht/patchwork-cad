@@ -19,6 +19,7 @@ import { subscribe } from "@inkandswitch/patchwork-providers";
 import type { DrawioDoc } from "./datatype.ts";
 import { applyChanges, applyPages, diagramXml, parseDiagram, type PageRecord } from "./diagram.ts";
 import { bridge, editorUi, editorXml, mergeInto, type DrawioWindow, type EditorUi, type ShownPeer } from "./editor.ts";
+import { embeds } from "./embeds.ts";
 import { DiagramPresence, presenceColor } from "./presence.ts";
 import { diagramOf, EMPTY_DIAGRAM, textOfDataUri } from "./svg.ts";
 
@@ -90,6 +91,12 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
   url.searchParams.set("dark", scheme.dark() ? "1" : "0");
   iframe.src = url.href;
   element.append(iframe);
+  // Patchwork documents in the diagram, shown over the iframe where their cells are (embeds.ts).
+  const layer = document.createElement("div");
+  layer.className = "drawio-embed-layer";
+  layer.style.cssText = "position:absolute;inset:0;pointer-events:none";
+  element.append(layer);
+  let embedded: ReturnType<typeof embeds> | undefined;
   const post = (message: object) => iframe.contentWindow?.postMessage(JSON.stringify(message), "*");
 
   /** The diagram as draw.io's XML, from the records, or from the SVG of a document that has none yet. */
@@ -182,6 +189,14 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
       ui.setDarkMode(scheme.dark());
       shadow = parseDiagram(editorXml(ui));
       shown = bridge(win(), ui, (view) => presence.set(view));
+      embedded = embeds(win() as Parameters<typeof embeds>[0], ui, layer, {
+        self: handle.url,
+        titleOf: async (url) => {
+          const doc = (await repo?.find<{ title?: unknown; name?: unknown }>(url))?.doc();
+          const title = doc?.title ?? doc?.name;
+          return typeof title === "string" && title ? title : undefined;
+        },
+      });
       showPeers();
       sync();
     } else if (message.event === "autosave") {
@@ -224,6 +239,8 @@ export default function mount(handle: DocHandle<DrawioDoc>, element: HTMLElement
     scheme.stop();
     unsubscribe();
     shown?.destroy();
+    embedded?.destroy();
+    layer.remove();
     presence.stop();
     iframe.remove();
   };
