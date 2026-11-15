@@ -44,6 +44,9 @@ export interface Entity {
   index: number;
 }
 
+/** The points of a sketch's paths. */
+const sketchVertices = (s: ShownSketch) => s.outline.flatMap((line) => line.points);
+
 /** A polyline in world coordinates drawn over the model, e.g. a sketch preview. */
 export interface Overlay {
   points: [number, number, number][];
@@ -613,7 +616,7 @@ export function Viewer(props: ViewerProps) {
     let radius = 50;
     /** The corners of each shown body's bounding box, which a fit of the whole model uses (research/20, "Fitting"). */
     let bodyCorners: THREE.Vector3[] = [];
-    const modelPoints = () => [...bodyCorners, ...(props.sketches ?? []).flatMap((s) => s.outline.map((p) => new THREE.Vector3(...p)))];
+    const modelPoints = () => [...bodyCorners, ...(props.sketches ?? []).flatMap((s) => sketchVertices(s).map((p) => new THREE.Vector3(...p)))];
     const lens = (): Lens => ({ perspective: camera === perspective, aspect: width / height, tan: Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2)) });
     /** What the camera shows now: its height at the target. */
     const shot = (): Shot => ({ direction: direction(), target: controls.target.clone(), height: camera === perspective ? heightAt(distance()) : orthoHeight / orthographic.zoom });
@@ -689,7 +692,7 @@ export function Viewer(props: ViewerProps) {
         const position = r.mesh.geometry.getAttribute("position");
         for (let i = 0; i < position.count; i++) if (!inView(v.fromBufferAttribute(position, i), SLIVER)) return false;
       }
-      return (props.sketches ?? []).every((s) => s.outline.every((p) => inView(v.set(...p), SLIVER)));
+      return (props.sketches ?? []).every((s) => sketchVertices(s).every((p) => inView(v.set(...p), SLIVER)));
     };
     /** The eye's distance from `rect`, in multiples of the distance at which `rect` just fits a square 45° view (`CameraState.eye`). */
     const eyeFor = (rect: Rect) => round((camera.position.clone().sub(rect.center).dot(direction()) * 2 * TAN) / Math.max(rect.width, rect.height));
@@ -774,7 +777,7 @@ export function Viewer(props: ViewerProps) {
           return corners(box);
         });
       });
-    const sketchPoints = (names: readonly string[]) => (props.sketches ?? []).filter((s) => names.includes(s.name)).flatMap((s) => s.outline.map((p) => new THREE.Vector3(...p)));
+    const sketchPoints = (names: readonly string[]) => (props.sketches ?? []).filter((s) => names.includes(s.name)).flatMap((s) => sketchVertices(s).map((p) => new THREE.Vector3(...p)));
     /**
      * Finds what a close-up shows, so that a view saved from it follows it (research/20, "Close-ups"):
      * the faces and sketches entirely in it, else the face that covers most of it, shown with the
@@ -783,7 +786,7 @@ export function Viewer(props: ViewerProps) {
     const findSubject = async (i: Intent) => {
       if (!props.faceRefs) return;
       const inside = rendered.flatMap((r) => (r.shape.body ? facesInView(r).map((index) => ({ body: r.shape.body!, index })) : []));
-      const insideSketches = (props.sketches ?? []).filter((s) => s.outline.every((p) => inView(new THREE.Vector3(...p)))).map((s) => s.name);
+      const insideSketches = (props.sketches ?? []).filter((s) => sketchVertices(s).every((p) => inView(new THREE.Vector3(...p)))).map((s) => s.name);
       const covering = inside.length || insideSketches.length ? undefined : faceCoveringView();
       if (!inside.length && !insideSketches.length && !covering) {
         i.camera = { ...i.camera, fit: DEFAULT_MARGINS };
@@ -1099,7 +1102,7 @@ export function Viewer(props: ViewerProps) {
     createEffect(() => {
       dispose([...sketchGroup.children]);
       sketchGroup.clear();
-      for (const sketch of props.sketches ?? []) sketchGroup.add(new LineSegments2(segments({ points: sketch.outline, closed: true }), sketchMaterial));
+      for (const sketch of props.sketches ?? []) for (const line of sketch.outline) sketchGroup.add(new LineSegments2(segments(line), sketchMaterial));
     });
     createEffect(() => {
       dispose([...overlayGroup.children]);

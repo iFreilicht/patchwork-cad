@@ -35,6 +35,12 @@ export interface MeshedShape {
   features: Owned | undefined;
 }
 
+/** A polyline in world coordinates, e.g. a path of a sketch's profile. */
+export interface Polyline {
+  points: [number, number, number][];
+  closed: boolean;
+}
+
 /** One executed feature call, from the feature library's trace. */
 export interface FeatureTrace {
   name: string;
@@ -53,8 +59,10 @@ export interface FeatureTrace {
   results: string[];
   /** The variables of a destructured `body()`. */
   names: string[] | undefined;
-  /** A sketch's profile as a closed polyline in world coordinates. */
-  outline: [number, number, number][] | undefined;
+  /** A sketch's paths as polylines in world coordinates. */
+  outline: Polyline[] | undefined;
+  /** What of its input it couldn't use, e.g. an SVG's elements that aren't drawn. */
+  warnings: string[] | undefined;
   /** The feature's body or sketch is used by no later feature and not returned by main, so it doesn't show. */
   unused: boolean;
   /** Milliseconds the feature took, and the part spent naming faces and edges. */
@@ -65,8 +73,8 @@ export interface FeatureTrace {
 /** A sketch the view shows: one that main returned, or at a rollback one that no feature used yet. */
 export interface ShownSketch {
   name: string;
-  /** Its profile as a closed polyline in world coordinates. */
-  outline: [number, number, number][];
+  /** Its paths as polylines in world coordinates. */
+  outline: Polyline[];
 }
 
 /** A reference to faces or edges as data (`RefData` of the feature library), e.g. a collaborator's pick; its names are opaque here. */

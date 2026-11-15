@@ -407,6 +407,8 @@ function Field(props: FieldProps): JSX.Element {
     case "code":
       // Code is edited in the code pane (research/11): body() entries have no dialog.
       return null;
+    case "regions":
+      return null;
   }
 }
 

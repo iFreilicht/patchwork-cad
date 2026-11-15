@@ -250,6 +250,7 @@ const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | fea
     results: t.results.map((b) => b.name),
     names: t.names,
     outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
+    warnings: t.warnings,
     unused: t.sketch ? unused.has(t.sketch) : t.results.length > 0 && t.results.every((b) => unused.has(b)),
     ms: t.ms,
     namingMs: t.namingMs,

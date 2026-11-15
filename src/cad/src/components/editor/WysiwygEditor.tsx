@@ -340,7 +340,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       const names = value?.type === "Identifier" ? [value.name] : value?.type === "ArrayExpression" ? value.elements.flatMap((e) => (e?.type === "Identifier" ? [e.name] : [])) : [];
       return names.flatMap((n) => wholeBody(n, "accent"));
     }
-    return (entry.trace?.refs ?? []).map((d) => ({ body: d.body, kind: d.kind, indices: d.matches, style: "accent" }));
+    return (entry.trace?.refs ?? []).flatMap((d) => (d.kind === "region" ? [] : [{ body: d.body, kind: d.kind, indices: d.matches, style: "accent" as const }]));
   };
   /** The body hovered in the browser or the lanes, what a pick would take, and what main returns while the return entry is hovered. */
   const bodyHighlights = (): Highlight[] => {
@@ -430,7 +430,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const sketch = hoveredSketch();
     // While the return entry is hovered, the sketches main returns, as its bodies are highlighted.
     if (resultHovered()) for (const n of editor.lanes()?.returned ?? []) if (editor.lanes()?.versions.get(n)?.kind === "sketch") names.add(n);
-    return [...model.trace().flatMap((t) => (names.has(t.name) && t.outline ? [{ points: t.outline, closed: true }] : [])), ...(sketch ? [{ points: sketch, closed: true }] : [])];
+    return [...model.trace().flatMap((t) => (names.has(t.name) && t.outline ? t.outline : [])), ...(sketch ?? [])];
   };
 
   // What collaborators see of this view (research/13), and what this view shows of theirs.

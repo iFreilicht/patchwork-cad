@@ -7,6 +7,7 @@ import { refForm, setFeaturePrinter, type Vec } from "./names.ts";
 import type { Kind, Shape } from "./oc.ts";
 import { capture, Named, Ref, resolveAll } from "./refs.ts";
 import { entities, indexOf, namingTime, type Topo } from "./topo.ts";
+import { arrange, extentOf, RegionRef, regionCode, regionRef, resolveRegion, samplePath, type Arrangement, type Fill, type Frame, type Path, type Region } from "./profile.ts";
 
 import type { ParamSpec } from "./schema.ts";
 
@@ -40,7 +41,14 @@ export class Body extends Named {
   }
 }
 
-/** A planar sketch: a frame and a closed profile with named segments. */
+/** Each sketch's regions, computed when they are first asked for. */
+const arrangements = new WeakMap<Sketch, Arrangement>();
+
+/**
+ * A planar sketch: a frame and a profile of paths with named segments. The regions its curves
+ * enclose are what an extrusion extrudes (research/21, "Sketch from a drawing"): `region(…)` names
+ * one by the closed paths it lies inside, `filled` every region a fill covers.
+ */
 export class Sketch {
   constructor(
     readonly name: string,
@@ -49,40 +57,81 @@ export class Sketch {
     /** Why the sketch could not be placed, e.g. a broken plane reference. Features using it fail. */
     readonly broken?: string,
   ) {}
+
+  /** The regions of the plane that its curves split, bounded on every side, and the pieces of the curves. */
+  get arrangement(): Arrangement {
+    let a = arrangements.get(this);
+    if (!a) {
+      const { paths, fills } = pathsOf(this.profile);
+      a = arrange(paths, fills, this.frame);
+      arrangements.set(this, a);
+    }
+    return a;
+  }
+
+  get regions(): readonly Region[] {
+    return this.arrangement.regions;
+  }
+
+  /** The region inside the loops with these ids and no other, e.g. `region("a", "b")`; `{ near: [x, y] }` last tells several such apart. */
+  region(...args: (string | { near: [number, number] })[]): RegionRef {
+    return regionRef(this.name, args);
+  }
+
+  /** Every region that a fill of the profile covers, e.g. the letters of a text without their holes. */
+  get filled(): RegionRef {
+    return new RegionRef(this.name, "filled");
+  }
 }
 
-export interface Frame {
-  origin: Vec;
-  normal: Vec;
-  xDir: Vec;
+export type { Frame };
+
+/** A profile's paths, and what is filled: a rectangle, circle or polygon is one filled loop. */
+export function pathsOf(p: Profile): { paths: Path[]; fills: Fill[] } {
+  if (p.kind === "paths") return { paths: p.paths, fills: p.fills };
+  if (p.kind === "circle") {
+    const [cx, cy] = p.center;
+    const path: Path = { id: "circle", start: [cx + p.radius, cy], closed: true, segments: [{ id: p.id, curve: { kind: "arc", center: p.center, u: [p.radius, 0], v: [0, p.radius], from: 0, to: 2 * Math.PI } }] };
+    return { paths: [path], fills: [{ loops: ["circle"], rule: "nonzero" }] };
+  }
+  const n = p.points.length;
+  const path: Path = { id: "polygon", start: p.points[0] ?? [0, 0], closed: true, segments: p.points.map((_, i) => ({ id: p.ids[i]!, curve: { kind: "line", to: p.points[(i + 1) % n]! } })) };
+  return { paths: [path], fills: [{ loops: ["polygon"], rule: "nonzero" }] };
 }
 
-/** A sketch's profile as a closed polyline in world coordinates, e.g. for a preview; circles are sampled. */
-export function outline(sketch: Sketch, samples = 48): [number, number, number][] {
+/** A sketch's paths as polylines in world coordinates, e.g. for a preview; curves are sampled. */
+export function outline(sketch: Sketch): { points: [number, number, number][]; closed: boolean }[] {
   const { origin, normal, xDir } = sketch.frame;
   const yDir: Vec = [normal[1] * xDir[2] - normal[2] * xDir[1], normal[2] * xDir[0] - normal[0] * xDir[2], normal[0] * xDir[1] - normal[1] * xDir[0]];
-  const to3 = (x: number, y: number): [number, number, number] => [0, 1, 2].map((i) => origin[i]! + xDir[i]! * x + yDir[i]! * y) as [number, number, number];
-  const p = sketch.profile;
-  if (p.kind === "polygon") return p.points.map(([x, y]) => to3(x, y));
-  return Array.from({ length: samples }, (_, i) => {
-    const a = (2 * Math.PI * i) / samples;
-    return to3(p.center[0] + p.radius * Math.cos(a), p.center[1] + p.radius * Math.sin(a));
+  const to3 = ([x, y]: [number, number]): [number, number, number] => [0, 1, 2].map((i) => origin[i]! + xDir[i]! * x + yDir[i]! * y) as [number, number, number];
+  const { paths } = pathsOf(sketch.profile);
+  const extent = extentOf(paths);
+  const size = extent ? Math.max(extent.max[0] - extent.min[0], extent.max[1] - extent.min[1]) : 1;
+  return paths.map((p) => {
+    const points = samplePath(p, size / 1000).map(to3);
+    // A closed path's last point is its first.
+    return { points: p.closed ? points.slice(0, -1) : points, closed: p.closed };
   });
 }
+
+/** The code that names region `index` of a sketch, e.g. for a pick in the view. */
+export const pickRegion = (sketch: Sketch, index: number): RegionRef => regionCode(sketch.name, sketch.regions, index);
 
 export type Profile =
   /** Segment `ids[i]` runs from `points[i]` to the next point. */
   | { kind: "polygon"; points: [number, number][]; ids: string[] }
-  | { kind: "circle"; center: [number, number]; radius: number; id: string };
+  | { kind: "circle"; center: [number, number]; radius: number; id: string }
+  /** Paths of lines, Bézier curves and arcs, e.g. of an SVG (`svg()`), what is filled, and what of the source couldn't be drawn. */
+  | { kind: "paths"; paths: Path[]; fills: Fill[]; warnings: string[] };
 
 // ---------- build context and trace ----------
 
 export interface RefDiagnostic {
   param: string;
-  /** The body the reference was resolved against. */
+  /** The body the reference was resolved against, or the sketch for a region. */
   body: string;
-  kind: Kind;
-  /** Indices of the entities it resolved to, in the body's face or edge order. */
+  kind: Kind | "region";
+  /** Indices of the entities it resolved to, in the body's face or edge order, or the sketch's regions. */
   matches: number[];
   /** Position in an array parameter. */
   index?: number;
@@ -117,6 +166,8 @@ export interface TraceEntry {
   names?: string[];
   /** The feature's result, if it is a sketch. */
   sketch?: Sketch;
+  /** What of its input it couldn't use, e.g. an SVG's elements that aren't drawn. */
+  warnings?: string[];
   /** Milliseconds the feature took, and how many of them went into naming its result's faces and edges. */
   ms: number;
   namingMs: number;
@@ -163,6 +214,8 @@ export interface FeatureContext {
   name: string;
   /** Resolves a reference parameter against a body, recording its status; throws a FeatureError if it is broken. */
   resolve(body: Body, param: string, refs: Ref | Ref[], multi: boolean): Shape[];
+  /** The indices of the regions of `sketch` that parameter `param` names, all of one if it names none; throws a FeatureError if it is broken. */
+  resolveRegions(sketch: Sketch, param: string, refs: unknown): number[];
 }
 
 const suggestionCode = (topo: Topo, kind: Kind, shapes: Shape[]) => shapes.map((s) => String(capture(topo, kind, s))).join(", ");
@@ -195,6 +248,38 @@ function makeContext(name: string, diagnostics: RefDiagnostic[]): FeatureContext
       });
       if ("ok" in whole) return whole.ok;
       throw new FeatureError(diagnostics.filter((d) => d.param === param && d.message).map((d) => d.message).join("; "), diagnostics);
+    },
+    resolveRegions(sketch, param, input) {
+      const regions = sketch.regions;
+      if (input === undefined) {
+        if (regions.length === 1) return [0];
+        throw new FeatureError(regions.length ? `${sketch.name} has ${regions.length} profiles: select which to use` : `${sketch.name} encloses no profile: none of its curves close`);
+      }
+      const list = Array.isArray(input) ? (input as unknown[]) : [input];
+      if (!list.length) throw new FeatureError(`${param}: select at least one profile`);
+      const out = new Set<number>();
+      list.forEach((r, i) => {
+        const at = Array.isArray(input) ? { index: i } : {};
+        const d: RefDiagnostic = { param, body: sketch.name, kind: "region", matches: [], ...at, code: String(r), status: "missing" };
+        diagnostics.push(d);
+        if (!(r instanceof RegionRef)) return void (d.message = `${param}: ${String(r)} is not a profile of a sketch`);
+        if (r.sketch !== sketch.name) return void (d.message = `${param}: ${String(r)} is a profile of ${r.sketch}, not of ${sketch.name}`);
+        const res = resolveRegion(regions, r);
+        const code = (indices: number[]) => indices.map((k) => String(regionCode(sketch.name, regions, k))).join(", ");
+        if ("ok" in res) {
+          d.status = "ok";
+          d.matches = res.ok;
+          for (const k of res.ok) out.add(k);
+        } else if ("ambiguous" in res) {
+          Object.assign(d, { status: "ambiguous", matches: res.ambiguous, message: res.why, suggestion: code(res.suggestion) });
+        } else {
+          d.message = res.missing;
+          if (res.suggestion) d.suggestion = code(res.suggestion);
+        }
+      });
+      const broken = diagnostics.filter((d) => d.param === param && d.status !== "ok");
+      if (broken.length) throw new FeatureError(broken.map((d) => d.message).join("; "), diagnostics);
+      return [...out].sort((a, b) => a - b);
     },
   };
 }
@@ -246,7 +331,10 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
       if (!context.lenient || !passThrough) throw error;
       return passThrough as R;
     }
-    if (result instanceof Sketch) entry.sketch = result;
+    if (result instanceof Sketch) {
+      entry.sketch = result;
+      if (result.profile.kind === "paths" && result.profile.warnings.length) entry.warnings = [...result.profile.warnings];
+    }
     const bodies = result instanceof Body ? [result] : result instanceof Sketch ? [] : Object.values(result);
     if (bodies.length > 0) {
       entry.result = bodies[0]!;

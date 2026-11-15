@@ -44,6 +44,9 @@ export function setFeaturePrinter(printer: (feature: string) => string): void {
   printFeature = printer;
 }
 
+/** A feature's name as the current printer prints it: its variable, or through `ref`. */
+export const printFeatureName = (feature: string) => printFeature(feature);
+
 const printSegment = (seg: string) => (IDENT.test(seg) ? `.${seg}` : `[${JSON.stringify(seg)}]`);
 
 /**

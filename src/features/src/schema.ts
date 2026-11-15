@@ -7,6 +7,8 @@ export type ParamSpec =
   | { kind: "length" | "number"; label: string; optional?: boolean; default?: number }
   | { kind: "choice"; options: readonly string[]; label: string; optional?: boolean; default?: string }
   | { kind: "sketch" | "profile"; label: string; optional?: boolean }
+  /** Regions of the sketch in parameter `from`, e.g. `[sketch2.region("a")]`: all of a sketch that has one if left out. */
+  | { kind: "regions"; label: string; optional?: boolean; from: string }
   /**
    * A body. `from`: the faces or edges that decide it, e.g. a fillet's `edges`. An editor then
    * doesn't offer it as a field: picking them picks their body, and one body per feature.
@@ -54,6 +56,7 @@ export const schemas = {
     hover: "difference",
     params: {
       sketch: { kind: "sketch", label: "Sketch" },
+      regions: { kind: "regions", label: "Profiles", optional: true, from: "sketch" },
       distance: { kind: "length", label: "Distance", optional: true, default: 10 },
       operation: { kind: "choice", label: "Operation", options: ["new", "join", "cut"], optional: true, default: "new" },
       target: { kind: "body", label: "Target body", optional: true },

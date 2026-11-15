@@ -4,12 +4,13 @@
  * replicad doesn't expose OCCT's history. And `body`, which adopts shapes made with replicad (research/11).
  */
 import { Shape as ReplicadShape, type AnyShape } from "replicad";
-import { add, cross, describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
-import { key, type Name } from "./names.ts";
+import { describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
+import { key, piece, type Name } from "./names.ts";
 import { listToArray, oc, progress, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
 import { copyOf, propagate, withTopology, type Hist, type History } from "./topo.ts";
 import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
+import { joinRegions, type RegionRef } from "./profile.ts";
 import { schemas } from "./schema.ts";
 
 // ---------- planes and profiles ----------
@@ -89,40 +90,19 @@ export const sketch = defineFeature<{ plane: Frame | Ref; profile: Profile; body
   ...schemas.sketch,
   fallback: (p, name, message) => new Sketch(name, PLANES["XY"]!, p.profile, message),
   build({ plane, profile, body }, ctx) {
-    if (isFrame(plane)) return new Sketch(ctx.name, plane, profile);
+    const placed = (frame: Frame) => {
+      const made = new Sketch(ctx.name, frame, profile);
+      // Its regions are found here, so that curves that can't be intersected fail the sketch.
+      void made.regions;
+      return made;
+    };
+    if (isFrame(plane)) return placed(plane);
     if (body === undefined) throw new FeatureError("a sketch on a face needs the face's body");
     expectBody(body, "body");
     const [face] = ctx.resolve(body, "plane", plane, false);
-    return new Sketch(ctx.name, frameOnFace(face!), profile);
+    return placed(frameOnFace(face!));
   },
 });
-
-/** The profile as a face on the frame, with its segments' edges in the face's own edge order. */
-function profileFace(p: Profile, fr: Frame): { face: Shape; segments: { edge: Shape; id: string }[] } {
-  const o = oc();
-  const yDir = cross(fr.normal, fr.xDir);
-  const to3 = ([x, y]: [number, number]) => add(fr.origin, add(scale(fr.xDir, x), scale(yDir, y)));
-  const P = (v: Vec) => new o.gp_Pnt(v[0], v[1], v[2]);
-  const wire = new o.BRepBuilderAPI_MakeWire();
-  const ids: string[] = [];
-  if (p.kind === "polygon") {
-    p.points.forEach((pt, i) => {
-      const next = p.points[(i + 1) % p.points.length]!;
-      wire.Add(new o.BRepBuilderAPI_MakeEdge(P(to3(pt)), P(to3(next))).Edge());
-      ids.push(p.ids[i]!);
-    });
-  } else {
-    const ax = new o.gp_Ax2(P(to3(p.center)), new o.gp_Dir(fr.normal[0], fr.normal[1], fr.normal[2]), new o.gp_Dir(fr.xDir[0], fr.xDir[1], fr.xDir[2]));
-    wire.Add(new o.BRepBuilderAPI_MakeEdge(new o.gp_Circ(ax, p.radius)).Edge());
-    ids.push(p.id);
-  }
-  if (!wire.IsDone()) throw new FeatureError("the profile is not a closed loop");
-  const face = new o.BRepBuilderAPI_MakeFace(wire.Wire(), true).Face();
-  wire.delete();
-  // A single wire built edge by edge keeps its insertion order.
-  const faceEdges = subShapes(face, "edge");
-  return { face, segments: ids.map((id, k) => ({ edge: faceEdges[k]!, id })) };
-}
 
 function moveFace(face: Shape, v: Vec): Shape {
   const o = oc();
@@ -136,8 +116,13 @@ type Operation = "new" | "join" | "cut";
 /** OCCT's Precision::Confusion(): shorter lengths are zero. */
 const ZERO_LENGTH = 1e-7;
 
+/**
+ * Extrudes regions of a sketch (`regions`, all of a sketch with one), joined where they touch. A
+ * side face is named by the segment it was swept from; a segment, or a cap, that gives several
+ * faces names each a piece, `extrude1.side["leaf.3"].piece(extrude1, 2)`.
+ */
 export const extrude = defineFeature<
-  { sketch: Sketch; distance?: number; operation?: Operation; target?: Body; extent?: "distance" | "through" },
+  { sketch: Sketch; regions?: RegionRef | RegionRef[]; distance?: number; operation?: Operation; target?: Body; extent?: "distance" | "through" },
   Body
 >({
   type: "extrude",
@@ -145,7 +130,7 @@ export const extrude = defineFeature<
   inputs: ({ target, operation }) => (operation && operation !== "new" ? [target] : []),
   // A join or cut without a valid target has nothing to pass through: it gives an empty body, so that only it and its users fail.
   fallback: (_, name) => emptyBody(name),
-  build({ sketch: sk, distance = 10, operation = "new", target, extent = "distance" }, ctx) {
+  build({ sketch: sk, regions, distance = 10, operation = "new", target, extent = "distance" }, ctx) {
     if (!(sk instanceof Sketch)) throw new FeatureError("sketch: expected a sketch");
     if (sk.broken) throw new FeatureError(`sketch ${sk.name} is broken: ${sk.broken}`);
     if (operation !== "new") {
@@ -153,7 +138,8 @@ export const extrude = defineFeature<
       expectBody(target, "target");
     }
     const o = oc();
-    const { face, segments } = profileFace(sk.profile, sk.frame);
+    const chosen = ctx.resolveRegions(sk, "regions", regions).map((i) => sk.regions[i]!);
+    const { face, edges } = joinRegions(chosen, sk.arrangement.pieces);
     const through = extent === "through";
     // A zero-length prism is degenerate, and a boolean on it never returns (replicad-opencascadejs 1.1.0).
     if (!through && !(Number.isFinite(distance) && Math.abs(distance) >= ZERO_LENGTH)) throw new FeatureError(`distance: expected a finite length other than 0, got ${distance}`);
@@ -169,15 +155,32 @@ export const extrude = defineFeature<
     const baseEdges = subShapes(base, "edge");
     const toolFaces = subShapes(tool, "face");
     const toolHist: Hist[] = toolFaces.map(() => new Map());
-    const nameFaces = (targets: Shape[], n: Name) => {
-      for (const t of targets) {
-        const i = toolFaces.findIndex((x) => x.IsSame(t));
-        if (i >= 0) toolHist[i]!.set(key(n), n);
-      }
+    const nameFace = (target: Shape, n: Name) => {
+      const i = toolFaces.findIndex((x) => x.IsSame(target));
+      if (i >= 0) toolHist[i]!.set(key(n), n);
     };
-    segments.forEach(({ id }, k) => nameFaces(listToArray(mk.Generated(baseEdges[k]!)), { t: "side", feature: ctx.name, seg: id }));
-    nameFaces([mk.FirstShape()], { t: "cap", feature: ctx.name, cap: "start" });
-    nameFaces([mk.LastShape()], { t: "cap", feature: ctx.name, cap: "end" });
+    // Names that several faces get are numbered, in the order of the base's edges or faces.
+    const named = (faces: Shape[][], names: Name[][]) => {
+      const counts = new Map<string, number>();
+      for (const [k, list] of names.entries()) for (const n of list) counts.set(key(n), (counts.get(key(n)) ?? 0) + faces[k]!.length);
+      const seen = new Map<string, number>();
+      faces.forEach((list, k) =>
+        list.forEach((f) =>
+          names[k]!.forEach((n) => {
+            if (counts.get(key(n))! < 2) return nameFace(f, n);
+            const j = (seen.get(key(n)) ?? 0) + 1;
+            seen.set(key(n), j);
+            nameFace(f, piece(n, ctx.name, j));
+          }),
+        ),
+      );
+    };
+    named(
+      edges.map((_, k) => listToArray(mk.Generated(baseEdges[k]!))),
+      edges.map(({ ids }) => ids.map((seg): Name => ({ t: "side", feature: ctx.name, seg }))),
+    );
+    named([subShapes(mk.FirstShape(), "face")], [[{ t: "cap", feature: ctx.name, cap: "start" }]]);
+    named([subShapes(mk.LastShape(), "face")], [[{ t: "cap", feature: ctx.name, cap: "end" }]]);
     const toolTopo = withTopology(tool, toolFaces, toolHist);
     if (operation === "new") return new Body(ctx.name, toolTopo);
 

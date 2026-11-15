@@ -14,7 +14,8 @@ export default function main() {
 }
 ```
 
-- **Features:** `sketch({ plane, profile, body? })`, `extrude({ sketch, distance, operation: "new" | "join" | "cut", target, extent: "distance" | "through" })`, `fillet({ body, edges, radius })`, `chamfer({ body, edges, distance })`. A feature's optional second argument is `{ name }`.
+- **Features:** `sketch({ plane, profile, body? })`, `extrude({ sketch, regions?, distance, operation: "new" | "join" | "cut", target, extent: "distance" | "through" })`, `fillet({ body, edges, radius })`, `chamfer({ body, edges, distance })`. A feature's optional second argument is `{ name }`.
+- **Regions** ([research/21](../../research/21-embedding.md#sketch-from-a-drawing)): a sketch's curves split its plane, and every part bounded on all sides is a region, as Fusion's profiles: two overlapping rectangles enclose three, a curve that doesn't close encloses nothing unless others close it. `sketch2.region("a", "b")` is the region inside the closed paths `a` and `b` and no other, `sketch2.region("a", { near: [x, y] })` the one at that point of several such, `sketch2.filled` all that a fill covers. `extrude`'s `regions` takes one or a list, joined where they touch; a sketch with one region needs none. Side faces are named by segment ids; a segment or cap that gives several faces names pieces (`extrude1.side["a.2"].piece(extrude1, 1)`).
 - **Profiles and planes:** `rect({ from, to })` (segments `front`, `right`, `back`, `left`), `circle({ center, radius, id = "c" })`, `polygon({ id: [x, y], … })`, `plane("XY" | "XZ" | "YZ", offset)`, or a face reference with the face's `body`.
 - **References** ([research/03](../../research/03-topological-naming.md#references-in-code)): `extrude1.side.front`, `extrude1.start`, `extrude1.end`, `edge(a, b)`, `any(a, b)`, `.piece(op, k, { near })`, `fillet1.face(edge)`, `fillet1.corner`, and `ref.<name>` for features without a variable.
 
