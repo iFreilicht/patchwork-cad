@@ -19,6 +19,11 @@ export default defineConfig({
       input: "./src/index.ts",
       output: { format: "es", entryFileNames: "[name].js", chunkFileNames: "assets/[name]-[hash].js", assetFileNames: "assets/[name]-[hash][extname]" },
       preserveEntrySignatures: "strict",
+      // tldraw's Radix modules start with React's "use client", which means nothing outside React Server Components and is dropped from the bundle.
+      onwarn(warning, warn) {
+        if (warning.code === "MODULE_LEVEL_DIRECTIVE" && warning.message.includes('"use client"')) return;
+        warn(warning);
+      },
     },
   },
 });
