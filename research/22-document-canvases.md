@@ -51,7 +51,7 @@ A texture would make all of the above unnecessary: depth, opacity and mipmapping
 - **Screen and element capture** (`getDisplayMedia`) asks for permission, which embeds and sandboxes refuse.
 - **The tool's own export,** e.g. tldraw's `editor.getSvgString()`, lives inside its tool; bundling tldraw in the CAD tool would cover one datatype at a fixed version.
 
-A different 3D engine doesn't help either: every WebGL or WebGPU engine draws into a canvas, and Babylon's `HtmlMesh` is the same technique as the experiment's.
+A different 3D engine doesn't help either: every WebGL or WebGPU engine draws into a canvas, and Babylon's `HtmlMesh` is the same technique as the experiment's. A pure CSS3D renderer where every face is its own DOM-node like [PolyCSS](https://polycss.com/gallery/) has *really* bad performance when dealing with curved surfaces because it has to approximate those as facetted planar surfaces (see for example [Cube in Sphere](https://polycss.com/gallery/?model=1990137121)); unacceptable for our usecase.
 
 ## What Patchwork would need
 
