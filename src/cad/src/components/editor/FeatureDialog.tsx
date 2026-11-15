@@ -6,6 +6,7 @@ import type { FeatureCall } from "../../model/analyze.ts";
 import { at, calleeName, keys, span, stringValue, type Step } from "../../model/nodes.ts";
 import { addToReturn, elements, ensureImports, removeElement, removeProp, replaceElement, resketch, retarget, retool, setOption, setProp, usedFunctions } from "../../model/splice.ts";
 import { sketchVariable } from "./regions.ts";
+import { operationEdits } from "./operation.ts";
 import type { FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { ValueTarget } from "./inserts.ts";
 import { schemaOf, type Editor } from "./state.ts";
@@ -110,8 +111,12 @@ function editAt(editor: Editor, param: string, path: readonly Step[], text: stri
   });
 }
 
-function setParam(editor: Editor, key: string, text: string, optional: boolean): boolean {
-  return editor.editOpen((call, analysis) => (text === "" && optional ? removeProp(call, key) : [...setProp(call, key, text), ...ensureImports(analysis, usedFunctions(text))]));
+/** Sets a parameter; an extrusion's distance also its operation, where the sketch lies on the body it joins or cuts (research/21, "Sketch from a drawing"). */
+function setParam(editor: Editor, key: string, text: string, optional: boolean, fallback?: number): boolean {
+  return editor.editOpen((call, analysis) => [
+    ...(text === "" && optional ? removeProp(call, key) : [...setProp(call, key, text), ...ensureImports(analysis, usedFunctions(text))]),
+    ...(call.type === "extrude" && key === "distance" ? operationEdits(call, analysis, text === "" ? String(fallback ?? "") : text) : []),
+  ]);
 }
 
 /** A number as code, e.g. `20` or `-1.5`, which can become a parameter's default. */
@@ -124,7 +129,7 @@ function ScalarField(props: FieldProps) {
   const target = (): ValueTarget => ({ kind: "argument", feature: props.entry.name, param: props.name, label: props.spec.label });
   return (
     <div class="cad-editor__scalar" data-drop="value" data-drop-value={JSON.stringify(target())}>
-      <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false)} />
+      <ExpressionInput label={props.spec.label} value={value()} placeholder={def !== undefined ? String(def) : ""} disabled={props.disabled} allowEmpty={props.spec.optional ?? false} onCommit={(t) => setParam(props.editor, props.name, t, props.spec.optional ?? false, def)} />
       <Show when={props.promote && NUMBER.test(value())}>
         <button class="cad-editor__link" title="Make a parameter of this value, with it as the default" aria-label="Make a parameter of this value" disabled={props.disabled} onClick={() => props.editor.setNotice(props.promote?.(props.entry.call, props.name))}>
           ƒ

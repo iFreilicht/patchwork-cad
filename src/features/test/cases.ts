@@ -167,7 +167,7 @@ export const m3: Case<M3> = {
     const chamfer1 = chamfer({ body: fillet1, edges: refFor("uprightTopBackEdge", fillet1), distance: 1 }, named("chamfer1"));
     const [face] = refFor("backFace", chamfer1);
     const sketch3 = sketch({ body: chamfer1, plane: face!, profile: circle({ center: holeAt(p), radius: 4 }) }, named("sketch3"));
-    return extrude({ sketch: sketch3, distance: 5, operation: "cut", target: chamfer1 }, named("extrude1"));
+    return extrude({ sketch: sketch3, distance: -5, operation: "cut", target: chamfer1 }, named("extrude1"));
   },
   refs: [
     {

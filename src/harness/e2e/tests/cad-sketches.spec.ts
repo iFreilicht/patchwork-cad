@@ -118,13 +118,25 @@ test("an SVG dropped on a face is a sketch there; an extrusion picks its profile
   await undo(page, true);
   await expect(timelineEntry(page, "sketch2")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
 
-  // An extrusion of it starts with picking its profiles: the regions the curves bound, without the open path.
+  // An extrusion of it joins the plate, which it lies on, and starts with picking its profiles: the regions the curves bound, without the open path.
   await toolbarButton(page, "Extrude").click();
   await expect(dialog(page)).toHaveAttribute("data-feature", "extrude1");
+  expect(await modelSource(page)).toContain('const extrude1 = extrude({ sketch: sketch2, distance: 10, operation: "join", target: plate });');
   await expect(dialog(page).getByRole("button", { name: "Done selecting" })).toBeVisible();
   await expect.poll(() => regions(page).then((r) => r.length), { timeout: 60_000 }).toBe(LOGO_PROFILES);
   await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "failed");
   await expect(dialog(page).locator(".cad-editor__problem")).toContainText(`sketch2 has ${LOGO_PROFILES} profiles: select which to use`);
+
+  // Two clicks right after one another both count, shown at once as the code has them.
+  const unchosen = (await regions(page)).filter((r) => r.point && !r.chosen);
+  await page.mouse.click(unchosen[0]!.point!.x, unchosen[0]!.point!.y);
+  await page.mouse.click(unchosen[1]!.point!.x, unchosen[1]!.point!.y);
+  await expect.poll(() => regions(page).then((r) => r.filter((x) => x.chosen).map((x) => x.key))).toEqual([unchosen[0]!.key, unchosen[1]!.key]);
+  expect(await regionsArgument(page, "extrude1")).toMatch(/^\[sketch2\.region\([^)]*\), sketch2\.region\([^)]*\)\]$/);
+  await page.mouse.click(unchosen[0]!.point!.x, unchosen[0]!.point!.y);
+  await page.mouse.click(unchosen[1]!.point!.x, unchosen[1]!.point!.y);
+  await expect.poll(() => regions(page).then((r) => r.filter((x) => x.chosen).length)).toBe(0);
+  expect(await regionsArgument(page, "extrude1")).toBe("[]");
 
   // A click adds a region, accented; another adds a second; a click on a chosen one removes it.
   const first = await clickRegion(page, false);
@@ -147,6 +159,21 @@ test("an SVG dropped on a face is a sketch there; an extrusion picks its profile
   await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
   await expect.poll(() => entities(page, "face").then((f) => f.some((e) => e.body === "extrude1")), { timeout: 60_000 }).toBe(true);
   if (shots) await page.screenshot({ path: `${shots}/sketch-filled-${info.project.name}.png` });
+
+  // Into the plate, it cuts; away from it again, it joins.
+  const extrusion = async () => (await modelSource(page)).split("\n").find((l) => l.includes("const extrude1 ="));
+  await dialog(page).getByLabel("Distance", { exact: true }).fill("-2");
+  await expect.poll(extrusion).toContain('distance: -2, operation: "cut", target: plate');
+  await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+  await dialog(page).getByLabel("Distance", { exact: true }).fill("3");
+  await expect.poll(extrusion).toContain('distance: 3, operation: "join", target: plate');
+
+  // Picking again shows what is chosen, every time, without the pointer over the view.
+  for (let i = 0; i < 3; i++) {
+    await dialog(page).getByRole("button", { name: "Select profiles" }).click();
+    await expect.poll(() => regions(page).then((r) => r.filter((x) => x.chosen).length), { timeout: 60_000 }).toBe(LOGO_PROFILES - 2);
+    await dialog(page).getByRole("button", { name: "Done selecting" }).click();
+  }
 
   // A second extrusion of the same sketch picks another of its profiles.
   await toolbarButton(page, "Extrude").click();

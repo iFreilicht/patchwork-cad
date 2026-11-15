@@ -433,8 +433,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     const sketch = sketchVariable(entry.call);
     const regions = model.trace().find((t) => t.name === sketch)?.regions;
     if (!regions) return undefined;
-    const chosen = chosenRegions(entry.call, entry.trace?.refs ?? [], regions.length);
-    return { regions, shown: regions.map((r, i) => ({ key: String(i), triangles: r.triangles, chosen: chosen.has(i) })) };
+    const chosen = chosenRegions(entry.call, editor.source(), entry.trace?.refs ?? [], regions);
+    const outline = model.trace().find((t) => t.name === sketch)?.outline ?? [];
+    return { regions, sketch: { name: sketch!, outline }, shown: regions.map((r, i) => ({ key: String(i), triangles: r.triangles, chosen: chosen.has(i) })) };
   });
   const [hoveredRegion, setHoveredRegion] = createSignal<string>();
   const pickRegion = (key: string) => {
@@ -453,7 +454,8 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** The open sketch's profile, or the sketch of the open extrude, and the profiles of hovered sketches. */
   const overlays = () => {
     const entry = editor.open();
-    const sketchName = entry?.type === "sketch" ? entry.name : entry?.type === "extrude" ? editor.source().slice(...spanOf(entry, "sketch")) : undefined;
+    // While its profiles are picked, an extrusion's sketch is drawn as thin as a shown one, so that its regions' states stand out.
+    const sketchName = entry?.type === "sketch" ? entry.name : entry?.type === "extrude" && !pickedRegions() ? editor.source().slice(...spanOf(entry, "sketch")) : undefined;
     const names = new Set([...(sketchName ? [sketchName] : []), ...editor.hoveredFeatures()]);
     const sketch = hoveredSketch();
     // While the return entry is hovered, the sketches main returns, as its bodies are highlighted.
@@ -858,7 +860,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
           onCanvasHover={calibration.hover}
           editing={editedDocument()}
           onEditCamera={(id, view) => canvasStore.update(id, { view })}
-          sketches={shownSketches()}
+          sketches={[...shownSketches().filter((s) => s.name !== pickedRegions()?.sketch.name), ...(pickedRegions() ? [pickedRegions()!.sketch] : [])]}
           view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
           onViewChange={(view) => {
             // Moving the camera ends editing in place, whose overlay is laid out for the camera it started with.

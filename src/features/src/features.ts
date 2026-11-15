@@ -144,10 +144,11 @@ export const extrude = defineFeature<
     const through = extent === "through";
     // A zero-length prism is degenerate, and a boolean on it never returns (replicad-opencascadejs 1.1.0).
     if (!through && !(Number.isFinite(distance) && Math.abs(distance) >= ZERO_LENGTH)) throw new FeatureError(`distance: expected a finite length other than 0, got ${distance}`);
-    // A cut goes into the material behind the sketch plane; "through" is symmetric and long.
+    // The distance runs along the sketch's normal, whatever the operation, as Fusion's does: into a body
+    // a sketch lies on is negative. "Through" is symmetric and long, its caps named as they always were.
     const dir = operation === "cut" ? scale(sk.frame.normal, -1) : sk.frame.normal;
     const base = through ? moveFace(face, scale(dir, -500)) : face;
-    const vec = scale(dir, through ? 1000 : distance);
+    const vec = through ? scale(dir, 1000) : scale(sk.frame.normal, distance);
     const mk = new o.BRepPrimAPI_MakePrism(base, new o.gp_Vec(vec[0], vec[1], vec[2]), false, true);
     mk.Build(progress());
     if (!mk.IsDone()) throw new FeatureError("the extrusion failed");

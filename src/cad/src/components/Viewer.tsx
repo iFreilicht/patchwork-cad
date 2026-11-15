@@ -366,6 +366,22 @@ function subset(source: THREE.BufferGeometry, indexOf: number[] | undefined, ind
  * Points on an entity's faces or edges, biggest first: triangle centroids by area, segment midpoints
  * by length. The first is where a pin goes; tests click them.
  */
+/** The sides of triangles (x, y and z of each corner, three corners each) that only one of them has: the outline of what they cover, as pairs of points. */
+function boundaryOf(triangles: readonly number[]): number[] {
+  const key = (i: number) => `${triangles[3 * i]},${triangles[3 * i + 1]},${triangles[3 * i + 2]}`;
+  const sides = new Map<string, { a: number; b: number; count: number }>();
+  for (let t = 0; t < triangles.length / 9; t++)
+    for (let k = 0; k < 3; k++) {
+      const a = 3 * t + k;
+      const b = 3 * t + ((k + 1) % 3);
+      const id = [key(a), key(b)].sort().join(";");
+      const side = sides.get(id);
+      if (side) side.count++;
+      else sides.set(id, { a, b, count: 1 });
+    }
+  return [...sides.values()].filter((s) => s.count === 1).flatMap(({ a, b }) => [...triangles.slice(3 * a, 3 * a + 3), ...triangles.slice(3 * b, 3 * b + 3)]);
+}
+
 function candidatesOf(r: Rendered, kind: EntityKind, indices: ReadonlySet<number>): { point: THREE.Vector3; size: number }[] {
   const candidates: { point: THREE.Vector3; size: number }[] = [];
   if (kind === "face") {
@@ -1134,29 +1150,50 @@ export function Viewer(props: ViewerProps) {
 
     // ---------- regions of a sketch (research/21, "Sketch from a drawing") ----------
 
-    // Over the model, as highlights are: a sketch on a face lies in it.
-    const regionMaterials = { chosen: highlightFace(accent, 0.5), hovered: highlightFace(hover, 0.45), chosenHovered: highlightFace(accent, 0.75), other: highlightFace(themeColor(container, "--cad-model-fg"), 0.14) };
+    // Over the model, as highlights are: a sketch on a face lies in it. As faces are (research/14): a
+    // hovered region has the hover's fill and outline, a chosen one the selection's fill, and a chosen
+    // one hovered both, so that every state differs. One neither shows only its sketch's thin curves,
+    // and its mesh only takes the pointer.
+    const regionMaterials = {
+      chosen: highlightFace(accent, 0.5),
+      hovered: highlightFace(hover, 0.35),
+      chosenHovered: highlightFace(accent, 0.65),
+      other: new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+    };
     const [hoveredRegion, setHoveredRegion] = createSignal<string>();
-    let drawnRegions: { region: ShownRegion; mesh: THREE.Mesh }[] = [];
+    let drawnRegions: { region: ShownRegion; mesh: THREE.Mesh; outline: () => number[] }[] = [];
     const regionMaterial = (region: ShownRegion, hovered: string | undefined) =>
       region.key === hovered ? (region.chosen ? regionMaterials.chosenHovered : regionMaterials.hovered) : region.chosen ? regionMaterials.chosen : regionMaterials.other;
+    const regionOutline = new THREE.Group();
+    regionOutline.renderOrder = 2;
+    scene.add(regionOutline);
+    /** Draws the materials and the outline of the regions for the hovered one. */
+    const drawRegionStates = (hovered: string | undefined) => {
+      for (const d of drawnRegions) d.mesh.material = regionMaterial(d.region, hovered);
+      dispose([...regionOutline.children]);
+      regionOutline.clear();
+      const outline = drawnRegions.find((d) => d.region.key === hovered)?.outline();
+      if (outline?.length) regionOutline.add(...overlayMaterials.map((material, i) => Object.assign(new LineSegments2(new LineSegmentsGeometry().setPositions(outline), material), { renderOrder: i })));
+    };
     createEffect(() => {
       for (const d of drawnRegions) d.mesh.geometry.dispose();
       regionGroup.clear();
-      // Drawn as they are now: the effect that follows hovering may have run before this one.
-      const hovered = untrack(hoveredRegion);
       drawnRegions = (props.regions ?? []).map((region) => {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute("position", new THREE.Float32BufferAttribute(region.triangles, 3));
-        const mesh = new THREE.Mesh(geometry, regionMaterial(region, hovered));
+        const mesh = new THREE.Mesh(geometry, regionMaterials.other);
         regionGroup.add(mesh);
-        return { region, mesh };
+        let outline: number[] | undefined;
+        return { region, mesh, outline: () => (outline ??= boundaryOf(region.triangles)) };
       });
+      // Drawn as they are now, whichever of this and the effect that follows hovering runs first.
+      const hovered = untrack(hoveredRegion);
       if (hovered !== undefined && !drawnRegions.some((d) => d.region.key === hovered)) setHoveredRegion(undefined);
+      else drawRegionStates(hovered);
     });
     createEffect(() => {
       const hovered = hoveredRegion();
-      for (const d of drawnRegions) d.mesh.material = regionMaterial(d.region, hovered);
+      drawRegionStates(hovered);
       container.dataset["regionHovered"] = hovered ?? "";
       props.onRegionHover?.(hovered);
     });
@@ -1790,9 +1827,10 @@ export function Viewer(props: ViewerProps) {
             const at = { x: Math.round(p.x), y: Math.round(p.y) };
             if (document.elementFromPoint(at.x, at.y) === canvas && regionAt(at.x, at.y) === region.key) point = at;
           }
-          // As drawn, by the material it is drawn with.
+          // As drawn: by the material it is drawn with, and the outline that only a hovered one has.
           const drawn = mesh.material;
-          return { key: region.key, chosen: drawn === regionMaterials.chosen || drawn === regionMaterials.chosenHovered, hovered: drawn === regionMaterials.hovered || drawn === regionMaterials.chosenHovered, point };
+          const outlined = hoveredRegion() === region.key && regionOutline.children.length > 0;
+          return { key: region.key, chosen: drawn === regionMaterials.chosen || drawn === regionMaterials.chosenHovered, hovered: outlined && (drawn === regionMaterials.hovered || drawn === regionMaterials.chosenHovered), point };
         }),
       peerMarkers: () =>
         [...markers].map(([key, m]) => {
@@ -1844,6 +1882,7 @@ export function Viewer(props: ViewerProps) {
       pmrem.dispose();
       scene.environment?.dispose();
       for (const d of drawnRegions) d.mesh.geometry.dispose();
+      dispose([...regionOutline.children]);
       for (const m of [...ghostLines.values(), ...Object.values(regionMaterials), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, sketchMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
       upper?.environment.dispose();

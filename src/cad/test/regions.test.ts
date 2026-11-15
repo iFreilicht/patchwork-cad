@@ -32,10 +32,15 @@ function click(argument: string | undefined, refs: RefDiagnostic[], index: numbe
 
 test("the regions an extrusion extrudes: what its argument resolved to, or a sketch's only one", () => {
   expect(sketchVariable(callOf(model(undefined)))).toBe("s");
-  expect([...chosenRegions(callOf(model(undefined)), [], 1)]).toEqual([0]);
-  expect([...chosenRegions(callOf(model(undefined)), [], 3)]).toEqual([]);
-  expect([...chosenRegions(callOf(model('[s.region("a"), s.filled]')), resolved([[0], [0, 2, 3]]), 4)].sort()).toEqual([0, 2, 3]);
-  expect([...chosenRegions(callOf(model('[s.region("q")]')), resolved(["broken"]), 4)]).toEqual([]);
+  const chosen = (argument: string | undefined, refs: RefDiagnostic[], count = regions.length) => [...chosenRegions(callOf(model(argument)), model(argument), refs, regions.slice(0, count))].sort();
+  expect(chosen(undefined, [], 1)).toEqual([0]);
+  expect(chosen(undefined, [], 3)).toEqual([]);
+  // From the code, whatever the last build resolved: a region's own reference, and the sketch's filled ones.
+  expect(chosen('[s.region("a"), s.filled]', [])).toEqual([0, 2, 3]);
+  expect(chosen('s.region("a", "b")', resolved([[3]], false))).toEqual([1]);
+  // Any other reference, as the last build resolved it.
+  expect(chosen('[s.region("a" )]', resolved([[0]]))).toEqual([0]);
+  expect(chosen('[s.region("q")]', resolved(["broken"]))).toEqual([]);
 });
 
 test("a click adds a region that isn't chosen", () => {

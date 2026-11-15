@@ -4,6 +4,7 @@
  * view"). The selected item is anchored with an automerge cursor, so that it stays selected while
  * others edit the code around it, or rename it.
  */
+import { sketchBody } from "./operation.ts";
 import { getCursor, getCursorPosition } from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { batch, createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
@@ -454,10 +455,12 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
       .find((name) => name !== undefined && declaredBefore(name));
     const body = (returned.length === 1 ? returned[0] : undefined) ?? nextInput ?? lastOf(before, "body") ?? "undefined";
     const sketch = lastOf(before, "sketch");
-    const made = custom ? custom(text, a) : { code: DEFAULTS[type]({ sketch: sketch ?? "undefined", body }), edits: [] };
+    // An extrusion of a sketch on a body's face joins that body, away from the face (research/21, "Sketch from a drawing").
+    const onFace = type === "extrude" ? sketchBody(a, sketch) : undefined;
+    const made = custom ? custom(text, a) : { code: onFace ? `extrude({ sketch: ${sketch}, distance: 10, operation: "join", target: ${onFace} })` : DEFAULTS[type]({ sketch: sketch ?? "undefined", body }), edits: [] };
     if (!made) return;
     const { code } = made;
-    const consumes = type === "fillet" || type === "chamfer" || type === "combine" ? body : undefined;
+    const consumes = type === "fillet" || type === "chamfer" || type === "combine" ? body : onFace;
     const hides = type === "extrude" ? sketch : undefined;
     apply(handle, [...made.edits, ...insertFeatureAt(text, a, tl, name, code, position, { shows: true, ...(consumes ? { consumes } : {}), ...(hides ? { hides } : {}) })]);
     const after = tryAnalyze(doc().content).analysis;
