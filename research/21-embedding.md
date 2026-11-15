@@ -117,7 +117,7 @@ const labelled = decal({ body: engraved, face: plate.side.front, image: label, w
 - **Inserting one:** Canvas is a role for an image or an SVG in "Use as" ([The document dialog](#the-document-dialog)). It lies on the face the image was dropped on, centred where it was dropped, or else on XY under the model's centre; it is pinned by its centre, a round number about as wide as the model, and half see-through.
 - **Not in the viewer tool and embeds:** a canvas helps the people modelling, and the viewer shows what the model is.
 - **draw.io diagrams** ([`src/drawio`](../src/drawio/)), kept as `.drawio.svg` files and edited in draw.io's own editor inside Patchwork, are SVG images to a canvas, which draws each saved version: a drawing made in Patchwork, on the model.
-- **Images only.** Other documents are [annotations](#annotation). Live documents on canvases, fitted and edited in place, are an experiment that needs Patchwork's help to work properly ([22](22-document-canvases.md)).
+- **Other documents, as a prototype:** any document but a CAD model can be a canvas, shown live by its tool, fitted and edited in place, with workarounds that need Patchwork's help to become solid ([22](22-document-canvases.md)). A document to look at on the model is otherwise an [annotation](#annotation).
 
 ### Annotation
 

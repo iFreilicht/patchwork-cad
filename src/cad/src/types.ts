@@ -151,6 +151,23 @@ interface CanvasCommon {
   opacity: number;
   /** Drawn over the model, as Fusion's "Display Through". */
   through: boolean;
+  /** Experiment: a document that isn't an image is laid out this much higher than wide (default 0.75). */
+  aspect?: number;
+  /** Experiment: a document that isn't an image is shown by this tool, its default if not given. */
+  tool?: string;
+  /** Experiment: a document that isn't an image is shown editable, at its URL as stored, not at its current heads. */
+  live?: boolean;
+  /** Experiment: our stylesheet hides the tool's own chrome, for tools we know (tldraw). */
+  bare?: boolean;
+  /** Experiment: the part of a tldraw drawing it shows, as tldraw's camera for the document laid out 900 pixels wide; fitted to the drawing if not given. */
+  view?: DocumentCamera;
+}
+
+/** tldraw's camera: a page point is at `(point + camera) * z` on the screen. */
+export interface DocumentCamera {
+  x: number;
+  y: number;
+  z: number;
 }
 
 /** An element of an SVG, by an attribute that names it, e.g. `id`, and by its name for people, should its id change. */

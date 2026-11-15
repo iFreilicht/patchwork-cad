@@ -1,12 +1,12 @@
 # Documents on canvases
 
-Can a canvas ([21](21-embedding.md#canvas)) show any Patchwork document, not only an image: a tldraw drawing to trace, a markdown note next to the part, visual notes drawn onto the model? An experiment on the branch [`experiment/document-canvases`](https://github.com/iFreilicht/patchwork-cad/tree/experiment/document-canvases) shows that it can, with workarounds that Patchwork would make unnecessary. It is out of scope for now; this note keeps what was found and what [Patchwork would need](#what-patchwork-would-need).
+Can a canvas ([21](21-embedding.md#canvas)) show any Patchwork document, not only an image: a tldraw drawing to trace, a markdown note next to the part, visual notes drawn onto the model? A prototype in the CAD editor shows that it can, with workarounds that Patchwork would make unnecessary; it is there to show what works and what doesn't, and this note keeps what was found and what [Patchwork would need](#what-patchwork-would-need). Its history is on the branch [`experiment/document-canvases`](https://github.com/iFreilicht/patchwork-cad/tree/experiment/document-canvases).
 
 ![A model with three document canvases: a tldraw drawing with notes and arrows to two bodies, at 45 % opacity, behind and through the model](22-document-canvases/model-with-notes.png)
 
 ## The experiment
 
-A canvas of a document that isn't an image shows it live, in a `<patchwork-view>` with the document's tool, laid out 900 CSS pixels wide and placed on the plane in 3D by three's `CSS3DRenderer` ([`Viewer.tsx`][viewer], [`documentCanvases.ts`][documentCanvases]). "Canvas" is offered in "Use as" for any document but a CAD model. Tested with tldraw, a markdown document, a data document and text files, in Chromium, Firefox and WebKit ([`experiment-document-canvases.spec.ts`][spec]); the branch's last commits hold the code as it was. The WebKit that Playwright drives doesn't composite 3D transforms: a page without Patchwork that nests elements as `CSS3DRenderer` does shows them flat there, without perspective, where Chromium shows them in perspective. So its screenshots show no documents in the 3D layer (the edit-in-place overlay, which isn't transformed, shows), and its runs check only what the DOM holds; Safari itself wasn't tried.
+A canvas of a document that isn't an image shows it live, in a `<patchwork-view>` with the document's tool, laid out 900 CSS pixels wide and placed on the plane in 3D by three's `CSS3DRenderer` ([`Viewer.tsx`][viewer], [`documentCanvases.ts`][documentCanvases]). "Canvas" is offered in "Use as" for any document but a CAD model. Tested with tldraw, a markdown document, a data document and text files, in Chromium, Firefox and WebKit ([`experiment-document-canvases.spec.ts`][spec]). The WebKit that Playwright drives doesn't composite 3D transforms: a page without Patchwork that nests elements as `CSS3DRenderer` does shows them flat there, without perspective, where Chromium shows them in perspective. So its screenshots show no documents in the 3D layer (the edit-in-place overlay, which isn't transformed, shows), and its runs check only what the DOM holds; Safari itself wasn't tried.
 
 - **Depth needs two WebGL canvases.** `CSS3DRenderer` puts DOM in front of or behind the WebGL canvas as a whole: "It's not possible to use the material system of three.js" ([three.js](https://threejs.org/docs/pages/CSS3DRenderer.html)). The documents lie in a layer between two canvases: the lower draws the scene, the upper draws it again after a pass that writes only the depth of the documents' rectangles, so only what is in front of a document. The page composes them, the documents with their CSS opacity and their own transparency: a tldraw drawing without its background is strokes over the model. The upper canvas has its own WebGL context and environment map, and draws what goes over everything (highlights, overlays, the ViewCube). Babylon's `HtmlMesh` uses half of this, "The HTML content is actually rendered below the canvas, but a depth mask is created by this class that writes to the depth buffer but does not write to the color buffer, effectively punching a hole in the canvas" ([htmlMesh.ts](https://github.com/BabylonJS/Babylon.js/blob/master/packages/dev/addons/src/htmlMesh/htmlMesh.ts)), and so its meshes in the scene "must be opaque" ([HtmlMesh](https://doc.babylonjs.com/addons/htmlMesh)). One canvas that fades what lies behind a document (a rectangle that multiplies colour and alpha by 1 − opacity) was right only for opaque documents: transparent parts showed the page's background in place of the model.
 
@@ -23,7 +23,7 @@ A canvas of a document that isn't an image shows it live, in a `<patchwork-view>
   ![After an ellipse was drawn in place, the same view shows it](22-document-canvases/canvas-view-after-editing.png)
 
 - **What shows:** tldraw's shapes; a markdown document (`codemirror-markdown`) as its text; a data document in the `raw` tool's tree; a text or markdown file in the `file` tool as "No preview available for this file type".
-- **Its dialog** has an image canvas's fields, a Height, Fit and "Edit in place"; selected, the canvas is outlined.
+- **Its dialog** has an image canvas's fields but the anchor, a Height, Fit and "Edit in place"; selected, the canvas is outlined. A document is placed as an image is ([21](21-embedding.md#canvas)), by a point of the box it is laid out in, 900 units wide and `aspect` times that high, at a scale.
 
   ![The canvas "my CAD notes" selected, on the face plate.side.right, with its dialog](22-document-canvases/selected-canvas.png)
 
@@ -65,9 +65,9 @@ A different 3D engine doesn't help either: every WebGL or WebGPU engine draws in
 
 - **HTML-in-Canvas,** a WICG proposal: "`drawable` for opting in canvas descendants to layout", "The `drawElementImage()` method draws the last snapshot of a `drawable` element", and "similar APIs are provided for WebGL and WebGPU to draw into a texture" (WebGL's `texElementSubImage2D`, [explainer](https://github.com/WICG/html-in-canvas)). A `<patchwork-view>` as a child of the 3D view's canvas could then be a texture, with any engine; a third-party site reports it in Chrome 157 by default ([html-in-canvas.dev](https://html-in-canvas.dev/docs/browser-support/)), unconfirmed, and not in Firefox.
 
-[viewer]: https://github.com/iFreilicht/patchwork-cad/blob/experiment/document-canvases/src/cad/src/components/Viewer.tsx
-[documentCanvases]: https://github.com/iFreilicht/patchwork-cad/blob/experiment/document-canvases/src/cad/src/components/documentCanvases.ts
-[spec]: https://github.com/iFreilicht/patchwork-cad/blob/experiment/document-canvases/src/harness/e2e/tests/experiment-document-canvases.spec.ts
-[keys]: https://github.com/iFreilicht/patchwork-cad/blob/experiment/document-canvases/src/undo/src/keys.ts
-[detached]: https://github.com/iFreilicht/patchwork-cad/blob/experiment/document-canvases/src/harness/e2e/tests/experiment-patchwork-view-detached.spec.ts
-[tldrawView]: https://github.com/iFreilicht/patchwork-cad/tree/experiment/document-canvases/research/22-document-canvases/tldraw-view
+[viewer]: ../src/cad/src/components/Viewer.tsx
+[documentCanvases]: ../src/cad/src/components/documentCanvases.ts
+[spec]: ../src/harness/e2e/tests/experiment-document-canvases.spec.ts
+[keys]: ../src/undo/src/keys.ts
+[detached]: ../src/harness/e2e/tests/experiment-patchwork-view-detached.spec.ts
+[tldrawView]: 22-document-canvases/tldraw-view

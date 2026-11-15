@@ -12,6 +12,7 @@ import type { CadAnchor, CadModelDoc, Canvas, PlaneFrame, StoredCanvas } from ".
 import type { Model } from "./createModel.ts";
 import type { DocumentInfo } from "./documentInfo.ts";
 import { fileBytes, fileKind, fileText, isFile } from "./imports.ts";
+import { DEFAULT_DOCUMENT_ASPECT, DOCUMENT_PX } from "./documentCanvases.ts";
 import { createLocated } from "./locate.ts";
 import type { Entity } from "./Viewer.tsx";
 
@@ -135,8 +136,12 @@ export interface PlacedCanvas {
   frame: PlaneFrame | undefined;
   /** Why it isn't shown: its face is gone from the whole model, isn't shown here (e.g. past the timeline marker), or isn't planar. */
   problem: "gone" | "hidden" | "not planar" | undefined;
-  /** Its image, drawn, and where it lies on the plane: pinned by its anchor, or else as stored. */
-  image?: { image: HTMLCanvasElement; box: ImageBox; elements: ImageElement[] | undefined; placement: Placement; anchor: ImageElement | undefined } | undefined;
+  /**
+   * Its image, drawn, and where it lies on the plane: pinned by its anchor, or else as stored. A
+   * document that isn't an image, shown live by its tool (research/22), has no drawing, and its box
+   * is what it is laid out in.
+   */
+  image?: { image: HTMLCanvasElement | undefined; document: boolean; box: ImageBox; elements: ImageElement[] | undefined; placement: Placement; anchor: ImageElement | undefined } | undefined;
   /** It has an anchor that its image doesn't have. */
   anchorLost: boolean;
 }
@@ -160,13 +165,20 @@ export function placeCanvases(options: { list: Accessor<StoredCanvas[]>; model: 
   return createMemo(() =>
     options.list().map((canvas): PlacedCanvas => {
       const state = options.image(canvas.image);
+      if (state.status === "document") {
+        const box = documentBox(canvas);
+        return { canvas, ...frameOf(canvas), image: { image: undefined, document: true, box, elements: undefined, placement: placementOf(canvas, box).placement, anchor: undefined }, anchorLost: false };
+      }
       if (state.status !== "ready") return { canvas, ...frameOf(canvas), anchorLost: false };
       const { placement, anchorLost } = placementOf(canvas, state.box, state.elements);
       const anchor = "anchor" in canvas && canvas.anchor && state.elements ? anchorElement(canvas.anchor, state.elements) : undefined;
-      return { canvas, ...frameOf(canvas), image: { image: state.image, box: state.box, elements: state.elements, placement, anchor }, anchorLost };
+      return { canvas, ...frameOf(canvas), image: { image: state.image, document: false, box: state.box, elements: state.elements, placement, anchor }, anchorLost };
     }),
   );
 }
+
+/** Experiment: the box a document that isn't an image is laid out in on a canvas, `DOCUMENT_PX` wide (research/22). */
+export const documentBox = (canvas: Pick<StoredCanvas, "aspect">): ImageBox => ({ x: 0, y: 0, width: DOCUMENT_PX, height: DOCUMENT_PX * (canvas.aspect ?? DEFAULT_DOCUMENT_ASPECT) });
 
 /** A canvas's image, drawn once: what the view makes its texture of, its extent in its own units, and an SVG's named elements, once measured. */
 export interface CanvasImage {
@@ -401,7 +413,7 @@ export async function imageBox(value: unknown): Promise<ImageBox | undefined> {
 export const isImage = (value: unknown): boolean => isFile(value) && (fileKind(value) === "image" || fileKind(value) === "svg");
 
 /** A canvas's image as it is now: loading, drawn, or why it can't be shown. */
-export type ImageState = { status: "loading" } | ({ status: "ready" } & CanvasImage) | { status: "unavailable"; problem: string };
+export type ImageState = { status: "loading" } | ({ status: "ready" } & CanvasImage) | { status: "unavailable"; problem: string } | { status: "document" };
 
 /**
  * The images of canvases, by their documents' URLs (with heads for a version), each drawn once per
@@ -429,8 +441,9 @@ export function createCanvasImages(info: (url: string) => DocumentInfo, urls: Ac
         continue;
       }
       const value = i.value;
+      // Experiment: any other document is shown live by its tool.
       if (!isImage(value) || !isFile(value)) {
-        set(url, heads, { status: "unavailable", problem: "it isn't an image" });
+        set(url, heads, { status: "document" });
         continue;
       }
       const bytes = fileBytes(value);

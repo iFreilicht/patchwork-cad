@@ -42,7 +42,11 @@ export const placedPatch = (canvas: StoredCanvas, placement: Placement | undefin
  * when a field starts picking. Calibrate scales the image about its pinned point, which stays where
  * it is; an anchor picked pins the image by its centre, leaving it where it is.
  */
-export function createCalibration(props: { canvases: CanvasStore; placed: Accessor<PlacedCanvas[]>; selected: Accessor<string | undefined>; picking: Accessor<boolean>; stopPicking(): void; setNotice(notice: string | undefined): void }): Calibration {
+export function createCalibration(props: {
+  canvases: CanvasStore; placed: Accessor<PlacedCanvas[]>; selected: Accessor<string | undefined>; picking: Accessor<boolean>; stopPicking(): void; setNotice(notice: string | undefined): void;
+  /** What else scaling a canvas sets, e.g. a document's fit, so that its scale stays when the document grows. */
+  onScale?(canvas: StoredCanvas): CanvasPatch;
+}): Calibration {
   const [state, setState] = createSignal<CanvasPickState>();
   const [hovered, setHovered] = createSignal<[number, number]>();
   createEffect(() => {
@@ -86,7 +90,7 @@ export function createCalibration(props: { canvases: CanvasStore; placed: Access
       const scale = calibratedScale(c.box, [c.points[0]!, c.points[1]!], distance);
       if (scale === undefined) return "The two points are the same.";
       setState(undefined);
-      props.canvases.update(c.canvas.id, placedPatch(c.canvas, c.placement, { scale }));
+      props.canvases.update(c.canvas.id, placedPatch(c.canvas, c.placement, { ...props.onScale?.(c.canvas), scale }));
       return undefined;
     },
     overlays() {
@@ -123,6 +127,22 @@ export interface CanvasOptions {
   canvases: CanvasStore;
   placed: Accessor<PlacedCanvas[]>;
   calibration: Calibration;
+  /** Experiment: a document canvas's fit and editing in place. */
+  documents?: DocumentCanvasOptions;
+}
+
+/** Experiment: what a canvas of a document that isn't an image offers besides an image's fields. */
+export interface DocumentCanvasOptions {
+  /** Whether its document's part on the canvas can be fitted to what it holds, as a tldraw drawing's. */
+  fits(canvas: StoredCanvas): boolean;
+  /** Shows all of the document on the canvas. */
+  fit(canvas: StoredCanvas): void;
+  /** Whether it can be edited in place: following its document, which is loaded. */
+  editable(canvas: StoredCanvas): boolean;
+  /** The canvas edited in place, if any. */
+  editing: Accessor<string | undefined>;
+  edit(canvas: StoredCanvas): void;
+  done(): void;
 }
 
 /** Rounded for showing, as a field shows a stored value. */
@@ -196,6 +216,8 @@ export function CanvasFields(props: { canvas: StoredCanvas; options: CanvasOptio
   };
   const update = (patch: CanvasPatch) => store().update(c().id, placedPatch(c(), placement(), patch));
   const origin = () => (isFrame(c().plane) ? originPlaneOf(c().plane as PlaneFrame) : undefined);
+  /** Experiment: a document that isn't an image, shown live by its tool (research/22). */
+  const docs = () => (image()?.document ? props.options.documents : undefined);
   const picking = () => {
     const s = props.options.calibration.state();
     return s?.id === c().id ? s : undefined;
@@ -314,6 +336,39 @@ export function CanvasFields(props: { canvas: StoredCanvas; options: CanvasOptio
           </button>
         </div>
       </div>
+      <Show when={docs()}>
+        {(d) => (
+          <>
+            <div class="cad-editor__field" data-param="height">
+              <span>Height</span>
+              <div class="cad-editor__refs">
+                <div class="cad-editor__scalar cad-editor__canvas-size">
+                  <NumberInput label="Height" disabled={!image()} value={image() && image()!.placement.scale * image()!.box.height} valid={(n) => n > 0} commit={(height) => update({ aspect: height / (image()!.placement.scale * image()!.box.width) })} />
+                </div>
+                <Show when={d().fits(c())}>
+                  <button class="cad-editor__button" title="Show all of the drawing on the canvas" onClick={() => d().fit(c())}>
+                    Fit
+                  </button>
+                </Show>
+              </div>
+            </div>
+            <div class="cad-editor__field" data-param="edit">
+              <span>Document</span>
+              <div class="cad-editor__refs">
+                <button
+                  class="cad-editor__button"
+                  aria-pressed={d().editing() === c().id}
+                  disabled={d().editing() !== c().id && !d().editable(c())}
+                  title={d().editable(c()) ? "Edit it here, face on" : "A pinned version can't be edited"}
+                  onClick={() => (d().editing() === c().id ? d().done() : d().edit(c()))}
+                >
+                  {d().editing() === c().id ? "Done" : "Edit in place"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </Show>
       {/* Its value doesn't read the Show's accessor: the field's blur, when it is removed, reads it after the Show has switched. */}
       <Show when={distance() !== undefined}>
         <div class="cad-editor__field" data-param="distance">
@@ -323,31 +378,34 @@ export function CanvasFields(props: { canvas: StoredCanvas; options: CanvasOptio
           </div>
         </div>
       </Show>
-      <div class="cad-editor__field" data-param="canvas-anchor">
-        <span>Anchor</span>
-        <div class="cad-editor__refs">
-          <span class="cad-editor__muted" data-anchor={anchor()?.value}>{anchorLabel() ?? "None"}</span>
-          <Show when={placed()?.anchorLost}>
-            <span class="cad-editor__document-state" data-state="unavailable" title="The image has no such element" aria-label="The image has no such element" role="img">
-              <Icon name="TriangleAlert" size={12} />
-            </span>
-          </Show>
-          <button
-            class="cad-editor__button"
-            aria-pressed={picking()?.mode === "anchor"}
-            disabled={!image()?.elements?.length || !placed()?.frame}
-            title="Pin the image by an element of it, which stays where it is as the image changes"
-            onClick={() => (picking()?.mode === "anchor" ? props.options.calibration.stop() : props.options.calibration.start(c().id, "anchor"))}
-          >
-            {picking()?.mode === "anchor" ? "Cancel" : "Pick anchor"}
-          </button>
-          <Show when={anchor()}>
-            <button class="cad-editor__button" aria-label="Remove anchor" title="Pin the image by where the anchor is now" onClick={() => update({ anchor: null, ...(image() ? storedPlacement(image()!.placement) : {}) })}>
-              Remove
+      {/* An anchor is an element of an SVG; a document shown live has none to offer. */}
+      <Show when={!image()?.document}>
+        <div class="cad-editor__field" data-param="canvas-anchor">
+          <span>Anchor</span>
+          <div class="cad-editor__refs">
+            <span class="cad-editor__muted" data-anchor={anchor()?.value}>{anchorLabel() ?? "None"}</span>
+            <Show when={placed()?.anchorLost}>
+              <span class="cad-editor__document-state" data-state="unavailable" title="The image has no such element" aria-label="The image has no such element" role="img">
+                <Icon name="TriangleAlert" size={12} />
+              </span>
+            </Show>
+            <button
+              class="cad-editor__button"
+              aria-pressed={picking()?.mode === "anchor"}
+              disabled={!image()?.elements?.length || !placed()?.frame}
+              title="Pin the image by an element of it, which stays where it is as the image changes"
+              onClick={() => (picking()?.mode === "anchor" ? props.options.calibration.stop() : props.options.calibration.start(c().id, "anchor"))}
+            >
+              {picking()?.mode === "anchor" ? "Cancel" : "Pick anchor"}
             </button>
-          </Show>
+            <Show when={anchor()}>
+              <button class="cad-editor__button" aria-label="Remove anchor" title="Pin the image by where the anchor is now" onClick={() => update({ anchor: null, ...(image() ? storedPlacement(image()!.placement) : {}) })}>
+                Remove
+              </button>
+            </Show>
+          </div>
         </div>
-      </div>
+      </Show>
       <div class="cad-editor__field" data-param="opacity">
         <span>Opacity</span>
         <div class="cad-editor__scalar">

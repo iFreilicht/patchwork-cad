@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { getEdgeIndex, getFaceIndex, syncFaces, syncLines } from "replicad-threejs-helper";
 import type { MeshedShape, RefData, ShownSketch } from "../kernel/protocol.ts";
@@ -12,6 +13,8 @@ import { cameraOf, corners, DEFAULT_MARGINS, expand, fitLens, fitted, inside, ma
 import { contactToken } from "./presence.ts";
 import { regionDirection, ViewCube, type Region } from "./ViewCube.ts";
 import { iconElement } from "./icons.tsx";
+import { DOCUMENT_FRAME, DOCUMENT_PX, measureFramesAsLaidOut, presetCamera, scaleCamera, storedCamera } from "./documentCanvases.ts";
+import type { DocumentCamera } from "../types.ts";
 
 export type EntityKind = "face" | "edge";
 
@@ -87,7 +90,18 @@ export interface Pin {
 export interface ShownCanvas {
   id: string;
   /** The image, drawn once, which the view makes a texture of. */
-  image: HTMLCanvasElement;
+  image?: HTMLCanvasElement | undefined;
+  /** Experiment: any other document, shown live by its tool in a `<patchwork-view>` placed on the plane. */
+  document?:
+    | {
+        url: string;
+        tool?: string | undefined;
+        bare?: boolean | undefined;
+        camera?: DocumentCamera | undefined;
+        /** The tool takes its camera from the view's `data-camera` and follows it, as the CAD canvas view of tldraw does; else it is set in `localStorage` before the tool mounts. */
+        cameraAttribute?: boolean | undefined;
+      }
+    | undefined;
   /** Its corners in world coordinates, counterclockwise from the image's bottom left. */
   corners: [number, number, number][];
   opacity: number;
@@ -150,6 +164,13 @@ export interface ViewerProps {
   canvasPick?: string | undefined;
   onCanvasPick?: (id: string, point: [number, number]) => void;
   onCanvasHover?: (id: string, point: [number, number] | undefined) => void;
+  /**
+   * Experiment: a document canvas edited in place, laid over its rectangle on the screen without a
+   * 3D transform, at `url`, editable, once the camera has stopped; it is placed for the camera at
+   * the start, and should end when the camera moves. Where its tldraw camera was left is reported.
+   */
+  editing?: { id: string; url: string; tool?: string | undefined; camera?: DocumentCamera | undefined } | undefined;
+  onEditCamera?: (id: string, camera: DocumentCamera) => void;
 }
 
 export interface FaceRefs {
@@ -401,6 +422,7 @@ export function Viewer(props: ViewerProps) {
     // Picking raycasts 1 px lines, which aren't drawn.
     const lineMaterial = new THREE.LineBasicMaterial({ visible: false });
     const accent = themeColor(container, "--cad-model-accent");
+    const background = themeColor(container, "--cad-model-bg");
     // Lines need the contrast of the text variant, e.g. a sketch outline against a light background.
     const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
@@ -453,6 +475,43 @@ export function Viewer(props: ViewerProps) {
     const peerGroup = new THREE.Group();
     peerGroup.renderOrder = 3;
     const canvasGroup = new THREE.Group();
+    // Documents on canvases (experiment): DOM placed in 3D, below the WebGL canvas, which punches
+    // transparent holes where they lie so that the model hides them where it is in front; or, drawn
+    // through the model, above it.
+    const cssLayers = (["below", "above"] as const).map((where) => {
+      const css = new CSS3DRenderer();
+      css.domElement.className = `cad-model__documents cad-model__documents--${where}`;
+      css.domElement.style.position = "absolute";
+      css.domElement.style.inset = "0";
+      css.domElement.style.pointerEvents = "none";
+      css.domElement.style.zIndex = where === "below" ? "0" : "1";
+      return { css, scene: new THREE.Scene() };
+    });
+    canvas.after(cssLayers[0]!.css.domElement);
+    cssLayers[0]!.css.domElement.after(cssLayers[1]!.css.domElement);
+    /**
+     * While documents lie below the view's canvas's other layers, a second WebGL canvas above them draws
+     * the scene again, behind a depth-only pass of the documents' rectangles: only what is in front of a
+     * document. The page then composes the scene, the documents with their own opacity and transparency,
+     * and what is in front of them. Made once a document is shown; it has its own context, so its own
+     * environment map.
+     */
+    let upper: { renderer: THREE.WebGLRenderer; environment: THREE.Texture } | undefined;
+    const upperRenderer = () => {
+      if (!upper) {
+        const r = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        r.setPixelRatio(renderer.getPixelRatio());
+        r.setSize(width, height, false);
+        r.domElement.className = "cad-model__front";
+        r.domElement.style.pointerEvents = "none";
+        r.domElement.style.zIndex = "0";
+        cssLayers[0]!.css.domElement.after(r.domElement);
+        const generator = new THREE.PMREMGenerator(r);
+        upper = { renderer: r, environment: generator.fromScene(new RoomEnvironment(), 0.04).texture };
+        generator.dispose();
+      }
+      return upper;
+    };
     scene.add(group, canvasGroup, sketchGroup, overlayGroup, highlightGroup, peerGroup);
     let rendered: Rendered[] = [];
 
@@ -814,6 +873,8 @@ export function Viewer(props: ViewerProps) {
       height = container.clientHeight || 1;
       updateProjection();
       renderer.setSize(width, height, false);
+      upper?.renderer.setSize(width, height, false);
+      for (const layer of cssLayers) layer.css.setSize(width, height);
       follow();
     };
     resize();
@@ -881,22 +942,45 @@ export function Viewer(props: ViewerProps) {
       placeLight();
       placeMarkers();
       placeFloating();
+      // With documents below, what is drawn over everything is drawn above them, and the rest twice.
+      const documentsBelow = drawnCanvases.some((d) => !d.canvas.image && !d.canvas.through);
+      const onTop = [highlightGroup, overlayGroup, peerGroup];
+      if (documentsBelow) for (const g of onTop) g.visible = false;
       renderer.render(scene, camera);
-      if (!collapsed()) renderCube();
+      let top = renderer;
+      if (documentsBelow) {
+        for (const g of onTop) g.visible = true;
+        const u = upperRenderer();
+        const punches = drawnCanvases.filter((d) => !d.canvas.image && !d.canvas.through).map((d) => d.mesh);
+        for (const m of punches) m.visible = true;
+        const environment = scene.environment;
+        scene.environment = u.environment;
+        u.renderer.render(scene, camera);
+        scene.environment = environment;
+        for (const m of punches) m.visible = false;
+        u.renderer.domElement.hidden = false;
+        top = u.renderer;
+      } else if (upper) upper.renderer.domElement.hidden = true;
+      cullDocuments();
+      for (const layer of cssLayers) if (layer.scene.children.length) layer.css.render(layer.scene, camera);
+      connectDocuments();
+      placeEditing();
+      if (!collapsed()) renderCube(top);
       frameId = requestAnimationFrame(tick);
     };
-    const renderCube = () => {
+    /** Draws the ViewCube on the topmost canvas. */
+    const renderCube = (on: THREE.WebGLRenderer) => {
       cube.orient(camera);
       const { x, y, size } = cubeViewport();
-      renderer.setScissorTest(true);
-      renderer.setScissor(x, y, size, size);
-      renderer.setViewport(x, y, size, size);
-      renderer.autoClear = false;
-      renderer.clearDepth();
-      renderer.render(cube.scene, cube.camera);
-      renderer.autoClear = true;
-      renderer.setScissorTest(false);
-      renderer.setViewport(0, 0, width, height);
+      on.setScissorTest(true);
+      on.setScissor(x, y, size, size);
+      on.setViewport(x, y, size, size);
+      on.autoClear = false;
+      on.clearDepth();
+      on.render(cube.scene, cube.camera);
+      on.autoClear = true;
+      on.setScissorTest(false);
+      on.setViewport(0, 0, width, height);
     };
     frameId = requestAnimationFrame(tick);
 
@@ -940,6 +1024,7 @@ export function Viewer(props: ViewerProps) {
       // A view that shows no camera yet opens at the model's Home (research/18, "Home").
       refit();
       setRenders((n) => n + 1);
+      shapesVersion++;
     });
 
     /** Whether a rendered shape can be picked now. */
@@ -1028,6 +1113,180 @@ export function Viewer(props: ViewerProps) {
     /** A texture per drawn image, kept while a canvas shows it. */
     const textures = new Map<HTMLCanvasElement, THREE.CanvasTexture>();
     let drawnCanvases: { canvas: ShownCanvas; mesh: THREE.Mesh }[] = [];
+    /** The documents shown, by canvas id: kept while their URL and tool stay, so that the tool isn't mounted again. */
+    const documentViews = new Map<string, { key: string; object: CSS3DObject; frame: HTMLDivElement; view: HTMLElement; doc: NonNullable<ShownCanvas["document"]>; corners: THREE.Vector3[] }>();
+    /**
+     * Hides documents seen edge on or reaching behind the camera: their box on the screen degenerates,
+     * and a tool that sizes a canvas by it, as tldraw does, makes one larger than browsers allow
+     * (Firefox: "Canvas exceeds max size"). They show nothing then anyway.
+     */
+    const cullDocuments = () => {
+      const toCamera = new THREE.Vector3();
+      const inView = new THREE.Vector3();
+      for (const d of documentViews.values()) {
+        const [a, b, , top] = d.corners as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+        const normal = b.clone().sub(a).cross(top.clone().sub(a)).normalize();
+        const centre = a.clone().lerp(d.corners[2]!, 0.5);
+        if (camera === perspective) toCamera.copy(camera.position).sub(centre).normalize();
+        else toCamera.copy(direction());
+        const edgeOn = Math.abs(normal.dot(toCamera)) < 0.05;
+        const behind = d.corners.some((p) => inView.copy(p).applyMatrix4(camera.matrixWorldInverse).z > -camera.near);
+        d.object.visible = !edgeOn && !behind;
+      }
+    };
+    /**
+     * Puts each view into its frame once the renderer has put the frame into the page, and gives it its
+     * document only then, in the same task: a `<patchwork-view>` that gets `doc-url` while it isn't
+     * connected starts loading at once (its `attributeChangedCallback`), asks for the document with an
+     * event no provider can hear, waits for the answer forever, and doesn't start again once connected.
+     */
+    const connectDocuments = () => {
+      for (const d of documentViews.values()) {
+        if (!d.frame.isConnected || d.view.isConnected) continue;
+        d.view.setAttribute("doc-url", d.doc.url);
+        if (d.doc.tool) d.view.setAttribute("tool-id", d.doc.tool);
+        d.frame.append(d.view);
+      }
+    };
+    const placeDocuments = (list: ShownCanvas[]) => {
+      for (const [id, d] of documentViews) {
+        if (list.some((c) => c.id === id)) continue;
+        d.object.removeFromParent();
+        d.frame.remove();
+        documentViews.delete(id);
+      }
+      for (const c of list) {
+        const doc = c.document!;
+        // A camera the tool follows by itself changes no more than an attribute.
+        const key = JSON.stringify(doc.cameraAttribute ? { ...doc, camera: undefined } : doc);
+        let d = documentViews.get(c.id);
+        if (d?.key !== key) {
+          if (d) {
+            d.object.removeFromParent();
+            d.frame.remove();
+          }
+          const frame = document.createElement("div");
+          measureFramesAsLaidOut();
+          frame.className = `${DOCUMENT_FRAME}${doc.bare ? " cad-model__document-canvas--bare" : ""}`;
+          const view = document.createElement("patchwork-view");
+          // The part of a tldraw drawing it shows, which the tool reads as it mounts.
+          if (doc.camera && !doc.cameraAttribute) presetCamera(doc.url, doc.camera);
+          view.style.display = "block";
+          view.style.width = "100%";
+          view.style.height = "100%";
+          d = { key, object: new CSS3DObject(frame), frame, view, doc, corners: [] };
+          // The pointer goes to the 3D view, which orbits, picks and takes the wheel; CSS3DObject sets it to `auto`.
+          frame.style.pointerEvents = "none";
+          documentViews.set(c.id, d);
+        }
+        if (doc.cameraAttribute) {
+          const camera = doc.camera ? JSON.stringify(doc.camera) : null;
+          if (camera === null) d.view.removeAttribute("data-camera");
+          else if (d.view.getAttribute("data-camera") !== camera) d.view.setAttribute("data-camera", camera);
+        }
+        d.corners = c.corners.map((p) => new THREE.Vector3(...p));
+        const [a, b, , top] = d.corners as [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+        const x = b.clone().sub(a);
+        const y = top.clone().sub(a);
+        const width = x.length();
+        const height = y.length();
+        d.frame.style.width = `${DOCUMENT_PX}px`;
+        d.frame.style.height = `${Math.round((DOCUMENT_PX * height) / width)}px`;
+        d.frame.style.opacity = String(c.opacity);
+        const scale = width / DOCUMENT_PX;
+        const basis = new THREE.Matrix4().makeBasis(x.clone().normalize(), y.clone().normalize(), x.clone().cross(y).normalize());
+        d.object.matrixAutoUpdate = false;
+        d.object.matrix.copy(basis).scale(new THREE.Vector3(scale, scale, scale)).setPosition(a.clone().addScaledVector(x, 0.5).addScaledVector(y, 0.5));
+        d.object.matrixWorldNeedsUpdate = true;
+        const layer = cssLayers[c.through ? 1 : 0]!;
+        if (d.object.parent !== layer.scene) layer.scene.add(d.object);
+      }
+    };
+    /** The document edited in place: its overlay, the URL it shows, the width it was laid out at, and the model over it, as of which shapes. */
+    let edit: { id: string; url: string; overlay: HTMLDivElement; width: number; ghost: HTMLImageElement; ghostOf: number } | undefined;
+    /** Counts the shapes shown, so that the model over a document edited in place is drawn again when they change. */
+    let shapesVersion = 0;
+    /**
+     * The model as the camera sees it now, alone on a transparent background: no canvases, highlights,
+     * overlays or collaborators. Read right after rendering, before the browser composes the canvas,
+     * which keeps its drawing buffer until then.
+     */
+    const modelImage = (): string => {
+      const hidden = [canvasGroup, highlightGroup, overlayGroup, peerGroup].filter((g) => g.visible);
+      for (const g of hidden) g.visible = false;
+      const color = renderer.getClearColor(new THREE.Color());
+      const alpha = renderer.getClearAlpha();
+      renderer.setClearColor(background, 0);
+      renderer.render(scene, camera);
+      const url = renderer.domElement.toDataURL("image/png");
+      renderer.setClearColor(color, alpha);
+      for (const g of hidden) g.visible = true;
+      renderer.render(scene, camera);
+      return url;
+    };
+    /** Where a canvas is on the screen, in the view's pixels: the box of its corners. */
+    const screenBox = (corners: [number, number, number][]) => {
+      const rect = canvas.getBoundingClientRect();
+      const points = corners.map((p) => new THREE.Vector3(...p).project(camera)).map((v) => [((v.x + 1) / 2) * rect.width, ((1 - v.y) / 2) * rect.height] as const);
+      const xs = points.map((p) => p[0]);
+      const ys = points.map((p) => p[1]);
+      return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    };
+    const endEdit = () => {
+      if (!edit) return;
+      const left = storedCamera(edit.url);
+      if (left) props.onEditCamera?.(edit.id, scaleCamera(left, edit.width, DOCUMENT_PX));
+      edit.overlay.remove();
+      const frame = documentViews.get(edit.id)?.frame;
+      if (frame) frame.style.visibility = "";
+      edit = undefined;
+      delete container.dataset["editing"];
+    };
+    /** Starts, follows or ends editing in place, as the render loop goes: the overlay is made once the camera has stopped, at the size the canvas has then. */
+    const placeEditing = () => {
+      const want = props.editing;
+      if (edit && (want?.id !== edit.id || want.url !== edit.url)) endEdit();
+      if (!want) return;
+      const drawn = drawnCanvases.find((d) => d.canvas.id === want.id);
+      if (!drawn) return;
+      const box = screenBox(drawn.canvas.corners);
+      if (!edit) {
+        if (turn || box.width < 40 || box.height < 40) return;
+        const width = Math.round(box.width);
+        const overlay = document.createElement("div");
+        overlay.className = "cad-model__document-edit";
+        overlay.style.width = `${width}px`;
+        overlay.style.height = `${Math.round(box.height)}px`;
+        container.append(overlay);
+        // The same part of the drawing as on the canvas, at this size.
+        if (want.camera) presetCamera(want.url, scaleCamera(want.camera, DOCUMENT_PX, width));
+        const view = document.createElement("patchwork-view");
+        view.setAttribute("doc-url", want.url);
+        if (want.tool) view.setAttribute("tool-id", want.tool);
+        view.style.display = "block";
+        view.style.width = "100%";
+        view.style.height = "100%";
+        overlay.append(view);
+        // The model over it, see-through and not in the way of the pointer, to draw along its edges.
+        const ghost = document.createElement("img");
+        ghost.className = "cad-model__document-ghost";
+        ghost.alt = "";
+        overlay.append(ghost);
+        edit = { id: want.id, url: want.url, overlay, width, ghost, ghostOf: -1 };
+        container.dataset["editing"] = want.id;
+      }
+      edit.overlay.style.transform = `translate(${box.x}px, ${box.y}px)`;
+      if (edit.ghostOf !== shapesVersion) {
+        edit.ghostOf = shapesVersion;
+        edit.ghost.src = modelImage();
+      }
+      // The whole view's picture, with the overlay's box cut out of it.
+      edit.ghost.style.width = `${canvas.clientWidth}px`;
+      edit.ghost.style.height = `${canvas.clientHeight}px`;
+      edit.ghost.style.transform = `translate(${-box.x}px, ${-box.y}px)`;
+      const frame = documentViews.get(edit.id)?.frame;
+      if (frame) frame.style.visibility = "hidden";
+    };
     /** Removes the drawn canvases: their geometries and own materials; the outlines' materials are the highlights'. */
     const clearCanvases = () => {
       for (const child of canvasGroup.children) if (child instanceof THREE.Mesh) child.geometry.dispose();
@@ -1038,12 +1297,29 @@ export function Viewer(props: ViewerProps) {
     createEffect(() => {
       const list = props.canvases ?? [];
       clearCanvases();
+      placeDocuments(list.filter((c) => c.document));
       for (const [image, texture] of textures) {
         if (list.some((c) => c.image === image)) continue;
         texture.dispose();
         textures.delete(image);
       }
       drawnCanvases = list.map((c) => {
+        if (!c.image) {
+          // A document's quad only punches its hole: transparent, but in the depth buffer.
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.Float32BufferAttribute(c.corners.flat(), 3));
+          geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+          geometry.setIndex([0, 1, 2, 0, 2, 3]);
+          // Only depth, and only in the pass above the documents, before anything else, so that what is behind it isn't drawn there.
+          const material = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+          const mesh = Object.assign(new THREE.Mesh(geometry, material), { renderOrder: -1, visible: false });
+          canvasGroup.add(mesh);
+          if (c.highlight) {
+            const { line } = highlightMaterials[c.highlight];
+            canvasGroup.add(...[line.halo, line.core].map((m, i) => Object.assign(new LineSegments2(segments({ points: c.corners, closed: true }), m), { renderOrder: 2 + i })));
+          }
+          return { canvas: c, mesh };
+        }
         let texture = textures.get(c.image);
         if (!texture) {
           texture = new THREE.CanvasTexture(c.image);
@@ -1468,6 +1744,7 @@ export function Viewer(props: ViewerProps) {
       cubeElement.removeEventListener("pointerleave", onCubeLeave);
       cube.dispose();
       dispose([...group.children, ...sketchGroup.children, ...overlayGroup.children, ...highlightGroup.children]);
+      endEdit();
       clearCanvases();
       for (const texture of textures.values()) texture.dispose();
       for (const m of markers.values()) m.label.remove();
@@ -1476,6 +1753,8 @@ export function Viewer(props: ViewerProps) {
       scene.environment?.dispose();
       for (const m of [...ghostLines.values(), ringMaterials.line, ringMaterials.halo, faceMaterial, edgeMaterial, lineMaterial, sketchMaterial, ...Object.values(highlightMaterials).flatMap((m) => [m.face, m.line.core, m.line.halo]), ...[...peerMaterials.values()].flatMap((m) => [m.face, m.line.core, m.line.halo, m.marker])]) m.dispose();
       renderer.dispose();
+      upper?.environment.dispose();
+      upper?.renderer.dispose();
     });
   });
 

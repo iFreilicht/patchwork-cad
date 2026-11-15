@@ -16,7 +16,7 @@ import { applyToText, apply, setProp, type Edit } from "../../model/splice.ts";
 import { timeline } from "../../model/timeline.ts";
 import type { CadAnchor, CadModelDoc } from "../../types.ts";
 import type { AnnotationStore, AnnotationPlaces } from "../annotations.tsx";
-import { imageBox, isImage, type CanvasPlacement, type CanvasStore } from "../canvases.ts";
+import { documentBox, imageBox, isImage, type CanvasPlacement, type CanvasStore } from "../canvases.ts";
 import type { Entity } from "../Viewer.tsx";
 import { annotationRowId, canvasRowId } from "./documents.ts";
 
@@ -45,7 +45,7 @@ export interface Role {
 
 export const ROLES: readonly Role[] = [
   // An image on a plane, drawn in the view only (research/21, "Canvas").
-  { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && isImage(value) },
+  { id: "canvas", label: "Canvas", title: "Show it on a plane, to trace or compare", allows: (value, path) => !path && (isImage(value) || (value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type !== "cad-model") },
   { id: "import", label: "Import", title: "Import it in the code", allows: (value, path) => path || importKinds(value).length > 0 },
   // A view of the whole document, which the embed frame shows (research/21, "Annotation").
   { id: "annotation", label: "Annotation", title: "Show it at a place on the model", allows: (_, path) => !path },
@@ -308,8 +308,8 @@ export function createInserts(props: {
   const canvas = async (p: PendingInsert) => {
     const d = documentOf(p);
     if (!p.url || !d) return;
-    // Its scale is per unit of the image.
-    const box = await imageBox(d.info.value);
+    // Its scale is per unit of the image; a document that isn't one is laid out at a fixed width (research/22).
+    const box = isImage(d.info.value) ? await imageBox(d.info.value) : documentBox({});
     if (!box) return editor.setNotice("The image has no size.");
     const place = props.placeCanvas(p.face, p.anchor, p.point);
     const id = props.canvases.add(p.url, baseName(p.url, d.info.value, p.name), place.plane, place.center, place.width, box);
