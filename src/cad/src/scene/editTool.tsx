@@ -1,5 +1,5 @@
-// Editing a CAD model where it stands in a scene (`scene:view` "cad-model-scene-edit"): "Edit model"
-// on a model's object puts a hand on the scene's stack, hides the object's built GLB from this
+// Editing a CAD model where it stands in a scene (`scene:view` "cad-model-scene-edit"): the model's
+// Open (the inspector's button, the menu, a double-click or Enter in Edit) puts a hand on the scene's stack, hides the object's built GLB from this
 // viewer, and draws the editor's live build in its place (sceneViewer.ts), with the editor's panels
 // laid over the scene's view. Escape steps out of the editor's picking and selection first, then
 // puts the hand down. The scene's contract: patchwork-experiments/scene, STAGE.md ("View plugins",
@@ -149,11 +149,14 @@ export function create(api: ViewApi) {
   return {
     commands: [
       {
+        // the model's Open (scene EDITOR.md, "A command"): its editor, in place; double-click and Enter run it too
         id: "cad-edit",
-        name: "Edit model",
+        name: "Open",
+        open: true,
+        key: "Enter",
         edit: true,
         show: ["menu", "inspector"],
-        state: (target: unknown) => (isModel(target) ? { label: session?.id === target ? "Stop editing model" : "Edit model", checked: session?.id === target } : null),
+        state: (target: unknown) => (isModel(target) ? { label: session?.id === target ? "Close" : "Open", title: session?.id === target ? "Close the model's editor" : "Edit the model here, in place", checked: session?.id === target } : null),
         run(target: unknown) {
           const stage = api.focus();
           if (!stage || !isModel(target)) return;
