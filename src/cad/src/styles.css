@@ -346,6 +346,27 @@
   grid-template-areas: "toolbar toolbar code" "browser stage code" "timeline timeline timeline" "status status status";
 }
 
+/* Laid over a host's own 3D view (WysiwygEditor's `viewer`, e.g. a scene): the stage cell is clear and lets the pointer through to the host, the panels around it and the dialogs in it take it. */
+.cad-model--over-host {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.cad-model--over-host > *,
+.cad-model--over-host > .cad-editor__stage > * {
+  pointer-events: auto;
+}
+
+.cad-model--over-host > :not(.cad-editor__stage) {
+  background: var(--cad-model-bg);
+}
+
+.cad-model--over-host > .cad-editor__stage {
+  pointer-events: none;
+}
+
 .cad-model--editor > .cad-model__status {
   grid-area: status;
 }

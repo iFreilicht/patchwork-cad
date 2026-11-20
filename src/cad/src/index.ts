@@ -43,4 +43,31 @@ export const plugins = [
       return (await import("./tools/viewer.tsx")).default;
     },
   },
+  // A model placed in a scene (patchwork-experiments/scene, README "Writing a provider"): built at its
+  // default parameters into a GLB, which the scene keeps in a render doc and builds again on a change.
+  {
+    type: "scene:source",
+    id: "cad-model-scene",
+    name: "CAD Model",
+    icon: "Box",
+    supportedDatatypes: ["cad-model"],
+    content: "built",
+    cost: "expensive",
+    params: [],
+    // Bump when build() makes different output from the same model.
+    version: 1,
+    async load() {
+      return (await import("./scene/source.ts")).default;
+    },
+  },
+  // Editing a model where it stands in a scene: its editor over the scene's view, its live build in
+  // the object's place (src/scene/editTool.tsx).
+  {
+    type: "scene:view",
+    id: "cad-model-scene-edit",
+    name: "CAD model editing",
+    async load() {
+      return (await import("./scene/editTool.tsx")).default;
+    },
+  },
 ];

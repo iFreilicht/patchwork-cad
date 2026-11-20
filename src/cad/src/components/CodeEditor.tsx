@@ -332,7 +332,7 @@ async function patchworkExtensions(): Promise<Extension[]> {
 export function CodeEditor(props: {
   handle: DocHandle<CadModelDoc>;
   /** The document's undo history: after an undo or redo, the cursor goes to what changed, as with CodeMirror's own history. */
-  undo?: UndoManager<CadModelDoc>;
+  undo?: UndoManager<CadModelDoc> | undefined;
   errorLine: number | undefined;
   /**
    * A source span to mark, e.g. the timeline entry whose code was asked for: the editor takes the

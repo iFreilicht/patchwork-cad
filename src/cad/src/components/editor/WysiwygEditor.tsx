@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, Match, on, onCleanup, Show, Switch, untrack, type Component } from "solid-js";
 import type { DocHandle } from "@automerge/automerge-repo";
 import { bindUndo } from "@patchwork-cad/undo";
 import type { MeshedShape, ShownSketch } from "../../kernel/protocol.ts";
@@ -8,7 +8,7 @@ import type { CadModelDoc, CameraState, NamedView } from "../../types.ts";
 import { CodeEditor, type RelatedSpan } from "../CodeEditor.tsx";
 import { createModel, faceRefs, modelAttributes } from "../createModel.ts";
 import { StatusBar } from "../StatusBar.tsx";
-import { Viewer, type Entity, type Highlight, type ShownCanvas, type ViewerApi } from "../Viewer.tsx";
+import { Viewer, type Entity, type Highlight, type ShownCanvas, type ViewerApi, type ViewerProps } from "../Viewer.tsx";
 import { createEntityName } from "../entityName.ts";
 import { CodeDialog, FeatureDialog } from "./FeatureDialog.tsx";
 import { createEditor, type Selectable } from "./state.ts";
@@ -60,7 +60,26 @@ const spanOf = (entry: FeatureEntry, key: string): [number, number] => {
  * The Fusion-like editor (tool `cad-model`, the default): toolbar, 3D view, timeline and feature
  * dialogs on one kernel worker; the shared code editor opens next to it on demand.
  */
-export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: HTMLElement }) {
+/** What a host that draws the model itself (a scene) can ask of the editor. */
+export interface EditorControls {
+  /** One step of Escape: stop picking, editing in place or calibrating, else close the selection; false if there was nothing to do. */
+  escape(): boolean;
+}
+
+export interface WysiwygEditorProps {
+  handle: DocHandle<CadModelDoc>;
+  element: HTMLElement;
+  /**
+   * The 3D view, in place of the built-in one, e.g. one that draws the model in a scene. With it the
+   * editor lays its panels over the host's view, its own stage cell left clear, and leaves Escape to
+   * the host, which calls `escape()` of the controls it is handed, and the undo: the editor binds none of
+   * its own, and the host records what it writes through the `handle` it gives (e.g. a scene's undo).
+   */
+  viewer?: Component<ViewerProps> | undefined;
+  onControls?: ((controls: EditorControls) => void) | undefined;
+}
+
+export function WysiwygEditor(props: WysiwygEditorProps) {
   const ui = createUiState(props.element, props.handle.url);
   // The parameters this user shows the model with: a configuration and values they try (research/17).
   const [code, setCode] = createSignal(props.handle.doc()?.content ?? "");
@@ -110,8 +129,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const presence = joinPresence(props.element, props.handle, "editor");
   const comments = createComments(props.element, props.handle);
   // Comments, Patchwork's metadata (`@…`) and the locks aren't undone (research/16-undo-redo.md).
-  const undo = bindUndo(props.element, props.handle, { ignore: UNDO_IGNORE });
-  onCleanup(undo.unbind);
+  // A host with its own view keeps the undo too: its writes reach the host through the handle it gives (EditorControls).
+  const undo = props.viewer ? undefined : bindUndo(props.element, props.handle, { ignore: UNDO_IGNORE });
+  onCleanup(() => undo?.unbind());
   const codeOpen = ui.codeOpen;
   const setCodeOpen = ui.setCodeOpen;
 
@@ -748,23 +768,28 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
     if (!p || Math.hypot(event.clientX - p.x, event.clientY - p.y) > 4 || editor.pickTarget() || calibration.state()) return;
     editor.select(undefined, "view");
   };
+  /** One step of Escape: a field that picks stops picking first, and so does Calibrate, and editing in place. */
+  const escapeStep = () => {
+    if (editor.pickTarget()) editor.setPickTarget(undefined);
+    else if (editing()) setEditing(undefined);
+    else if (calibration.state()) calibration.stop();
+    else if (editor.selection()) editor.select(undefined, "dialog");
+    else return false;
+    return true;
+  };
+  props.onControls?.({ escape: escapeStep });
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || event.defaultPrevented) return;
     const target = event.target as Node;
     if (target !== document.body && !props.element.contains(target)) return;
     // A document edited in place takes its own Escape.
     if ((event.target as Element).closest?.(".cad-model__document-edit")) return;
-    // A field that picks stops picking first, and so does Calibrate, and editing in place.
-    if (editor.pickTarget()) editor.setPickTarget(undefined);
-    else if (editing()) setEditing(undefined);
-    else if (calibration.state()) calibration.stop();
-    else if (editor.selection()) editor.select(undefined, "dialog");
-    else return;
-    event.preventDefault();
+    if (escapeStep()) event.preventDefault();
   };
   document.addEventListener("pointerdown", onPress, true);
   document.addEventListener("pointerup", onRelease, true);
-  document.addEventListener("keydown", onEscape);
+  // A host with its own view routes Escape itself (EditorControls).
+  if (!props.viewer) document.addEventListener("keydown", onEscape);
   onCleanup(() => {
     document.removeEventListener("pointerdown", onPress, true);
     document.removeEventListener("pointerup", onRelease, true);
@@ -817,8 +842,9 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   /** Why a body() failed: it has no dialog to say it (research/11), so the status bar does. */
   const undialogued = () => editor.timeline().entries.flatMap((e) => (e.kind === "feature" && e.type === "body" && e.trace && e.trace.status !== "ok" && e.trace.message ? [`body() ${e.names.join(", ")}: ${e.trace.message}`] : []));
 
+  const View = props.viewer ?? Viewer;
   return (
-    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen() }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
+    <div class="cad-model cad-model--editor" classList={{ "cad-model--with-code": codeOpen(), "cad-model--with-browser": ui.browserOpen(), "cad-model--over-host": !!props.viewer }} {...modelAttributes(model)} data-open={editor.open()?.name ?? ""} data-selection={selectionKey()} data-rolled-back={rolledBack() ? "true" : "false"} data-marker={editor.marker()}>
       <Toolbar editor={editor} codeOpen={codeOpen()} onToggleCode={() => setCodeOpen(!codeOpen())} browserOpen={ui.browserOpen()} onToggleBrowser={() => ui.setBrowserOpen(!ui.browserOpen())} onInsert={() => inserts.begin(undefined, undefined, "toolbar")} />
       <Show when={ui.browserOpen()}>
         <Browser
@@ -835,7 +861,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         />
       </Show>
       <div class="cad-editor__stage" ref={stage} tabindex="-1" data-drop="insert">
-        <Viewer
+        <View
           shapes={rolledBack() || model.shapes() ? shown() : undefined}
           pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" || editor.pickTarget()?.kind === "region" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
           onPick={pick}
@@ -928,7 +954,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
         <div class="cad-editor__code" data-drop="import">
           <CodeEditor
             handle={props.handle}
-            undo={undo.manager}
+            undo={undo?.manager}
             errorLine={model.error()?.line}
             focus={codeFocus()}
             onFocusDone={() => setCodeFocus(undefined)}

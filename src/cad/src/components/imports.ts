@@ -268,12 +268,12 @@ export function moduleOf(value: unknown, type?: ImportType, id = ""): ImportedMo
 }
 
 /**
- * Reads imported documents, each found once and turned into a module again only when its heads
+ * Reads imported documents from `repo` (Patchwork's by default), each found once and turned into a module again only when its heads
  * changed, and calls `onChange` when one that follows its document changes. A URL with heads
  * (`automerge:<id>#<heads>`) is pinned to that version and never changes; one without follows the
  * document, unless a read asks for a version of it.
  */
-export function createImports(onChange: () => void): DocumentImports {
+export function createImports(onChange: () => void, repo: typeof globalThis.repo = globalThis.repo): DocumentImports {
   const found = new Map<string, Promise<DocHandle<unknown> | string>>();
   /** The documents themselves, without a path or heads, by URL: their current heads and history. */
   const roots = new Map<string, DocHandle<unknown>>();
@@ -284,7 +284,6 @@ export function createImports(onChange: () => void): DocumentImports {
 
   /** Finds a URL; one without heads follows its document, and a change of it calls `onChange`. */
   const load = async (specifier: string): Promise<DocHandle<unknown> | string> => {
-    const repo = globalThis.repo;
     if (!repo) return "documents can only be imported in Patchwork";
     if (!isValidAutomergeUrl(specifier)) return "it isn't a valid automerge URL";
     try {
