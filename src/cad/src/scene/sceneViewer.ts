@@ -1,19 +1,22 @@
 // The editor's 3D view drawn in a scene (ViewerProps, as Viewer.tsx is): the model's live build as
 // meshes in a layer of the scene's world, with the scene's own three.js (a scene's renderer can't
 // draw another copy's objects), picked by raycasting those meshes here, since the scene's own hits
-// don't say which face. Input comes from the scene's hand stack (editTool.tsx); the scene keeps the
-// camera, so the view's camera props (view, home, ViewCube, faceRefs) mean nothing here.
+// don't say which face. Input comes from the scene's hand stack (editTool.tsx). The camera is the
+// scene's, which the view's camera props move and which it is read from (sceneCamera.ts).
 //
 // The model is Z up in millimetres; the layer's frame is the scene object's, Y up in metres.
 
 import { createEffect, onCleanup, type Component } from "solid-js";
+import * as Local from "three";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
 import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { sceneCamera, type HostCamera } from "./sceneCamera.ts";
+import { sceneViewCube, type SceneViewCube } from "./sceneViewCube.ts";
 import { wideLines } from "./wideLines.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
-export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid">;
+export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent">;
 
 /** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
 const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
@@ -32,6 +35,10 @@ export interface SceneHost {
   port(clientX: number, clientY: number): { x: number; y: number } | null;
   /** Where a point in the stage's frame is on the screen, in client pixels, and whether the port shows it; null while there is no camera. */
   project(point: number[]): { x: number; y: number; visible: boolean } | null;
+  /** The scene's camera, which the editor's views move (sceneCamera.ts). */
+  camera: HostCamera;
+  /** The port's size in pixels, or null while it has none. */
+  size(): { width: number; height: number } | null;
   invalidate(): void;
   /** Calls `fn` once before the next frame is drawn. */
   nextFrame(fn: () => void): void;
@@ -90,6 +97,8 @@ export interface SceneView {
   };
   /** The scene object moved: draw the model where it is now. */
   moved(): void;
+  /** Before the scene draws a frame: the ViewCube follows the camera. */
+  update(): void;
   /** What is under the pointer now, for tests. */
   hovered(): Entity | undefined;
   /** What is at port pixel (x, y), for tests. */
@@ -463,9 +472,9 @@ export function sceneView(host: SceneHost): SceneView {
 
   /** What the editor asks of a view, as far as a scene has it. */
   const api: ViewerApi = {
-    camera: () => undefined,
-    home: () => {},
-    homeCamera: () => undefined,
+    camera: () => camera.camera(),
+    home: () => camera.home(),
+    homeCamera: () => camera.homeCamera(),
     pointAt(clientX, clientY) {
       const p = host.port(clientX, clientY);
       return p ? hitAt(p.x, p.y, "face")?.point : undefined;
@@ -476,8 +485,69 @@ export function sceneView(host: SceneHost): SceneView {
     },
   };
 
-  // ── for tests ──
   const shapeOf = (body: string) => drawn.find((d) => d.shape.body === body)?.shape;
+  // ── the camera: the scene's, moved and read in the model's frame (sceneCamera.ts) ──
+  const point = (array: ArrayLike<number>, i: number) => new Local.Vector3(array[3 * i]!, array[3 * i + 1]!, array[3 * i + 2]!);
+  /** The vertices of a face group of a shape. */
+  const faceVertices = (shape: MeshedShape, group: { start: number; count: number }) => {
+    const out: Local.Vector3[] = [];
+    for (let i = group.start; i < group.start + group.count; i++) out.push(point(shape.faces.vertices, shape.faces.triangles[i]!));
+    return out;
+  };
+  const sketchVertices = (names?: readonly string[]) => (props?.sketches ?? []).filter((s) => !names || names.includes(s.name)).flatMap((s) => s.outline.flatMap((l) => l.points.map((p) => new Local.Vector3(...p))));
+  const boxCorners = (box: Local.Box3) => (box.isEmpty() ? [] : [0, 1, 2, 3, 4, 5, 6, 7].map((i) => new Local.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z)));
+  /** The part of the port that the editor's panels leave free: this view's element, the editor's stage cell, in port pixels. */
+  const free = () => {
+    const r = element?.getBoundingClientRect();
+    const at = r && host.port(r.left, r.top);
+    return r && at && r.width && r.height ? { x: at.x, y: at.y, width: r.width, height: r.height } : null;
+  };
+  const camera = sceneCamera({
+    camera: host.camera,
+    size: () => host.size(),
+    free,
+    toStage: () => (root.visible ? new Local.Matrix4().fromArray(root.matrix.elements) : null),
+    nextFrame: (fn) => host.nextFrame(fn),
+    modelPoints: () => [...drawn.flatMap((d) => boxCorners(new Local.Box3().setFromArray(d.shape.faces.vertices))), ...sketchVertices()],
+    vertices: () => [...drawn.flatMap((d) => Array.from({ length: d.shape.faces.vertices.length / 3 }, (_, i) => point(d.shape.faces.vertices, i))), ...sketchVertices()],
+    facesInView: (inView) =>
+      drawn.flatMap(({ shape }) =>
+        shape.body ? (shape.faces.faceGroups ?? []).flatMap((g, gi) => (entityIndex(shape.faceIndex, gi) >= 0 && faceVertices(shape, g).every(inView) ? [{ body: shape.body!, index: entityIndex(shape.faceIndex, gi) }] : [])) : [],
+      ),
+    sketchesInView: (inView) => (props?.sketches ?? []).filter((s) => s.outline.every((l) => l.points.every((p) => inView(new Local.Vector3(...p))))).map((s) => s.name),
+    faceCoveringView() {
+      // Sampled on a grid over the view, as Viewer.tsx's.
+      const size = free();
+      if (!size) return undefined;
+      const counts = new Map<string, { body: string; index: number; n: number }>();
+      const N = 12;
+      for (let i = 0; i < N; i++)
+        for (let j = 0; j < N; j++) {
+          const e = hitAt(size.x + ((i + 0.5) / N) * size.width, size.y + ((j + 0.5) / N) * size.height, "face")?.entity;
+          if (!e || e.index < 0) continue;
+          const key = `${e.body}:${e.index}`;
+          const c = counts.get(key) ?? { body: e.body, index: e.index, n: 0 };
+          c.n++;
+          counts.set(key, c);
+        }
+      return [...counts.values()].sort((a, b) => b.n - a.n)[0];
+    },
+    facePoints: (located) =>
+      located.flatMap(({ body, indices }) => {
+        const shape = shapeOf(body);
+        if (!shape) return [];
+        return (shape.faces.faceGroups ?? []).flatMap((g, gi) => (indices.includes(entityIndex(shape.faceIndex, gi)) ? boxCorners(new Local.Box3().setFromPoints(faceVertices(shape, g))) : []));
+      }),
+    sketchPoints: (names) => sketchVertices(names),
+    bodies: () => drawn.flatMap((d) => (d.shape.body ? [d.shape.body] : [])),
+    faceRefs: () => props?.faceRefs,
+    home: () => props?.home,
+    onReport: (view) => props?.onViewChange?.(view),
+    onTurning: (turning) => element && (element.dataset["turning"] = String(turning)),
+  });
+  let cube: SceneViewCube | undefined;
+
+  // ── for tests ──
   /** A model point (Z up, mm) on the screen. */
   const toScreen = (p: Three.Vector3) => host.project(p.clone().applyMatrix4(root.matrix).toArray());
   /**
@@ -515,6 +585,9 @@ export function sceneView(host: SceneHost): SceneView {
         return shape.body ? indices.filter((i) => i >= 0).map((index) => ({ body: shape.body!, kind, index })) : [];
       }),
     highlighted: (style) => highlighted.filter((h) => h.style === style).map((h) => h.entity),
+    cameraDirection: () => camera.direction() ?? [0, 0, 0],
+    viewCubePoint: (region) => cube?.point(region),
+    intent: () => camera.intent(),
     centroid(entity) {
       const shape = shapeOf(entity.body);
       const points = shape ? candidates(shape, entity.kind, entity.index) : [];
@@ -548,14 +621,26 @@ export function sceneView(host: SceneHost): SceneView {
     Object.assign(el.dataset, { hovered: "", selected: "" });
     element = el;
     // Once mounted: the theme is where the element is.
-    createEffect(() => (materials ??= makeMaterials(el)));
+    createEffect(() => {
+      materials ??= makeMaterials(el);
+      cube ??= sceneViewCube(el, camera, p.collapseViewCube ?? false);
+    });
+    createEffect(() => cube?.setHomeHovered(!!p.homeHovered));
+    // A camera given to the view, e.g. a named view: a new object each time, which moves the scene's camera.
+    createEffect(() => {
+      const view = p.view;
+      if (view) camera.apply(view);
+    });
     createEffect(() => {
       // Hover changes kind with the pick target, and picking ends a selection.
       el.dataset["pick"] = p.pick ?? "";
       setHovered(undefined);
       if (p.pick) setSelected(undefined);
     });
-    createEffect(() => drawShapes(p.shapes));
+    createEffect(() => {
+      drawShapes(p.shapes);
+      camera.refit();
+    });
     createEffect(() => {
       void [p.pickable, p.pick];
       fade();
@@ -578,6 +663,8 @@ export function sceneView(host: SceneHost): SceneView {
       drawn = [];
       materials?.dispose();
       materials = undefined;
+      cube?.dispose();
+      cube = undefined;
       host.invalidate();
     });
     return el;
@@ -587,12 +674,14 @@ export function sceneView(host: SceneHost): SceneView {
     Viewer,
     input,
     moved,
+    update: () => cube?.render(),
     hovered: () => hovered,
     at(x, y) {
       const h = hitAt(x, y);
       return h && { entity: h.entity, point: h.point };
     },
     dispose() {
+      camera.dispose();
       for (const g of [bodies, marks, lines, overlays]) clear(g);
       materials?.dispose();
       root.removeFromParent();

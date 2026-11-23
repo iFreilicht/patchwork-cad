@@ -141,10 +141,12 @@ export function WysiwygEditor(props: WysiwygEditorProps) {
   const [goTo, setGoTo] = createSignal<CameraState>();
   /** The camera as the view last reported it, or as this editor moved it to a named view. */
   const [camera, setCamera] = createSignal<CameraState>();
+  // A host with its own view keeps its camera: the editor neither stores it per user nor opens at the stored one.
   const saveCamera = (view: CameraState) => {
     setCamera(view);
-    ui.setView(EDITOR_TOOL_ID, view);
+    if (!props.viewer) ui.setView(EDITOR_TOOL_ID, view);
   };
+  const storedCamera = () => (props.viewer ? undefined : ui.view(EDITOR_TOOL_ID));
   /** The Home view or a configuration is hovered in the browser: the ViewCube's Home button or the parameters entry show it. */
   const [homeHovered, setHomeHovered] = createSignal(false);
   const [configurationHovered, setConfigurationHovered] = createSignal(false);
@@ -156,7 +158,7 @@ export function WysiwygEditor(props: WysiwygEditorProps) {
       if (now) setCamera(now);
       return now;
     },
-    current: () => camera() ?? ui.view(EDITOR_TOOL_ID),
+    current: () => camera() ?? storedCamera(),
     goTo(view: NamedView) {
       setGoTo({ ...view.camera });
       saveCamera(view.camera);
@@ -887,7 +889,7 @@ export function WysiwygEditor(props: WysiwygEditorProps) {
           editing={editedDocument()}
           onEditCamera={(id, view) => canvasStore.update(id, { view })}
           sketches={[...shownSketches().filter((s) => s.name !== pickedRegions()?.sketch.name), ...(pickedRegions() ? [pickedRegions()!.sketch] : [])]}
-          view={goTo() ?? ui.view(EDITOR_TOOL_ID)}
+          view={goTo() ?? storedCamera()}
           onViewChange={(view) => {
             // Moving the camera ends editing in place, whose overlay is laid out for the camera it started with.
             setEditing(undefined);

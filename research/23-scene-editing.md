@@ -20,13 +20,13 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 | # | Gap | Decision |
 |---|---|---|
-| A1 | The `view` prop is ignored: choosing a named view doesn't move the camera. | Fix, with `camera.set` through the object's frame |
-| A2 | `ViewerApi.camera()` is undefined: a view can't be made or updated from the camera, and the browser marks no view as current. | Fix |
-| A3 | `home()` and `homeCamera()` do nothing. | Fix |
-| A4 | Fits to the model's margins and close-ups ([20](20-view-framing.md)) are neither shown nor saved. | Fix |
+| A1 | The `view` prop is ignored: choosing a named view doesn't move the camera. | Done: [`sceneCamera.ts`](../src/cad/src/scene/sceneCamera.ts) moves the scene's camera, through the object's frame, as `Viewer.tsx` moves its own; the scene keeps its lens, so a view is fitted by the distance and its `eye` isn't kept. Views fit the part of the port the editor's panels leave free, as `Viewer.tsx`'s canvas |
+| A2 | `ViewerApi.camera()` is undefined: a view can't be made or updated from the camera, and the browser marks no view as current. | Done: read from the scene's camera, in that part |
+| A3 | `home()` and `homeCamera()` do nothing. | Done |
+| A4 | Fits to the model's margins and close-ups ([20](20-view-framing.md)) are neither shown nor saved. | Done |
 | A5 | The scene's camera is perspective only; its one orthographic camera is the axes triad's ([`axes.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/parts/axes.js)). | Later, *scene* |
-| A6 | No ViewCube, Home or projection buttons. | Fix: the ViewCube in the overlay; its projection button disabled until A5 |
-| A7 | `onViewChange` never fires, so a user's last camera isn't kept. | Intended: the scene keeps the camera |
+| A6 | No ViewCube, Home or projection buttons. | Done ([`sceneViewCube.ts`](../src/cad/src/scene/sceneViewCube.ts)), on a canvas of its own; its projection button is disabled until A5 |
+| A7 | A user's camera in a scene isn't kept per user, and the editor doesn't open at the one kept from its own view. | Intended: the scene keeps the camera |
 
 ### Look
 

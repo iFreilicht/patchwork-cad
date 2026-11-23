@@ -1,10 +1,10 @@
 /**
  * A CAD model in a scene (research/23-scene-editing.md): dropped into a scene from the sidebar, it is
  * built there, and its Open lays the editor over the scene, which draws the live build and hovers it
- * through the scene's input; Escape leaves.
+ * through the scene's input; Escape leaves. The editor's views move the scene's camera and are made from it.
  */
 import type { Page } from "@playwright/test";
-import { entities, exampleSource, type Entity, type EntityKind } from "../cad.ts";
+import { cameraDirection, clickHome, clickViewCube, entities, exampleSource, type Entity, type EntityKind, type Region } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
@@ -75,4 +75,53 @@ test("a click selects a face or an edge, drawn as the editor's own view draws it
   await expect(hostView(page)).toHaveAttribute("data-selected", "");
   expect(await highlightedInScene(page, "accent")).toEqual([]);
   await expect(sceneEditor(page)).toBeVisible();
+});
+
+async function expectDirection(page: Page, region: Region | [number, number, number]): Promise<void> {
+  const length = Math.hypot(...region);
+  await expect.poll(() => cameraDirection(page)).toEqual(region.map((c) => expect.closeTo(c / length, 2)));
+}
+
+type Intent = { fit?: number[]; subject?: { faces: unknown[] } } | undefined;
+const intent = (page: Page) => hostView(page).evaluate((el) => (el as unknown as { cadViewer: { intent(): Intent } }).cadViewer.intent());
+
+test("views move the scene's camera: the ViewCube, Home, a named view made from the camera, a close-up's subject", async ({ page }) => {
+  await bootToFrame(page);
+  await openM1InScene(page);
+  const views = page.locator(".cad-editor__browser").getByRole("list", { name: "Views" });
+  const row = (name: string) => views.locator(`.cad-editor__named-row[data-name="${name}"]`);
+
+  await clickViewCube(page, [0, -1, 0]);
+  await expectDirection(page, [0, -1, 0]);
+  // Turned from a camera that showed all of the model: it still does, with its margins.
+  expect((await intent(page))?.fit).toBeDefined();
+  await page.getByRole("button", { name: "New view from the current camera" }).click();
+  await views.locator(".cad-editor__rename").fill("Front");
+  await views.locator(".cad-editor__rename").press("Enter");
+  await expect(row("Front")).toHaveAttribute("data-current", "true");
+  if (shots) await page.screenshot({ path: `${shots}/scene-4-front.png` });
+
+  // The edge between front and top: the top is edge-on from the front.
+  await clickViewCube(page, [0, -1, 1]);
+  await expectDirection(page, [0, -1, 1]);
+  await expect(row("Front")).not.toHaveAttribute("data-current", "true");
+  await row("Front").click();
+  await expect(hostView(page)).toHaveAttribute("data-turning", "false");
+  await expectDirection(page, [0, -1, 0]);
+  await expect(row("Front")).toHaveAttribute("data-current", "true");
+
+  await clickHome(page);
+  await expectDirection(page, [0.55, -0.85, 0.65]);
+  await expect(row("Home")).toHaveAttribute("data-current", "true");
+
+  // Close to a face: the model is cut off, and the faces in the view are its subject.
+  const face = (await entities(page, "face"))[0]!;
+  const at = await hostView(page).evaluate((el, e) => (el as unknown as { cadViewer: { screenPoint(e: unknown): { x: number; y: number } | undefined } }).cadViewer.screenPoint(e), face);
+  await page.mouse.move(at!.x, at!.y);
+  await expect.poll(async () => {
+    await page.mouse.wheel(0, -400);
+    return (await intent(page))?.subject?.faces.length ?? 0;
+  }, { timeout: 30_000 }).toBeGreaterThan(0);
+  expect((await intent(page))?.fit).toBeUndefined();
+  if (shots) await page.screenshot({ path: `${shots}/scene-5-close-up.png` });
 });
