@@ -8,8 +8,11 @@ export async function bootToFrame(page: Page, path = "/"): Promise<void> {
   await waitForRepoReady(page);
 }
 
-/** Creates a document through the create-new menu; retries while the datatype's module is still loading. */
+/** Creates a document through the create-new menu and waits until it is the open one; retries while the datatype's module is still loading. */
 export async function createViaMenu(page: Page, datatype: string): Promise<void> {
+  const openDoc = () => new URLSearchParams(new URL(page.url()).hash.slice(1)).get("doc");
+  // Another document may be open, e.g. one created before: the URL names it until the new one opens.
+  const before = openDoc();
   const item = page.locator(".popmenu__item", { hasText: datatype }).first();
   await expect(async () => {
     await page.keyboard.press("Escape");
@@ -17,7 +20,8 @@ export async function createViaMenu(page: Page, datatype: string): Promise<void>
     await expect(item).toBeVisible({ timeout: 3_000 });
   }).toPass({ timeout: 60_000 });
   await item.click();
-  await expect(page).toHaveURL(/doc=automerge:/, { timeout: 30_000 });
+  await expect.poll(openDoc, { timeout: 30_000 }).not.toBe(before);
+  await expect(page).toHaveURL(/doc=automerge:/);
 }
 
 export const editor = (page: Page) => page.locator(".cm-content").first();

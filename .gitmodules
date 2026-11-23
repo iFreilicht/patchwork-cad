@@ -1,0 +1,3 @@
+[submodule "vendor/patchwork-experiments"]
+	path = vendor/patchwork-experiments
+	url = https://github.com/iFreilicht/patchwork-experiments.git
