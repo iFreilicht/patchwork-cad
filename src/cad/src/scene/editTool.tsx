@@ -26,6 +26,8 @@ type Stage = {
   display(id: string, o: { hidden?: boolean }): () => void;
   worldOf(id: string): number[] | null;
   ray(x: number, y: number): { origin: number[]; dir: number[] } | null;
+  /** A point in the stage's frame in port pixels, and whether the port shows it. */
+  project(point: number[]): { x: number; y: number; visible: boolean } | null;
   invalidate(): void;
   frame(fn: () => void): () => void;
 };
@@ -95,6 +97,12 @@ export function create(api: ViewApi) {
         const x = clientX - r.left;
         const y = clientY - r.top;
         return x >= 0 && y >= 0 && x <= r.width && y <= r.height ? { x, y } : null;
+      },
+      project(point) {
+        const p = stage.project(point);
+        if (!p) return null;
+        const r = overlay.getBoundingClientRect();
+        return { x: r.left + p.x, y: r.top + p.y, visible: p.visible };
       },
       invalidate: () => stage.invalidate(),
       nextFrame: (fn) => void stage.frame(fn),

@@ -367,6 +367,11 @@
   pointer-events: none;
 }
 
+/* The host's view draws in the host: its element only carries state, and what is laid over the view. */
+.cad-model--over-host > .cad-editor__stage > .cad-model__viewer--host {
+  pointer-events: none;
+}
+
 .cad-model--editor > .cad-model__status {
   grid-area: status;
 }

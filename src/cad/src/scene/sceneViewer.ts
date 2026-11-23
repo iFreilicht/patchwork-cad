@@ -9,7 +9,13 @@
 import { createEffect, onCleanup, type Component } from "solid-js";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
-import type { Entity, EntityKind, Highlight, Overlay, ViewerApi, ViewerProps } from "../components/Viewer.tsx";
+import type { Entity, EntityKind, Highlight, HighlightStyle, Overlay, ViewerApi, ViewerProps, ViewerTestHook } from "../components/Viewer.tsx";
+
+/** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
+export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid">;
+
+/** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
+const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
 
 export interface SceneHost {
   /** The scene's three.js: every object drawn in its layer is made with it. */
@@ -22,6 +28,8 @@ export interface SceneHost {
   ray(x: number, y: number): { origin: number[]; dir: number[] } | null;
   /** A port pixel of a client point, or null if it is outside the port. */
   port(clientX: number, clientY: number): { x: number; y: number } | null;
+  /** Where a point in the stage's frame is on the screen, in client pixels, and whether the port shows it; null while there is no camera. */
+  project(point: number[]): { x: number; y: number; visible: boolean } | null;
   invalidate(): void;
   /** Calls `fn` once before the next frame is drawn. */
   nextFrame(fn: () => void): void;
@@ -85,6 +93,10 @@ export function sceneView(host: SceneHost): SceneView {
   let drawn: Drawn[] = [];
   let hovered: Entity | undefined;
   let pending: HandEvent | undefined;
+  /** The highlighted entities by style, for tests. */
+  let highlighted: { style: HighlightStyle; entity: Entity }[] = [];
+  /** The view's element in the editor's stage cell: it draws nothing, and carries the state tests read, as Viewer.tsx's does. */
+  let element: HTMLDivElement | undefined;
 
   const moved = () => {
     const m = host.frame();
@@ -136,6 +148,7 @@ export function sceneView(host: SceneHost): SceneView {
       }
       return { shape, mesh, lines: edges };
     });
+    if (element) element.dataset["vertices"] = String(drawn.reduce((n, d) => n + d.shape.faces.vertices.length / 3, 0));
     fade();
     host.invalidate();
   };
@@ -184,6 +197,9 @@ export function sceneView(host: SceneHost): SceneView {
     clear(marks);
     const shapes = props?.shapes ?? [];
     const of = (h: { body: string; shape?: MeshedShape | undefined }) => h.shape ?? shapes.find((s) => s.body === h.body);
+    const own = (entity: Entity | undefined, style: HighlightStyle): Highlight[] => (entity ? [{ body: entity.body, kind: entity.kind, indices: [entity.index], style }] : []);
+    const all = [...(props?.highlight ?? []), ...(props?.hoverHighlight === false ? [] : own(hovered, "hover"))];
+    highlighted = all.flatMap((h) => h.indices.map((index) => ({ style: h.style, entity: { body: h.body, kind: h.kind, index } })));
     for (const h of props?.highlight ?? ([] as Highlight[])) {
       const shape = of(h);
       const color = h.style === "peer" ? (h.color ?? "#888") : h.style === "accent" ? COLORS.accent : COLORS.hover;
@@ -279,6 +295,7 @@ export function sceneView(host: SceneHost): SceneView {
   const setHovered = (e: Entity | undefined) => {
     if (e?.body === hovered?.body && e?.kind === hovered?.kind && e?.index === hovered?.index) return;
     hovered = e;
+    if (element) element.dataset["hovered"] = entityKey(e);
     props?.onHover?.(e);
     drawMarks();
   };
@@ -339,8 +356,78 @@ export function sceneView(host: SceneHost): SceneView {
     },
   };
 
+  // ── for tests ──
+  const shapeOf = (body: string) => drawn.find((d) => d.shape.body === body)?.shape;
+  /** A model point (Z up, mm) on the screen. */
+  const toScreen = (p: Three.Vector3) => host.project(p.clone().applyMatrix4(root.matrix).toArray());
+  /**
+   * Points on an entity, biggest first, as Viewer.tsx's `candidatesOf`: the centroids of a face's
+   * triangles by area, the midpoints of an edge's segments by length.
+   */
+  const candidates = (shape: MeshedShape, kind: EntityKind, index: number): { point: Three.Vector3; size: number }[] => {
+    const out: { point: Three.Vector3; size: number }[] = [];
+    if (kind === "face") {
+      const { vertices, triangles, faceGroups } = shape.faces;
+      (faceGroups ?? []).forEach((g, gi) => {
+        if (entityIndex(shape.faceIndex, gi) !== index) return;
+        for (let t = g.start; t + 2 < g.start + g.count; t += 3) {
+          const [a, b, c] = [0, 1, 2].map((k) => new THREE.Vector3().fromArray(vertices, triangles[t + k]! * 3)) as [Three.Vector3, Three.Vector3, Three.Vector3];
+          const area = new THREE.Vector3().crossVectors(b.clone().sub(a), c.clone().sub(a)).length() / 2;
+          out.push({ point: a.add(b).add(c).divideScalar(3), size: area });
+        }
+      });
+    } else if (shape.edges) {
+      const { lines: l, edgeGroups } = shape.edges;
+      (edgeGroups ?? []).forEach((g, gi) => {
+        if (entityIndex(shape.edgeIndex, gi) !== index) return;
+        for (let v = g.start; v + 1 < g.start + g.count; v += 2) {
+          const [a, b] = [new THREE.Vector3().fromArray(l, v * 3), new THREE.Vector3().fromArray(l, (v + 1) * 3)];
+          out.push({ point: a.clone().add(b).multiplyScalar(0.5), size: a.distanceTo(b) });
+        }
+      });
+    }
+    return out.sort((x, y) => y.size - x.size);
+  };
+  const sameEntity = (a: Entity | undefined, b: Entity) => !!a && a.body === b.body && a.kind === b.kind && a.index === b.index;
+  const hook: SceneTestHook = {
+    entities: (kind) =>
+      drawn.flatMap(({ shape }) => {
+        const indices = (kind === "face" ? shape.faceIndex : shape.edgeIndex) ?? [];
+        return shape.body ? indices.filter((i) => i >= 0).map((index) => ({ body: shape.body!, kind, index })) : [];
+      }),
+    highlighted: (style) => highlighted.filter((h) => h.style === style).map((h) => h.entity),
+    centroid(entity) {
+      const shape = shapeOf(entity.body);
+      const points = shape ? candidates(shape, entity.kind, entity.index) : [];
+      if (!points.length) return undefined;
+      return points.reduce((sum, c) => sum.add(c.point), new THREE.Vector3()).divideScalar(points.length).toArray() as [number, number, number];
+    },
+    screenPoint(entity) {
+      const shape = shapeOf(entity.body);
+      if (!shape) return undefined;
+      // A point that a click hits reliably: whole pixels on the scene's canvas, not under the editor's panels, and the same entity a few pixels around it.
+      const margin = entity.kind === "face" ? 3 : 1;
+      const around = [[0, 0], [margin, 0], [-margin, 0], [0, margin], [0, -margin]] as const;
+      for (const { point } of candidates(shape, entity.kind, entity.index)) {
+        const s = toScreen(point);
+        if (!s?.visible) continue;
+        const [x, y] = [Math.round(s.x), Math.round(s.y)];
+        const hits = around.every(([dx, dy]) => {
+          const p = host.port(x + dx, y + dy);
+          return document.elementFromPoint(x + dx, y + dy) instanceof HTMLCanvasElement && !!p && sameEntity(hitAt(p.x, p.y, entity.kind)?.entity, entity);
+        });
+        if (hits) return { x, y };
+      }
+      return undefined;
+    },
+  };
+
   const Viewer: Component<ViewerProps> = (p) => {
     props = p;
+    const el = Object.assign(document.createElement("div"), { cadViewer: hook });
+    el.className = "cad-model__viewer cad-model__viewer--host";
+    element = el;
+    createEffect(() => (el.dataset["pick"] = p.pick ?? ""));
     createEffect(() => drawShapes(p.shapes));
     createEffect(() => {
       void p.pickable;
@@ -357,12 +444,13 @@ export function sceneView(host: SceneHost): SceneView {
     p.onApi?.(api);
     onCleanup(() => {
       if (props === p) props = undefined;
+      if (element === el) element = undefined;
       hovered = undefined;
       for (const g of [bodies, marks, lines]) clear(g);
       drawn = [];
       host.invalidate();
     });
-    return null;
+    return el;
   };
 
   return {

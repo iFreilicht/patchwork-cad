@@ -1,6 +1,6 @@
 # Editing Models in a Scene
 
-A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: decided, not started. Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`.
+A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: in progress, see [Plan](#plan). Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`.
 
 ## How editing in a scene works
 
@@ -61,7 +61,7 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 | # | Gap | Decision |
 |---|---|---|
-| E1 | The e2e harness doesn't run the scene, and `sceneViewer` has no `ViewerTestHook`. | Fix |
+| E1 | The e2e harness doesn't run the scene, and `sceneViewer` has no `ViewerTestHook`. | Done: the scene is a submodule ([harness](../src/harness/README.md)); `sceneViewer`'s element carries the hook's `entities`, `screenPoint`, `highlighted` and `centroid` ([`cad-scene.spec.ts`](../src/harness/e2e/tests/cad-scene.spec.ts)) |
 
 ### The scene source
 

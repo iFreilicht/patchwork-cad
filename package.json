@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter patchwork-harness dev cad=../cad drawio=../drawio tldraw-view=../../research/22-document-canvases/tldraw-view",
+    "dev": "pnpm --filter patchwork-harness build:scene && pnpm --filter patchwork-harness dev cad=../cad drawio=../drawio tldraw-view=../../research/22-document-canvases/tldraw-view scene=../../vendor/patchwork-experiments/scene",
     "typecheck": "pnpm -r typecheck",
     "test:e2e": "pnpm --filter patchwork-harness test:e2e"
   },

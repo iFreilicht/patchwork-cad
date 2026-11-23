@@ -5,15 +5,19 @@ Real browsers (Chromium, Firefox, WebKit) drive a local Patchwork site against a
 ## Usage
 
 ```sh
+git submodule update --init        # the scene tool, vendor/patchwork-experiments
 nix develop
 pnpm install
-pnpm test:e2e                      # builds the site, the CAD tool and research/16's tldraw tool, then runs every browser
+pnpm test:e2e                      # builds the site, the scene, the CAD tool and research/16's tldraw tool, then runs every browser
 pnpm test:e2e --project=firefox    # arguments go to `playwright test`
+pnpm test:e2e e2e/tests/cad-scene.spec.ts   # a spec by its path: a bare name such as `cad-scene` also matches a worktree's directory
 CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure cad-pushwork   # timings for research/06
 CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timings for research/07
 ```
 
-`pnpm dev` (from the repo root, `dev.ts`) runs the same stack for manual use: fixed ports (site 4173, Subduction 4174; `PATCHWORK_DEV_PORT`, `PATCHWORK_DEV_SUBDUCTION_PORT`), Subduction's storage and key in `<repo>/.dev/`, so documents survive restarts, and every tool given as `<name>=<dir>` (the CAD tool, `src/cad`) rebuilt by `vite build --watch` and served as a static module. Reload the page after a rebuild.
+`pnpm dev` (from the repo root, `dev.ts`) runs the same stack for manual use: fixed ports (site 4173, Subduction 4174; `PATCHWORK_DEV_PORT`, `PATCHWORK_DEV_SUBDUCTION_PORT`), Subduction's storage and key in `<repo>/.dev/`, so documents survive restarts, and every tool given as `<name>=<dir>` (the CAD tool, `src/cad`; the scene) rebuilt by `vite build --watch` and served as a static module. Reload the page after a rebuild.
+
+The scene tool ([patchwork-experiments/scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene), [research/23](../../research/23-scene-editing.md)) is a git submodule of a fork, pinned to the commit the tests run against. It has its own pnpm workspace and lockfile: `pnpm build:scene` (`scene.ts`) installs from that lockfile and builds it, and fails if the submodule isn't checked out.
 
 `nix develop` provides `subduction_cli` and Playwright's browsers (`PLAYWRIGHT_BROWSERS_PATH`). They come from Patchwork's own nixpkgs, which matches the pinned `@playwright/test` 1.59.1.
 
@@ -26,6 +30,7 @@ CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timi
 - `e2e/network-log.ts`: what Playwright reports per context, for attribution. Its coverage differs per browser (see 05), so the egress sink is what proves that nothing left.
 - `e2e/modules.ts`: publishes a tool directory with the pinned `pushwork` to the local server (`PUSHWORK_SUBDUCTION_SERVER`) and registers its URL in an account's module-settings doc, as the Packages UI does.
 - `e2e/ui.ts`: UI helpers for the threepane frame and CodeMirror.
+- `e2e/scene.ts`: a model dropped into a scene, and its editor opened there.
 
 ## Fixtures (`e2e/fixtures.ts`)
 
