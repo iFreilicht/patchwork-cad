@@ -2,10 +2,11 @@
  * Framing (research/20-view-framing.md): a camera keeps showing what it showed when the view is
  * resized, a camera that shows the whole model keeps its margins around it, the user's own camera
  * follows a changed model only when it left the view or shrank to less than half, a view of a
- * close-up follows the faces it shows, and cameras stored before research/20 still show.
+ * close-up follows the faces it shows, and cameras stored before research/20 still show. Dollying
+ * and switching the projection keep the model between the clipping planes and the perspective as it was.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cameraDirection, clickHome, clickViewCube, createModel, docUrl, editorView, hideSidebars, setModelSource } from "../cad.ts";
+import { CAD_MODULES, cameraDirection, clickHome, clickViewCube, createModel, docUrl, editorView, entities, hideSidebars, setModelSource, type Entity } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -33,15 +34,20 @@ export default function main() {
 
 interface FramingHook {
   cadViewer: {
-    onScreen(points?: [number, number, number][]): { inView: boolean; fill: number; center: [number, number] };
-    intent(): { fit?: number[]; subject?: { faces: unknown[] }; extent: [number, number]; direction: number[] } | undefined;
+    onScreen(points?: [number, number, number][]): { inView: boolean; fill: number; center: [number, number]; clipped: boolean };
+    intent(): { fit?: number[]; subject?: { faces: unknown[] }; extent: [number, number]; direction: number[]; eye?: number } | undefined;
     eye(): [number, number, number];
+    lens(): { projection: string; fov: number; zoom: number; distance: number };
   };
 }
 const viewer = (page: Page) => page.locator(".cad-model__viewer").first();
 const onScreen = (page: Page, points?: [number, number, number][]) => viewer(page).evaluate((el, p) => (el as unknown as FramingHook).cadViewer.onScreen(p), points);
 const intent = (page: Page) => viewer(page).evaluate((el) => (el as unknown as FramingHook).cadViewer.intent());
 const eye = (page: Page) => viewer(page).evaluate((el) => (el as unknown as FramingHook).cadViewer.eye());
+interface CentroidHook {
+  cadViewer: { centroid(e: Entity): [number, number, number] | undefined };
+}
+const lens = (page: Page) => viewer(page).evaluate((el) => (el as unknown as FramingHook).cadViewer.lens());
 
 /** Replaces the model and waits for its build. */
 async function build(page: Page, source: string): Promise<void> {
@@ -205,4 +211,54 @@ test("a camera stored before research/20 shows its old height, and frames the mo
   await expect.poll(async () => (await intent(page))?.fit).toBeTruthy();
   await build(page, bar(2));
   await expect.poll(async () => (await onScreen(page)).inView).toBe(true);
+});
+
+/** A 200 × 40 × 10 bar from z = 0, built with the feature library, so that its faces can be picked. */
+const namedBar = `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
+
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [-100, -20], to: [100, 20] }) });
+  const bar = extrude({ sketch: sketch1, distance: 10 });
+  return bar;
+}
+`;
+
+test("dollying and switching the projection cut nothing off and keep the perspective", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await open(page, namedBar);
+  await clickViewCube(page, [0, 0, 1]);
+  const top = await lens(page);
+  const orthographic = viewer(page).getByRole("button", { name: "Orthographic" });
+  const faces = await entities(page, "face");
+  const centroids = await viewer(page).evaluate((el, fs) => fs.map((f) => (el as unknown as CentroidHook).cadViewer.centroid(f)), faces);
+  const topFace = faces[centroids.findIndex((c) => c && Math.abs(c[2] - 10) < 1e-6)];
+  if (!topFace) throw new Error("no top face");
+
+  // From the top into the bar in perspective, then orthographic: the bar is drawn whole, not cut off by the near plane, and its top is picked, behind the eye.
+  for (let i = 0; i < 3; i++) await dolly(page, -3000);
+  await expect.poll(async () => (await lens(page)).distance).toBeLessThan(4);
+  await orthographic.click();
+  await expect(viewer(page)).toHaveAttribute("data-projection", "orthographic");
+  await expect.poll(async () => (await onScreen(page)).clipped).toBe(false);
+  const box = (await viewer(page).locator("canvas").boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 1);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(viewer(page)).toHaveAttribute("data-hovered", `bar:face:${topFace.index}`);
+
+  // Far out in orthographic: the distance follows, so the eye and the field of view stay through a resize and back in perspective.
+  for (let i = 0; i < 4; i++) await dolly(page, 3000);
+  await expect.poll(async () => (await lens(page)).distance).toBeGreaterThan(top.distance * 2);
+  expect((await lens(page)).zoom).toBe(1);
+  await expect.poll(async () => (await intent(page))?.eye).toBeCloseTo(1, 2);
+  const far = (await onScreen(page)).fill;
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await expect.poll(async () => Math.abs((await onScreen(page)).fill - far)).toBeLessThan(0.02);
+  await orthographic.click();
+  await expect(viewer(page)).toHaveAttribute("data-projection", "perspective");
+  expect((await lens(page)).fov).toBeLessThan(top.fov * 1.5);
+  await expect.poll(async () => Math.abs((await onScreen(page)).fill - far)).toBeLessThan(0.02);
+  expect((await onScreen(page)).clipped).toBe(false);
 });
