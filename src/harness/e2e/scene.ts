@@ -82,3 +82,11 @@ export async function hoverInScene(page: Page, e: Entity): Promise<boolean> {
 
 /** The scene view's highlights of `style`. */
 export const highlightedInScene = (page: Page, style: "hover" | "accent" | "peer") => hostView(page).evaluate((el, s) => (el as unknown as Hook).cadViewer.highlighted(s), style);
+
+/** A model's source, read from the tab's repo by its URL: in a scene, the open document is the scene. */
+export async function sourceOf(page: Page, model: string): Promise<string> {
+  return page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { content: string } }> } }).repo;
+    return String((await repo.find(url)).doc().content);
+  }, model);
+}

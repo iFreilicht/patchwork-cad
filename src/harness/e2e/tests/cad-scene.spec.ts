@@ -4,9 +4,10 @@
  * through the scene's input; Escape leaves. The editor's views move the scene's camera and are made from it.
  */
 import type { Page } from "@playwright/test";
-import { cameraDirection, clickHome, clickViewCube, entities, exampleSource, type Entity, type EntityKind, type Region } from "../cad.ts";
+import { cameraDirection, clickHome, clickViewCube, entities, exampleSource, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
+import { sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor } from "../scene.ts";
+import { entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -124,4 +125,42 @@ test("views move the scene's camera: the ViewCube, Home, a named view made from 
   }, { timeout: 30_000 }).toBeGreaterThan(0);
   expect((await intent(page))?.fit).toBeUndefined();
   if (shots) await page.screenshot({ path: `${shots}/scene-5-close-up.png` });
+});
+
+/** Two squares side by side: two profiles. */
+const SQUARES = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 20"><rect id="a" x="0" y="0" width="20" height="20"/><rect id="b" x="40" y="0" width="20" height="20"/></svg>`;
+const plateWith = (drawing: string) => `import { sketch, plane, rect, extrude, svg } from "@patchwork-cad/features";
+import squares from "${drawing}" with { type: "text" };
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [-60, -40], to: [60, 40] }) });
+  const plate = extrude({ sketch: sketch1, distance: 8 });
+  const sketch2 = sketch({ plane: plate.end, body: plate, profile: svg(squares, { width: 60, center: [0, 0] }) });
+  return { plate };
+}
+`;
+type ShownRegion = { key: string; chosen: boolean; hovered: boolean; point: { x: number; y: number } | undefined };
+const regions = (page: Page) => hostView(page).evaluate((el) => (el as unknown as { cadViewer: { regions(): ShownRegion[] } }).cadViewer.regions());
+
+test("an extrusion picks a sketch's profiles in the scene: hovered and chosen as in the editor's own view", async ({ page }) => {
+  await bootToFrame(page);
+  const docs = await sidebarDocuments(page, { "squares.svg": { file: "squares.svg", mimeType: "image/svg+xml", text: SQUARES } });
+  const { model } = await modelInScene(page, plateWith(docs["squares.svg"]!), "Plate");
+  await openSelected(page);
+  // Built, and used by nothing yet.
+  await expect(timelineEntry(page, "sketch2")).toHaveAttribute("data-status", "unused", { timeout: 60_000 });
+  await clickHome(page);
+
+  await timelineEntry(page, "sketch2").click();
+  await toolbarButton(page, "Extrude").click();
+  await expect.poll(() => regions(page).then((r) => r.length), { timeout: 60_000 }).toBe(2);
+  const region = (await regions(page)).find((r) => r.point && !r.chosen)!;
+  await page.mouse.move(region.point!.x, region.point!.y);
+  await expect.poll(() => regions(page).then((all) => all.find((r) => r.key === region.key)?.hovered)).toBe(true);
+  // Nothing of the model is hovered meanwhile.
+  await expect(hostView(page)).toHaveAttribute("data-hovered", "");
+  if (shots) await page.screenshot({ path: `${shots}/scene-6-region-hovered.png` });
+  await page.mouse.click(region.point!.x, region.point!.y);
+  await expect.poll(() => regions(page).then((r) => r.filter((x) => x.chosen).map((x) => x.key))).toEqual([region.key]);
+  expect(await sourceOf(page, model)).toMatch(/const extrude1 = extrude\(\{[^\n]*regions: \[sketch2\.region\([^)]*\)\]/);
+  if (shots) await page.screenshot({ path: `${shots}/scene-7-region-chosen.png` });
 });

@@ -45,9 +45,9 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 | # | Gap | Decision |
 |---|---|---|
 | C1 | The selected face or edge isn't highlighted: `Viewer.tsx` draws its own selection, `sceneViewer` only reports it. | Done |
-| C2 | `regions` is ignored: no picking of sketch regions, e.g. profiles to extrude ([21](21-embedding.md)). | Fix |
+| C2 | `regions` is ignored: no picking of sketch regions, e.g. profiles to extrude ([21](21-embedding.md)). | Done |
 | C3 | A right click off the model opens the scene's menu, not the editor's. | Intended |
-| C4 | Picking tests every triangle in JS, without bounds or a BVH. | Fix |
+| C4 | Picking tests every triangle in JS, without bounds or a BVH. | Done: boxes of every face and edge group ([`picking.ts`](../src/cad/src/scene/picking.ts)), checked against testing everything (`test/picking.test.ts`) |
 | C5 | Documents can't be dropped on faces or into the view, not even from the browser's Documents. | Fix, cause unknown |
 
 ### Collaboration

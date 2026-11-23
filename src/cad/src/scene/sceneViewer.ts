@@ -10,13 +10,14 @@ import { createEffect, onCleanup, type Component } from "solid-js";
 import * as Local from "three";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
-import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type ShownRegion, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { entityIndex, pickingOf, type Hit, type Picking } from "./picking.ts";
 import { sceneCamera, type HostCamera } from "./sceneCamera.ts";
 import { sceneViewCube, type SceneViewCube } from "./sceneViewCube.ts";
 import { wideLines } from "./wideLines.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
-export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent">;
+export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions">;
 
 /** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
 const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
@@ -54,9 +55,6 @@ export interface HandEvent {
   locked?: boolean;
 }
 
-/** How near (px) the pointer must be to an edge to hover it, as Viewer.tsx's. */
-const EDGE_PX = 6;
-
 type Line = InstanceType<ReturnType<typeof wideLines>["LineMaterial"]>;
 type HighlightMaterials = { face: Three.Material; line: { core: Line; halo: Line } };
 /** The materials of the view, in the theme's colours as Viewer.tsx's (research/14-edge-contrast.md). */
@@ -72,16 +70,13 @@ interface Materials {
   peer(css: string): HighlightMaterials;
   /** A ghost's edges, as wide as the model's, in the highlight's colour (`""`: the accent's). */
   ghost(css: string): Line;
+  /** Regions of a sketch to pick: every state differs; one neither chosen nor hovered only takes the pointer. */
+  region: { chosen: Three.Material; hovered: Three.Material; chosenHovered: Three.Material; other: Three.Material };
   dispose(): void;
 }
 
 type Drawn = { shape: MeshedShape; mesh: Three.Mesh; wide: InstanceType<ReturnType<typeof wideLines>["LineSegments2"]> | undefined };
-type Hit = { entity: Entity | undefined; point: [number, number, number]; t: number };
 
-/** The index of the group of `groups` that holds `at`, -1 if none. */
-const groupAt = (groups: { start: number; count: number }[] | undefined, at: number) => (groups ?? []).findIndex((g) => at >= g.start && at < g.start + g.count);
-/** An entity's index in its body from its group's, as Viewer.tsx's `groupEntity`. */
-const entityIndex = (indexOf: number[] | undefined, group: number) => (indexOf ? (indexOf[group] ?? -1) : group);
 
 export interface SceneView {
   /** The view for the editor's `viewer` prop; mount at most one at a time. */
@@ -117,7 +112,10 @@ export function sceneView(host: SceneHost): SceneView {
   const lines = new THREE.Group();
   const overlays = Object.assign(new THREE.Group(), { renderOrder: 1 });
   const marks = Object.assign(new THREE.Group(), { renderOrder: 2 });
-  root.add(bodies, lines, overlays, marks);
+  // Regions of a sketch, over the model as highlights are, and the hovered one's outline.
+  const regionGroup = Object.assign(new THREE.Group(), { renderOrder: 1 });
+  const regionOutline = Object.assign(new THREE.Group(), { renderOrder: 2 });
+  root.add(bodies, lines, overlays, regionGroup, regionOutline, marks);
   /** Model (Z up, mm) → the object's frame (Y up, m). */
   const toObject = new THREE.Matrix4().makeRotationX(-Math.PI / 2).scale(new THREE.Vector3(0.001, 0.001, 0.001));
   const inverse = new THREE.Matrix4();
@@ -126,8 +124,11 @@ export function sceneView(host: SceneHost): SceneView {
   /** Made when the view mounts, from the theme where it is. */
   let materials: Materials | undefined;
   let drawn: Drawn[] = [];
+  let picking: Picking = pickingOf(THREE, []);
   let hovered: Entity | undefined;
   let selected: Entity | undefined;
+  let drawnRegions: { region: ShownRegion; mesh: Three.Mesh; outline: () => number[] }[] = [];
+  let hoveredRegion: string | undefined;
   let pending: HandEvent | undefined;
   /** The highlighted entities by style, for tests. */
   let highlighted: { style: HighlightStyle; entity: Entity }[] = [];
@@ -209,6 +210,12 @@ export function sceneView(host: SceneHost): SceneView {
         if (!m) ghosts.set(value, (m = wideLine(value ? css(value).three : accentLine.three, 1.5, true)));
         return m;
       },
+      region: {
+        chosen: highlightFace(accent, 0.5),
+        hovered: highlightFace(hover, 0.35),
+        chosenHovered: highlightFace(accent, 0.65),
+        other: keep(new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthTest: false, depthWrite: false, side: THREE.DoubleSide })),
+      },
       dispose: () => own.forEach((m) => m.dispose()),
     };
   };
@@ -233,6 +240,7 @@ export function sceneView(host: SceneHost): SceneView {
       if (edges) bodies.add(edges);
       return { shape, mesh, wide: edges };
     });
+    picking = pickingOf(THREE, shapes ?? []);
     if (element) element.dataset["vertices"] = String(drawn.reduce((n, d) => n + d.shape.faces.vertices.length / 3, 0));
     // Indices may name other entities in the new shapes.
     setHovered(undefined);
@@ -339,6 +347,43 @@ export function sceneView(host: SceneHost): SceneView {
     host.invalidate();
   };
 
+  // ── regions of a sketch (research/21, "Sketch from a drawing"), as Viewer.tsx's ──
+  const regionMaterial = (region: ShownRegion) => {
+    const r = materials!.region;
+    return region.key === hoveredRegion ? (region.chosen ? r.chosenHovered : r.hovered) : region.chosen ? r.chosen : r.other;
+  };
+  /** Draws the regions' materials, and the hovered one's outline. */
+  const drawRegionStates = () => {
+    clear(regionOutline);
+    const m = materials;
+    if (!m) return;
+    for (const d of drawnRegions) d.mesh.material = regionMaterial(d.region);
+    const outline = drawnRegions.find((d) => d.region.key === hoveredRegion)?.outline();
+    if (outline?.length) regionOutline.add(...wide(outline, [m.highlight.hover.line.halo, m.highlight.hover.line.core]));
+    host.invalidate();
+  };
+  const drawRegions = (regions: ShownRegion[] | undefined) => {
+    clear(regionGroup);
+    drawnRegions = (regions ?? []).map((region) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(region.triangles, 3));
+      const mesh = new THREE.Mesh(g, materials?.region.other);
+      regionGroup.add(mesh);
+      let outline: number[] | undefined;
+      return { region, mesh, outline: () => (outline ??= outlineOf(region.triangles)) };
+    });
+    // Drawn as they are now; a hovered region that is gone is hovered no more.
+    if (hoveredRegion !== undefined && !drawnRegions.some((d) => d.region.key === hoveredRegion)) setHoveredRegion(undefined);
+    else drawRegionStates();
+  };
+  const setHoveredRegion = (key: string | undefined) => {
+    if (key === hoveredRegion) return;
+    hoveredRegion = key;
+    drawRegionStates();
+    if (element) element.dataset["regionHovered"] = key ?? "";
+    props?.onRegionHover?.(key);
+  };
+
   // ── picking, in the model's own frame ──
   const localRay = (x: number, y: number) => {
     const r = host.ray(x, y);
@@ -347,51 +392,9 @@ export function sceneView(host: SceneHost): SceneView {
     const along = new THREE.Vector3().fromArray(r.origin).add(new THREE.Vector3().fromArray(r.dir)).applyMatrix4(inverse);
     return new THREE.Ray(origin, along.sub(origin).normalize());
   };
-  const faceHit = (ray: Three.Ray): Hit | undefined => {
-    const [a, b, c, at] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-    let best: Hit | undefined;
-    for (const { shape } of drawn) {
-      const v = shape.faces.vertices;
-      const tris = shape.faces.triangles;
-      const pickable = pickableBody(shape.body);
-      // A faded body neither hovers nor takes clicks, and hides nothing behind it.
-      if (props?.pickable && !pickable) continue;
-      for (let i = 0; i + 2 < tris.length; i += 3) {
-        a.fromArray(v, tris[i]! * 3);
-        b.fromArray(v, tris[i + 1]! * 3);
-        c.fromArray(v, tris[i + 2]! * 3);
-        if (!ray.intersectTriangle(a, b, c, false, at)) continue;
-        const t = at.distanceTo(ray.origin);
-        if (best && t >= best.t) continue;
-        const group = groupAt(shape.faces.faceGroups, i);
-        const entity = shape.body && group >= 0 ? { body: shape.body, kind: "face" as const, index: entityIndex(shape.faceIndex, group) } : undefined;
-        best = { entity, point: at.toArray() as [number, number, number], t };
-      }
-    }
-    return best;
-  };
-  /** The nearest edge within EDGE_PX of the pointer and not behind `front` (by more than the pixel slack). */
-  const edgeHit = (ray: Three.Ray, px: (t: number) => number, front: number): Hit | undefined => {
-    const [a, b, onRay, onSeg] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-    let best: (Hit & { score: number }) | undefined;
-    for (const { shape } of drawn) {
-      if (!shape.body || !shape.edges || !pickableBody(shape.body)) continue;
-      const l = shape.edges.lines;
-      for (let i = 0; i + 5 < l.length; i += 6) {
-        a.fromArray(l, i);
-        b.fromArray(l, i + 3);
-        const d = Math.sqrt(ray.distanceSqToSegment(a, b, onRay, onSeg));
-        const t = onRay.distanceTo(ray.origin);
-        const size = px(t);
-        const score = d / size;
-        if (score > EDGE_PX || t > front + EDGE_PX * size || (best && score >= best.score)) continue;
-        const group = groupAt(shape.edges.edgeGroups, i / 3);
-        if (group < 0) continue;
-        best = { entity: { body: shape.body, kind: "edge", index: entityIndex(shape.edgeIndex, group) }, point: onSeg.toArray() as [number, number, number], t, score };
-      }
-    }
-    return best;
-  };
+  // A faded body neither hovers nor takes clicks, and hides nothing behind it.
+  const faceHit = (ray: Three.Ray): Hit | undefined => picking.faceHit(ray, (shape) => !!props?.pickable && !pickableBody(shape.body));
+  const edgeHit = (ray: Three.Ray, px: (t: number) => number, front: number): Hit | undefined => picking.edgeHit(ray, px, front, pickableBody);
   /** What is at port pixel (x, y): an edge if `kind` allows one near, else a face (`kind`: only that kind). */
   const hitAt = (x: number, y: number, kind?: EntityKind): Hit | undefined => {
     const ray = localRay(x, y);
@@ -405,6 +408,26 @@ export function sceneView(host: SceneHost): SceneView {
       if (kind === "edge") return undefined;
     }
     return face;
+  };
+
+  /** The region at port pixel (x, y): the nearest, as they all lie in one plane and over the model. */
+  const regionAt = (x: number, y: number): string | undefined => {
+    const ray = localRay(x, y);
+    if (!ray || !drawnRegions.length) return undefined;
+    const [a, b, c, at] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    let best: { key: string; t: number } | undefined;
+    for (const { region } of drawnRegions) {
+      const t = region.triangles;
+      for (let i = 0; i + 8 < t.length; i += 9) {
+        a.fromArray(t, i);
+        b.fromArray(t, i + 3);
+        c.fromArray(t, i + 6);
+        if (!ray.intersectTriangle(a, b, c, false, at)) continue;
+        const d = at.distanceTo(ray.origin);
+        if (!best || d < best.t) best = { key: region.key, t: d };
+      }
+    }
+    return best?.key;
   };
 
   const setHovered = (e: Entity | undefined) => {
@@ -423,6 +446,13 @@ export function sceneView(host: SceneHost): SceneView {
     drawMarks();
   };
   const hover = (ev: HandEvent) => {
+    // While regions of a sketch are picked, nothing of the model is hovered.
+    if (props?.regions?.length) {
+      setHovered(undefined);
+      setHoveredRegion(regionAt(ev.x, ev.y));
+      props.onPointer?.(hitAt(ev.x, ev.y, "face")?.point);
+      return;
+    }
     const hit = hitAt(ev.x, ev.y, props?.pick);
     setHovered(props?.pick && hit?.entity && !pickableBody(hit.entity.body) ? undefined : hit?.entity);
     props?.onPointer?.(hit?.point);
@@ -443,6 +473,12 @@ export function sceneView(host: SceneHost): SceneView {
     },
     click(ev) {
       if (!props) return false;
+      // A region of a sketch, which hides the model's faces and edges while regions are picked.
+      if (props.regions?.length) {
+        const key = regionAt(ev.x, ev.y);
+        if (key) props.onRegionPick?.(key);
+        return true;
+      }
       if (props.pick) {
         // While a field picks, a click picks or does nothing, as in the CAD view.
         const e = hitAt(ev.x, ev.y, props.pick)?.entity;
@@ -465,6 +501,7 @@ export function sceneView(host: SceneHost): SceneView {
     leave() {
       pending = undefined;
       setHovered(undefined);
+      setHoveredRegion(undefined);
       props?.onPointer?.(undefined);
     },
     cursor: () => (props?.pick ? "crosshair" : null),
@@ -588,6 +625,24 @@ export function sceneView(host: SceneHost): SceneView {
     cameraDirection: () => camera.direction() ?? [0, 0, 0],
     viewCubePoint: (region) => cube?.point(region),
     intent: () => camera.intent(),
+    regions: () =>
+      drawnRegions.map(({ region, mesh }) => {
+        // The centroid of a triangle that a click there hits, as regions may be concave or have holes.
+        const t = region.triangles;
+        let at: { x: number; y: number } | undefined;
+        for (let i = 0; i + 8 < t.length && !at; i += 9) {
+          const c = new THREE.Vector3((t[i]! + t[i + 3]! + t[i + 6]!) / 3, (t[i + 1]! + t[i + 4]! + t[i + 7]!) / 3, (t[i + 2]! + t[i + 5]! + t[i + 8]!) / 3);
+          const s = toScreen(c);
+          if (!s?.visible) continue;
+          const [x, y] = [Math.round(s.x), Math.round(s.y)];
+          const p = host.port(x, y);
+          if (p && document.elementFromPoint(x, y) instanceof HTMLCanvasElement && regionAt(p.x, p.y) === region.key) at = { x, y };
+        }
+        // As drawn: by the material it is drawn with, and the outline that only a hovered one has.
+        const r = materials?.region;
+        const outlined = hoveredRegion === region.key && regionOutline.children.length > 0;
+        return { key: region.key, chosen: mesh.material === r?.chosen || mesh.material === r?.chosenHovered, hovered: outlined && (mesh.material === r?.hovered || mesh.material === r?.chosenHovered), point: at };
+      }),
     centroid(entity) {
       const shape = shapeOf(entity.body);
       const points = shape ? candidates(shape, entity.kind, entity.index) : [];
@@ -653,14 +708,18 @@ export function sceneView(host: SceneHost): SceneView {
       void [p.sketches, p.overlays];
       drawLines();
     });
+    createEffect(() => drawRegions(p.regions));
     p.onApi?.(api);
     onCleanup(() => {
       if (props === p) props = undefined;
       if (element === el) element = undefined;
       hovered = undefined;
       selected = undefined;
-      for (const g of [bodies, marks, lines, overlays]) clear(g);
+      for (const g of [bodies, marks, lines, overlays, regionGroup, regionOutline]) clear(g);
       drawn = [];
+      picking = pickingOf(THREE, []);
+      drawnRegions = [];
+      hoveredRegion = undefined;
       materials?.dispose();
       materials = undefined;
       cube?.dispose();
@@ -682,7 +741,7 @@ export function sceneView(host: SceneHost): SceneView {
     },
     dispose() {
       camera.dispose();
-      for (const g of [bodies, marks, lines, overlays]) clear(g);
+      for (const g of [bodies, marks, lines, overlays, regionGroup, regionOutline]) clear(g);
       materials?.dispose();
       root.removeFromParent();
       host.invalidate();
