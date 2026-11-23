@@ -15,6 +15,8 @@ CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timi
 
 `pnpm dev` (from the repo root, `dev.ts`) runs the same stack for manual use: fixed ports (site 4173, Subduction 4174; `PATCHWORK_DEV_PORT`, `PATCHWORK_DEV_SUBDUCTION_PORT`), Subduction's storage and key in `<repo>/.dev/`, so documents survive restarts, and every tool given as `<name>=<dir>` (the CAD tool, `src/cad`) rebuilt by `vite build --watch` and served as a static module. Reload the page after a rebuild.
 
+`pnpm run publish <sync server> <package url>` (from the repo root, `publish.ts`) builds the CAD tool and publishes `src/cad` (files git tracks or doesn't ignore, plus `dist/`) into an existing pushwork package, keeping its URL, e.g. `pnpm run publish wss://subduction.sync.inkandswitch.com automerge:3PkuqYnPLga4DGQqaYsVet2bRcaJ` for the public instance. It clones the package into a temporary directory, replaces its files and fails unless pushwork reports `SYNCED`.
+
 `nix develop` provides `subduction_cli` and Playwright's browsers (`PLAYWRIGHT_BROWSERS_PATH`). They come from Patchwork's own nixpkgs, which matches the pinned `@playwright/test` 1.59.1.
 
 ## Layout

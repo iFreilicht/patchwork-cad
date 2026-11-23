@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter patchwork-harness dev cad=../cad drawio=../drawio tldraw-view=../../research/22-document-canvases/tldraw-view",
+    "publish": "node src/harness/publish.ts",
     "typecheck": "pnpm -r typecheck",
     "test:e2e": "pnpm --filter patchwork-harness test:e2e"
   },
