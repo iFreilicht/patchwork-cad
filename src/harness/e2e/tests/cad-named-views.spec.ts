@@ -3,7 +3,8 @@
  * current camera, goes to one with a click, renames, updates and deletes it from its context menu,
  * and every collaborator sees them. Dragging a view out embeds the model seen from it: the viewer
  * shows the embed from the view, orbiting is local until "Reset" or "Save view", a picker switches the
- * view, and the embed follows the view as it is updated or deleted in the model. Every model has a
+ * view, and the embed follows the view as it is updated or deleted in the model, and suggests the CAD
+ * package to someone who doesn't have it. Every model has a
  * Home view, where the ViewCube's Home goes, which can be moved and reset.
  */
 import type { Locator, Page } from "@playwright/test";
@@ -200,6 +201,39 @@ test("a view dragged into the sidebar embeds the model seen from it, and follows
   await embed.getByRole("button", { name: "Open model" }).click();
   await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   expect(docUrl(page)).toBe(model);
+});
+
+test("an embed suggests the CAD package to someone who doesn't have it", async ({ users }) => {
+  const [a, b] = await users(2);
+  if (!a || !b) throw new Error("users(2) returned fewer than two users");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await addView(page, "Hero");
+  const { sidebar, at } = await documentListDrop(page);
+  await dragView(page, "Hero", at);
+  await sidebar.getByText("CAD Model – Hero", { exact: true }).click();
+  await expect(page.locator(".cad-model--embed")).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
+  const embedUrl = docUrl(page);
+
+  // B's site lists every package but the CAD tool's. In the page, as Playwright routes only Chromium's service worker requests.
+  await b.context.addInitScript(() => {
+    const fetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url, location.href).pathname !== "/modules.json") return response;
+      const settings = (await response.json()) as { modules: string[] };
+      return Response.json({ ...settings, modules: settings.modules.filter((m) => !m.includes("/packages/cad/")) });
+    };
+  });
+  b.page.on("dialog", (d) => void d.accept());
+  await bootToFrame(b.page, `/#doc=${encodeURIComponent(embedUrl)}`);
+  await b.page.getByRole("button", { name: "Load suggested package" }).click({ timeout: 30_000 });
+  const embed = b.page.locator(".cad-model--embed");
+  await expect(embed).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expect(embed).toHaveAttribute("data-view", "Hero");
 });
 
 test("Home is a view of every model: it can be moved, for everyone, and reset", async ({ users }) => {
