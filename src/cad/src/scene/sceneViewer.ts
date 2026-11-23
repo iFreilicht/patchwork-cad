@@ -9,13 +9,15 @@
 import { createEffect, onCleanup, type Component } from "solid-js";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
-import type { Entity, EntityKind, Highlight, HighlightStyle, Overlay, ViewerApi, ViewerProps, ViewerTestHook } from "../components/Viewer.tsx";
+import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { wideLines } from "./wideLines.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
 export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid">;
 
 /** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
 const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
+const sameEntity = (a: Entity | undefined, b: Entity | undefined) => !!a && !!b && a.body === b.body && a.kind === b.kind && a.index === b.index;
 
 export interface SceneHost {
   /** The scene's three.js: every object drawn in its layer is made with it. */
@@ -45,11 +47,28 @@ export interface HandEvent {
   locked?: boolean;
 }
 
-const COLORS = { body: "#a9aeb5", edge: "#1e1e1e", sketch: "#2f6fd6", overlay: "#f08c00", hover: "#2f81f7", accent: "#f08c00" };
 /** How near (px) the pointer must be to an edge to hover it, as Viewer.tsx's. */
 const EDGE_PX = 6;
 
-type Drawn = { shape: MeshedShape; mesh: Three.Mesh; lines: Three.LineSegments | undefined };
+type Line = InstanceType<ReturnType<typeof wideLines>["LineMaterial"]>;
+type HighlightMaterials = { face: Three.Material; line: { core: Line; halo: Line } };
+/** The materials of the view, in the theme's colours as Viewer.tsx's (research/14-edge-contrast.md). */
+interface Materials {
+  face: Three.MeshStandardMaterial;
+  fadedFace: Three.MeshStandardMaterial;
+  edge: Line;
+  fadedEdge: Line;
+  sketch: Line;
+  highlight: Record<Exclude<HighlightStyle, "peer">, HighlightMaterials>;
+  /** Around a hovered selected edge. */
+  ring: { line: Line; halo: Line };
+  peer(css: string): HighlightMaterials;
+  /** A ghost's edges, as wide as the model's, in the highlight's colour (`""`: the accent's). */
+  ghost(css: string): Line;
+  dispose(): void;
+}
+
+type Drawn = { shape: MeshedShape; mesh: Three.Mesh; wide: InstanceType<ReturnType<typeof wideLines>["LineSegments2"]> | undefined };
 type Hit = { entity: Entity | undefined; point: [number, number, number]; t: number };
 
 /** The index of the group of `groups` that holds `at`, -1 if none. */
@@ -65,6 +84,8 @@ export interface SceneView {
     move(ev: HandEvent): boolean;
     click(ev: HandEvent): boolean;
     menu(ev: HandEvent): boolean;
+    /** The pointer left the view: nothing is hovered. */
+    leave(): void;
     cursor(): string | null;
   };
   /** The scene object moved: draw the model where it is now. */
@@ -81,17 +102,23 @@ export function sceneView(host: SceneHost): SceneView {
   const root = new THREE.Group();
   root.matrixAutoUpdate = false;
   host.layer.add(root);
+  const { LineSegmentsGeometry, LineMaterial, LineSegments2 } = wideLines(THREE);
+  // As Viewer.tsx's groups: sketches, then overlays over the model, then highlights over everything.
   const bodies = new THREE.Group();
-  const marks = new THREE.Group();
   const lines = new THREE.Group();
-  root.add(bodies, lines, marks);
+  const overlays = Object.assign(new THREE.Group(), { renderOrder: 1 });
+  const marks = Object.assign(new THREE.Group(), { renderOrder: 2 });
+  root.add(bodies, lines, overlays, marks);
   /** Model (Z up, mm) → the object's frame (Y up, m). */
   const toObject = new THREE.Matrix4().makeRotationX(-Math.PI / 2).scale(new THREE.Vector3(0.001, 0.001, 0.001));
   const inverse = new THREE.Matrix4();
 
   let props: ViewerProps | undefined;
+  /** Made when the view mounts, from the theme where it is. */
+  let materials: Materials | undefined;
   let drawn: Drawn[] = [];
   let hovered: Entity | undefined;
+  let selected: Entity | undefined;
   let pending: HandEvent | undefined;
   /** The highlighted entities by style, for tests. */
   let highlighted: { style: HighlightStyle; entity: Entity }[] = [];
@@ -108,119 +135,198 @@ export function sceneView(host: SceneHost): SceneView {
   };
   moved();
 
+  /** Removes a group's objects and frees their geometries; materials are the view's, freed when it unmounts. */
   const clear = (group: Three.Group) => {
     for (const c of [...group.children]) {
       c.removeFromParent();
-      const o = c as Three.Mesh;
-      o.geometry?.dispose();
-      for (const m of [o.material].flat()) (m as Three.Material | undefined)?.dispose();
+      (c as Three.Mesh).geometry?.dispose();
     }
   };
-  const segments = (points: number[]) => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-    return g;
-  };
-  const lineMaterial = (color: string, over = false, opacity = 1) =>
-    new THREE.LineBasicMaterial({ color, transparent: over || opacity < 1, opacity, depthTest: !over, depthWrite: !over });
-  const polylines = (list: Overlay[]) =>
-    list.flatMap(({ points, closed }) => points.flatMap((p, i) => (i + 1 < points.length || closed ? [...p, ...points[(i + 1) % points.length]!] : [])));
+  /** Pairs of points as a wide line's geometry. */
+  const wideGeometry = (pairs: ArrayLike<number>) => new LineSegmentsGeometry().setPositions(Array.from(pairs));
+  /** Wide lines, outermost first, in render order. */
+  const wide = (pairs: ArrayLike<number>, layers: Line[]) => layers.map((material, i) => Object.assign(new LineSegments2(wideGeometry(pairs), material), { renderOrder: i }));
+  /** A polyline as pairs of points. */
+  const pairsOf = ({ points, closed }: Overlay) => points.slice(0, closed ? undefined : -1).flatMap((p, i) => [...p, ...points[(i + 1) % points.length]!]);
 
+  /** The materials of Viewer.tsx, in the theme's colours where `element` is. */
+  const makeMaterials = (element: Element): Materials => {
+    const color = (name: string) => {
+      const c = themeColor(element, name);
+      return { c, three: new THREE.Color().setRGB(c.r, c.g, c.b) };
+    };
+    // Lines in CSS pixels, as WebGL's own lines are never wider than one; wider with `prefers-contrast: more`.
+    const contrast = matchMedia("(prefers-contrast: more)").matches ? 1.5 : 1;
+    const own: Three.Material[] = [];
+    const keep = <M extends Three.Material>(m: M) => (own.push(m), m);
+    const wideLine = (c: Three.Color, width: number, overlay: boolean) =>
+      keep(new LineMaterial({ color: c.getHex(), linewidth: width * contrast, ...(overlay ? { transparent: true, depthTest: false, depthWrite: false } : {}) }));
+    const shape = color("--cad-model-shape").three;
+    const edge = color("--cad-model-edge").three;
+    const accent = color("--cad-model-accent").three;
+    // Lines need the contrast of the text variant, e.g. a sketch outline against a light background.
+    const accentLine = color("--cad-model-accent-text");
+    const hover = color("--cad-model-hover").three;
+    // A highlighted edge is a line over a wider halo in the theme's dark or light ink, whichever contrasts with it.
+    const inks = [color("--cad-model-bg"), color("--cad-model-fg")].sort((a, b) => luminance(a.c) - luminance(b.c));
+    const inkFor = (c: { c: Parameters<typeof luminance>[0] }) => (luminance(c.c) > 0.35 ? inks[0]! : inks[1]!).three;
+    // Highlights show through the model, so that they also show what other faces hide.
+    const highlightFace = (c: Three.Color, opacity: number) => keep(new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
+    const highlightLine = (c: { c: Parameters<typeof luminance>[0]; three: Three.Color }, width: number) => ({ core: wideLine(c.three, width, true), halo: wideLine(inkFor(c), width + 3.5, true) });
+    const peers = new Map<string, HighlightMaterials>();
+    const ghosts = new Map<string, Line>();
+    const css = (value: string) => {
+      const three = new THREE.Color().setStyle(value, THREE.SRGBColorSpace);
+      // luminance only reads the linear components.
+      return { c: { r: three.r, g: three.g, b: three.b } as Parameters<typeof luminance>[0], three };
+    };
+    return {
+      face: keep(new THREE.MeshStandardMaterial({ color: shape, roughness: 0.45, metalness: 0.15, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 1 })),
+      // Bodies that can't be picked: see-through, so that they don't hide the ones that can.
+      fadedFace: keep(new THREE.MeshStandardMaterial({ color: shape, roughness: 0.45, metalness: 0.15, side: THREE.DoubleSide, transparent: true, opacity: 0.25, depthWrite: false })),
+      edge: wideLine(edge, 1.5, false),
+      fadedEdge: keep(new LineMaterial({ color: edge.getHex(), linewidth: 1.5 * contrast, transparent: true, opacity: 0.3, depthWrite: false })),
+      sketch: wideLine(accentLine.three, 1.5, false),
+      // Hovered and selected edges have one colour; a hover is thinner.
+      highlight: { hover: { face: highlightFace(hover, 0.35), line: highlightLine(accentLine, 2) }, accent: { face: highlightFace(accent, 0.5), line: highlightLine(accentLine, 3.5) } },
+      ring: { line: wideLine(accentLine.three, 10, true), halo: wideLine(inkFor(accentLine), 13.5, true) },
+      peer(value) {
+        let m = peers.get(value);
+        if (!m) peers.set(value, (m = { face: highlightFace(css(value).three, 0.3), line: highlightLine(css(value), 3) }));
+        return m;
+      },
+      ghost(value) {
+        let m = ghosts.get(value);
+        if (!m) ghosts.set(value, (m = wideLine(value ? css(value).three : accentLine.three, 1.5, true)));
+        return m;
+      },
+      dispose: () => own.forEach((m) => m.dispose()),
+    };
+  };
+
+  /** Whether a shape is pickable now: while picking, the shapes `pickable` doesn't name fade, as in Viewer.tsx. */
+  const pickableShape = (shape: MeshedShape, i: number) => !props?.pick || !props.pickable || props.pickable(shape.body ?? `#${i}`);
   const pickableBody = (body: string | undefined) => !!body && (props?.pickable?.(body) ?? true);
 
   // ── drawing ──
   const drawShapes = (shapes: MeshedShape[] | undefined) => {
     clear(bodies);
+    const m = materials;
     drawn = (shapes ?? []).map((shape) => {
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.Float32BufferAttribute(shape.faces.vertices, 3));
       if (shape.faces.normals?.length === shape.faces.vertices.length) g.setAttribute("normal", new THREE.Float32BufferAttribute(shape.faces.normals, 3));
       g.setIndex(shape.faces.triangles);
       if (!g.getAttribute("normal")) g.computeVertexNormals();
-      const opacity = shape.opacity ?? 1;
-      const material = new THREE.MeshStandardMaterial({ color: shape.color || COLORS.body, roughness: 0.55, metalness: 0.1, side: THREE.DoubleSide, transparent: opacity < 1, opacity, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-      const mesh = new THREE.Mesh(g, material);
+      const mesh = new THREE.Mesh(g, m?.face);
       bodies.add(mesh);
-      let edges: Three.LineSegments | undefined;
-      if (shape.edges?.lines.length) {
-        edges = new THREE.LineSegments(segments(shape.edges.lines), lineMaterial(COLORS.edge));
-        bodies.add(edges);
-      }
-      return { shape, mesh, lines: edges };
+      const edges = shape.edges?.lines.length && m ? new LineSegments2(wideGeometry(shape.edges.lines), m.edge) : undefined;
+      if (edges) bodies.add(edges);
+      return { shape, mesh, wide: edges };
     });
     if (element) element.dataset["vertices"] = String(drawn.reduce((n, d) => n + d.shape.faces.vertices.length / 3, 0));
+    // Indices may name other entities in the new shapes.
+    setHovered(undefined);
+    setSelected(undefined);
     fade();
     host.invalidate();
   };
-  /** Bodies that can't be picked while picking fade, as in Viewer.tsx. */
+  /** Bodies that can't be picked while picking fade, faces and edges, as in Viewer.tsx. */
   const fade = () => {
-    for (const d of drawn) {
-      const faded = !!props?.pickable && !pickableBody(d.shape.body);
-      const m = d.mesh.material as Three.MeshStandardMaterial;
-      const opacity = (d.shape.opacity ?? 1) * (faded ? 0.25 : 1);
-      m.transparent = opacity < 1;
-      m.opacity = opacity;
-      m.depthWrite = !faded;
-      m.needsUpdate = true;
-    }
+    const m = materials;
+    if (!m) return;
+    drawn.forEach((d, i) => {
+      const faded = !pickableShape(d.shape, i);
+      d.mesh.material = faded ? m.fadedFace : m.face;
+      if (d.wide) d.wide.material = faded ? m.fadedEdge : m.edge;
+    });
+    if (element) element.dataset["faded"] = drawn.flatMap((d, i) => (pickableShape(d.shape, i) ? [] : [d.shape.body ?? `#${i}`])).join(" ");
     host.invalidate();
   };
 
-  /** Faces or edges of a body as a mark over everything: translucent faces, edges in the colour. */
-  const mark = (shape: MeshedShape, kind: EntityKind, indices: number[], color: string, faceOpacity: number) => {
-    if (kind === "face") {
-      const groups = shape.faces.faceGroups ?? [];
-      const tris: number[] = [];
-      groups.forEach((g, gi) => {
-        if (indices.includes(entityIndex(shape.faceIndex, gi))) for (let i = g.start; i < g.start + g.count; i++) tris.push(shape.faces.triangles[i]!);
-      });
-      if (!tris.length) return;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(shape.faces.vertices, 3));
-      geometry.setIndex(tris);
-      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: faceOpacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
-      mesh.renderOrder = 10;
-      marks.add(mesh);
-    } else {
-      const groups = shape.edges?.edgeGroups ?? [];
-      const points: number[] = [];
-      groups.forEach((g, gi) => {
-        if (indices.includes(entityIndex(shape.edgeIndex, gi))) points.push(...shape.edges!.lines.slice(g.start * 3, (g.start + g.count) * 3));
-      });
-      if (!points.length) return;
-      const l = new THREE.LineSegments(segments(points), lineMaterial(color, true));
-      l.renderOrder = 11;
-      marks.add(l);
-    }
+  /** The triangles of a shape's faces `indices`, as x, y and z of each corner, three corners each. */
+  const faceTriangles = (shape: MeshedShape, indices: number[]): number[] => {
+    const { vertices, triangles, faceGroups } = shape.faces;
+    const out: number[] = [];
+    (faceGroups ?? []).forEach((g, gi) => {
+      if (!indices.includes(entityIndex(shape.faceIndex, gi))) return;
+      for (let i = g.start; i < g.start + g.count; i++) out.push(vertices[triangles[i]! * 3]!, vertices[triangles[i]! * 3 + 1]!, vertices[triangles[i]! * 3 + 2]!);
+    });
+    return out;
   };
+  /** The segments of a shape's edges `indices`, as pairs of points. */
+  const edgePairs = (shape: MeshedShape, indices: number[]): number[] => {
+    const out: number[] = [];
+    (shape.edges?.edgeGroups ?? []).forEach((g, gi) => {
+      if (indices.includes(entityIndex(shape.edgeIndex, gi))) out.push(...shape.edges!.lines.slice(g.start * 3, (g.start + g.count) * 3));
+    });
+    return out;
+  };
+  /**
+   * The outline of triangles, as Viewer.tsx's `outline`: the sides that only one of them has. Corners
+   * are matched by position, as a mesh repeats them along seams and between faces.
+   */
+  const outlineOf = (triangles: number[]): number[] => {
+    const key = (i: number) => `${triangles[3 * i]!.toFixed(4)},${triangles[3 * i + 1]!.toFixed(4)},${triangles[3 * i + 2]!.toFixed(4)}`;
+    const sides = new Map<string, [number, number] | undefined>();
+    for (let t = 0; t + 2 < triangles.length / 3; t += 3)
+      for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]] as const) {
+        const [ka, kb] = [key(a), key(b)];
+        const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+        // A second triangle with this side: it is inside.
+        sides.set(k, sides.has(k) ? undefined : [a, b]);
+      }
+    return [...sides.values()].flatMap((s) => (s ? [...triangles.slice(3 * s[0], 3 * s[0] + 3), ...triangles.slice(3 * s[1], 3 * s[1] + 3)] : []));
+  };
+
+  /** Draws the highlights as Viewer.tsx does: the given ones, the selection and the hover. */
   const drawMarks = () => {
     clear(marks);
+    const m = materials;
     const shapes = props?.shapes ?? [];
-    const of = (h: { body: string; shape?: MeshedShape | undefined }) => h.shape ?? shapes.find((s) => s.body === h.body);
     const own = (entity: Entity | undefined, style: HighlightStyle): Highlight[] => (entity ? [{ body: entity.body, kind: entity.kind, indices: [entity.index], style }] : []);
-    const all = [...(props?.highlight ?? []), ...(props?.hoverHighlight === false ? [] : own(hovered, "hover"))];
+    const all = [...(props?.highlight ?? []), ...own(selected, "accent"), ...(props?.hoverHighlight === false ? [] : own(hovered, "hover"))];
     highlighted = all.flatMap((h) => h.indices.map((index) => ({ style: h.style, entity: { body: h.body, kind: h.kind, index } })));
-    for (const h of props?.highlight ?? ([] as Highlight[])) {
-      const shape = of(h);
-      const color = h.style === "peer" ? (h.color ?? "#888") : h.style === "accent" ? COLORS.accent : COLORS.hover;
-      if (shape) mark(shape, h.kind, h.indices, color, h.ghost ? 0.15 : h.style === "accent" ? 0.35 : 0.25);
-    }
-    if (hovered && props?.hoverHighlight !== false) {
-      const shape = of(hovered);
-      if (shape) mark(shape, hovered.kind, [hovered.index], COLORS.hover, 0.25);
+    if (!m) return;
+    /** The selected edge is hovered: it gets the ring, and the hover no line of its own. */
+    const ringed = selected?.kind === "edge" && sameEntity(hovered, selected);
+    /** The selected face is hovered: it keeps the selection's fill, and gets the hover's outline. */
+    const hoveredSelectedFace = selected?.kind === "face" && sameEntity(hovered, selected);
+    for (const h of all) {
+      const shape = h.shape ?? shapes.find((s) => s.body === h.body);
+      if (!shape) continue;
+      const { face, line } = h.style === "peer" ? m.peer(h.color ?? "#888") : m.highlight[h.style];
+      const first = { body: h.body, kind: h.kind, index: h.indices[0]! };
+      if (h.kind === "face") {
+        const triangles = faceTriangles(shape, h.indices);
+        if (!triangles.length) continue;
+        const ownHover = h.style === "hover" && h.indices.length === 1 && sameEntity(hovered, first);
+        if (!(hoveredSelectedFace && ownHover)) {
+          const g = new THREE.BufferGeometry();
+          g.setAttribute("position", new THREE.Float32BufferAttribute(triangles, 3));
+          marks.add(new THREE.Mesh(g, face));
+        }
+        // A hover, of a face or of a feature's faces, is outlined with the hover's thin line, also over a selection.
+        if (h.style === "hover" && !h.ghost) marks.add(...wide(outlineOf(triangles), [line.halo, line.core]));
+      } else if (!(ringed && h.style === "hover" && sameEntity(hovered, first))) {
+        const pairs = edgePairs(shape, h.indices);
+        if (!pairs.length) continue;
+        const ring = ringed && h.style === "accent" && sameEntity(selected, first);
+        // Outermost first; a ghost's edges are a thin line alone.
+        const layers = h.ghost ? [m.ghost(h.style === "peer" ? (h.color ?? "#888") : "")] : [...(ring ? [m.ring.halo, m.ring.line] : []), line.halo, line.core];
+        marks.add(...wide(pairs, layers));
+      }
     }
     host.invalidate();
   };
   const drawLines = () => {
     clear(lines);
-    const sketches = polylines((props?.sketches ?? []).flatMap((s) => s.outline));
-    if (sketches.length) lines.add(new THREE.LineSegments(segments(sketches), lineMaterial(COLORS.sketch)));
-    const overlays = polylines(props?.overlays ?? []);
-    if (overlays.length) {
-      const l = new THREE.LineSegments(segments(overlays), lineMaterial(COLORS.overlay, true));
-      l.renderOrder = 12;
-      lines.add(l);
-    }
+    clear(overlays);
+    const m = materials;
+    if (!m) return;
+    for (const sketch of props?.sketches ?? []) for (const line of sketch.outline) lines.add(new LineSegments2(wideGeometry(pairsOf(line)), m.sketch));
+    for (const overlay of props?.overlays ?? []) overlays.add(...wide(pairsOf(overlay), [m.highlight.hover.line.halo, m.highlight.hover.line.core]));
+    if (element) element.dataset["overlays"] = String(props?.overlays?.length ?? 0);
     host.invalidate();
   };
 
@@ -293,10 +399,18 @@ export function sceneView(host: SceneHost): SceneView {
   };
 
   const setHovered = (e: Entity | undefined) => {
-    if (e?.body === hovered?.body && e?.kind === hovered?.kind && e?.index === hovered?.index) return;
+    if (sameEntity(e, hovered) || (!e && !hovered)) return;
     hovered = e;
     if (element) element.dataset["hovered"] = entityKey(e);
     props?.onHover?.(e);
+    drawMarks();
+  };
+  /** The face or edge selected in the view, drawn as the accent, as Viewer.tsx's own selection. */
+  const setSelected = (e: Entity | undefined) => {
+    if (sameEntity(e, selected) || (!e && !selected)) return;
+    selected = e;
+    if (element) element.dataset["selected"] = entityKey(e);
+    props?.onSelect?.(e);
     drawMarks();
   };
   const hover = (ev: HandEvent) => {
@@ -326,8 +440,9 @@ export function sceneView(host: SceneHost): SceneView {
         if (e && pickableBody(e.body)) props.onPick?.(e);
         return true;
       }
+      if (!props.onSelect) return false;
       const e = hitAt(ev.x, ev.y)?.entity;
-      props.onSelect?.(e);
+      setSelected(e);
       // A click off the model is the scene's.
       return !!e;
     },
@@ -337,6 +452,11 @@ export function sceneView(host: SceneHost): SceneView {
       if (!e) return false;
       props.onContextMenu(e, { x: ev.clientX, y: ev.clientY });
       return true;
+    },
+    leave() {
+      pending = undefined;
+      setHovered(undefined);
+      props?.onPointer?.(undefined);
     },
     cursor: () => (props?.pick ? "crosshair" : null),
   };
@@ -388,7 +508,6 @@ export function sceneView(host: SceneHost): SceneView {
     }
     return out.sort((x, y) => y.size - x.size);
   };
-  const sameEntity = (a: Entity | undefined, b: Entity) => !!a && a.body === b.body && a.kind === b.kind && a.index === b.index;
   const hook: SceneTestHook = {
     entities: (kind) =>
       drawn.flatMap(({ shape }) => {
@@ -426,11 +545,19 @@ export function sceneView(host: SceneHost): SceneView {
     props = p;
     const el = Object.assign(document.createElement("div"), { cadViewer: hook });
     el.className = "cad-model__viewer cad-model__viewer--host";
+    Object.assign(el.dataset, { hovered: "", selected: "" });
     element = el;
-    createEffect(() => (el.dataset["pick"] = p.pick ?? ""));
+    // Once mounted: the theme is where the element is.
+    createEffect(() => (materials ??= makeMaterials(el)));
+    createEffect(() => {
+      // Hover changes kind with the pick target, and picking ends a selection.
+      el.dataset["pick"] = p.pick ?? "";
+      setHovered(undefined);
+      if (p.pick) setSelected(undefined);
+    });
     createEffect(() => drawShapes(p.shapes));
     createEffect(() => {
-      void p.pickable;
+      void [p.pickable, p.pick];
       fade();
     });
     createEffect(() => {
@@ -446,8 +573,11 @@ export function sceneView(host: SceneHost): SceneView {
       if (props === p) props = undefined;
       if (element === el) element = undefined;
       hovered = undefined;
-      for (const g of [bodies, marks, lines]) clear(g);
+      selected = undefined;
+      for (const g of [bodies, marks, lines, overlays]) clear(g);
       drawn = [];
+      materials?.dispose();
+      materials = undefined;
       host.invalidate();
     });
     return el;
@@ -463,7 +593,8 @@ export function sceneView(host: SceneHost): SceneView {
       return h && { entity: h.entity, point: h.point };
     },
     dispose() {
-      for (const g of [bodies, marks, lines]) clear(g);
+      for (const g of [bodies, marks, lines, overlays]) clear(g);
+      materials?.dispose();
       root.removeFromParent();
       host.invalidate();
     },

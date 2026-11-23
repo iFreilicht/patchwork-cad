@@ -142,6 +142,7 @@ export function create(api: ViewApi) {
         move: (ev: HandEvent) => view.input.move(ev),
         click: (ev: HandEvent) => view.input.click(ev),
         menu: (ev: HandEvent) => view.input.menu(ev),
+        leave: () => view.input.leave(),
         cursor: () => view.input.cursor(),
       },
       escape: () => controls?.escape() ?? false,

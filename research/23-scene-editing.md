@@ -32,19 +32,19 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 | # | Gap | Decision |
 |---|---|---|
-| B1 | Every line is 1 px (`LineBasicMaterial`): edges, highlighted edges, sketches, overlays; no halos ([14](14-edge-contrast.md)). The scene draws wide lines itself (`LineMaterial`, `LineSegments2` in [`viewport.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/stage/viewport.js)) but doesn't give them to plugins, and ours are made with another copy of three.js, which the scene's renderer can't draw. | Fix with a copy, as of `glb.js`; then *scene*: expose them, and drop the copy |
-| B2 | Fixed colours instead of the theme's `--cad-model-*`: no dark mode; overlays orange. | Fix |
-| B3 | A hovered face has no outline, a hovered selected edge no ring, ghosts no thin edges; face opacities differ. | Fix |
-| B4 | Bodies faded while picking keep their edges. | Fix |
+| B1 | Every line is 1 px (`LineBasicMaterial`): edges, highlighted edges, sketches, overlays; no halos ([14](14-edge-contrast.md)). The scene draws wide lines itself (`LineMaterial`, `LineSegments2` in [`viewport.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/stage/viewport.js)) but doesn't give them to plugins, and ours are made with another copy of three.js, which the scene's renderer can't draw. | Done with a copy ([`wideLines.js`](../src/cad/src/scene/wideLines.js)), as of `glb.js`; then *scene*: expose them, and drop the copy |
+| B2 | Fixed colours instead of the theme's `--cad-model-*`: no dark mode; overlays orange. | Done: Viewer.tsx's materials, from the theme where the editor is |
+| B3 | A hovered face has no outline, a hovered selected edge no ring, ghosts no thin edges; face opacities differ. | Done, as in Viewer.tsx |
+| B4 | Bodies faded while picking keep their edges. | Done |
 | B5 | The scene's lights, not the key light that follows the camera. | Accepted |
 | B6 | The live build's grey differs from the built GLB's colour, which the scene's theme gives it. | Intended: opening the editor visibly changes the mode |
-| B7 | `prefers-contrast: more` doesn't widen lines. | Fix, with B1 |
+| B7 | `prefers-contrast: more` doesn't widen lines. | Done, with B1 |
 
 ### Selecting and picking
 
 | # | Gap | Decision |
 |---|---|---|
-| C1 | The selected face or edge isn't highlighted: `Viewer.tsx` draws its own selection, `sceneViewer` only reports it. | Fix |
+| C1 | The selected face or edge isn't highlighted: `Viewer.tsx` draws its own selection, `sceneViewer` only reports it. | Done |
 | C2 | `regions` is ignored: no picking of sketch regions, e.g. profiles to extrude ([21](21-embedding.md)). | Fix |
 | C3 | A right click off the model opens the scene's menu, not the editor's. | Intended |
 | C4 | Picking tests every triangle in JS, without bounds or a BVH. | Fix |

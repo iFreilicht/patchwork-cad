@@ -284,10 +284,10 @@ const SLIVER = 0.02;
 const TURN_MS = 300;
 
 /** Relative luminance (WCAG), from a colour's linear components. */
-const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+export const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
 /** Reads a theme colour that the stylesheet derived for this tool. */
-function themeColor(element: Element, name: string): THREE.Color {
+export function themeColor(element: Element, name: string): THREE.Color {
   const value = getComputedStyle(element).getPropertyValue(name).trim();
   const color = new THREE.Color();
   // three.js parses rgb()/hex only, and a canvas normalises color-mix() to oklch(), which it can't

@@ -1,6 +1,6 @@
 /** A CAD model in pvh's scene tool (research/23-scene-editing.md). */
 import { expect, type Page } from "@playwright/test";
-import { CAD_MODULES, createModel, docUrl, hideSidebars, setModelSource } from "./cad.ts";
+import { CAD_MODULES, createModel, docUrl, hideSidebars, setModelSource, type Entity } from "./cad.ts";
 import { drag } from "./documents.ts";
 import { SCENE_DIR } from "./scene-dir.ts";
 import { createViaMenu } from "./ui.ts";
@@ -61,3 +61,24 @@ export async function openSelected(page: Page): Promise<void> {
   await page.locator('.scene-tool button[data-command="cad-edit"]').click();
   await expect(sceneEditor(page)).toBeVisible({ timeout: 30_000 });
 }
+
+/** The scene view's element, which carries the editor's view state and test hook (sceneViewer.ts). */
+export const hostView = (page: Page) => page.locator(".cad-model__viewer--host");
+
+type Hook = { cadViewer: { screenPoint(e: Entity): { x: number; y: number } | undefined; highlighted(style: string): Entity[] } };
+
+export const entityKey = (e: Entity) => `${e.body}:${e.kind}:${e.index}`;
+
+/** Moves the mouse off the scene's view, which clears the hover, then onto `e`, and waits until the view hovers something; whether that is `e`. */
+export async function hoverInScene(page: Page, e: Entity): Promise<boolean> {
+  const point = await hostView(page).evaluate((el, x) => (el as unknown as Hook).cadViewer.screenPoint(x), e);
+  if (!point) return false;
+  await page.mouse.move(0, 0);
+  await expect(hostView(page)).toHaveAttribute("data-hovered", "");
+  await page.mouse.move(point.x, point.y);
+  await expect(hostView(page)).not.toHaveAttribute("data-hovered", "");
+  return (await hostView(page).getAttribute("data-hovered")) === entityKey(e);
+}
+
+/** The scene view's highlights of `style`. */
+export const highlightedInScene = (page: Page, style: "hover" | "accent" | "peer") => hostView(page).evaluate((el, s) => (el as unknown as Hook).cadViewer.highlighted(s), style);
