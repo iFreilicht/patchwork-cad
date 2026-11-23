@@ -1033,9 +1033,12 @@ export function Viewer(props: ViewerProps) {
         u.renderer.render(scene, camera);
         scene.environment = environment;
         for (const m of punches) m.visible = false;
-        u.renderer.domElement.hidden = false;
+        u.renderer.domElement.style.display = "block";
         top = u.renderer;
-      } else if (upper) upper.renderer.domElement.hidden = true;
+      } else if (upper) {
+        // Not `hidden`, which three's inline `display: block` overrides: the canvas would keep its last frame over the view.
+        upper.renderer.domElement.style.display = "none";
+      }
       cullDocuments();
       for (const layer of cssLayers) if (layer.scene.children.length) layer.css.render(layer.scene, camera);
       connectDocuments();
