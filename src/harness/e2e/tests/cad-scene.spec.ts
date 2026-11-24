@@ -4,10 +4,10 @@
  * through the scene's input; Escape leaves. The editor's views move the scene's camera and are made from it.
  */
 import type { Page } from "@playwright/test";
-import { cameraDirection, clickHome, clickViewCube, entities, exampleSource, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
+import { cameraDirection, clickHome, clickViewCube, docPathWith, entities, exampleSource, hideSidebars, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
 import { drag, sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { annotationsOf, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, sourceOf } from "../scene.ts";
+import { annotationsOf, built, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -203,4 +203,47 @@ test("documents dropped in the scene's view are the editor's: on a face pinned t
   await page.mouse.up();
   await expect(page.locator('.cad-editor__dialog[data-feature="insert"]')).toBeVisible();
   expect(await sceneObjects(page, scene)).toHaveLength(1);
+});
+
+const pins = (page: Page) => hostView(page).locator(".cad-model__pin:not([data-new])");
+
+test("pins and collaborators' pointers show in the scene: B sees A's annotation pinned to a face, and A's pointer on the model", async ({ users }) => {
+  const [a, b] = await users(2);
+  if (!a || !b) throw new Error("users(2) returned fewer than two users");
+  await bootToFrame(a.page);
+  const docs = await sidebarDocuments(a.page, { "notes.txt": { file: "notes.txt", mimeType: "text/plain", text: "Anodize black" } });
+  const { model, scene } = await modelInScene(a.page, exampleSource("m1"), "Bracket", { sidebar: true });
+  await openSelected(a.page);
+  await expect.poll(async () => Number(await hostView(a.page).getAttribute("data-vertices"))).toBeGreaterThan(0);
+  await drag(a.page, "notes.txt", await visiblePoint(a.page, "face"));
+  await expect.poll(() => annotationsOf(a.page, model).then((l) => l.map((x) => x.doc))).toEqual([docs["notes.txt"]]);
+  await expect(pins(a.page)).toHaveCount(1);
+  await expect(pins(a.page)).toBeVisible();
+  await expect(pins(a.page)).toHaveAttribute("aria-label", "notes");
+
+  // B opens the same scene, and the model's editor in it.
+  await bootToFrame(b.page, docPathWith(a.page));
+  await hideSidebars(b.page);
+  // Selected by a click on it, in the middle of B's view, once the scene shows all of it.
+  await expect.poll(() => built(b.page, scene), { timeout: 60_000 }).toBe(true);
+  const port = (await scenePort(b.page).boundingBox())!;
+  await b.page.mouse.click(port.x + 10, port.y + port.height / 2);
+  await b.page.keyboard.press(".");
+  await b.page.waitForTimeout(600);
+  await scenePort(b.page).click();
+  await openSelected(b.page);
+  await expect(pins(b.page)).toHaveCount(1, { timeout: 30_000 });
+  await expect(pins(b.page)).toBeVisible();
+  // A pin opens what is pinned there.
+  await pins(b.page).click();
+  await expect(b.page.locator(".cad-editor__pin-dialog, .cad-model__comments-popover").first()).toBeVisible();
+  await b.page.keyboard.press("Escape");
+
+  // A's pointer on the model: a marker in B's view.
+  await a.page.mouse.move(...Object.values(await visiblePoint(a.page, "face")) as [number, number]);
+  await expect(hostView(b.page)).toHaveAttribute("data-peer-markers", "1", { timeout: 15_000 });
+  if (shots) await b.page.screenshot({ path: `${shots}/scene-8-peer.png` });
+  // Off the model: gone.
+  await a.page.mouse.move(0, 0);
+  await expect(hostView(b.page)).toHaveAttribute("data-peer-markers", "0");
 });

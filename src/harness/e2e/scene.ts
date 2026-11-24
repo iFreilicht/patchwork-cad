@@ -49,7 +49,7 @@ export async function modelInScene(page: Page, source: string, title: string, { 
 }
 
 /** Whether every object of the scene has a built GLB. */
-async function built(page: Page, scene: string): Promise<boolean> {
+export async function built(page: Page, scene: string): Promise<boolean> {
   return page.evaluate(async (url) => {
     const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): Record<string, unknown> }> } }).repo;
     const objects = Object.values(((await repo.find(url)).doc()["objects"] ?? {}) as Record<string, SceneObject>);

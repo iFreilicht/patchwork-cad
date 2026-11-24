@@ -10,14 +10,16 @@ import { createEffect, onCleanup, type Component } from "solid-js";
 import * as Local from "three";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
-import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type ShownRegion, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type PeerMarker, type Pin, type ShownRegion, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { iconElement } from "../components/icons.tsx";
+import { contactToken } from "../components/presence.ts";
 import { entityIndex, pickingOf, type Hit, type Picking } from "./picking.ts";
 import { sceneCamera, type HostCamera } from "./sceneCamera.ts";
 import { sceneViewCube, type SceneViewCube } from "./sceneViewCube.ts";
 import { wideLines } from "./wideLines.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
-export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions">;
+export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions" | "peerMarkers">;
 
 /** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
 const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
@@ -67,7 +69,7 @@ interface Materials {
   highlight: Record<Exclude<HighlightStyle, "peer">, HighlightMaterials>;
   /** Around a hovered selected edge. */
   ring: { line: Line; halo: Line };
-  peer(css: string): HighlightMaterials;
+  peer(css: string): HighlightMaterials & { marker: Three.Material };
   /** A ghost's edges, as wide as the model's, in the highlight's colour (`""`: the accent's). */
   ghost(css: string): Line;
   /** Regions of a sketch to pick: every state differs; one neither chosen nor hovered only takes the pointer. */
@@ -115,7 +117,8 @@ export function sceneView(host: SceneHost): SceneView {
   // Regions of a sketch, over the model as highlights are, and the hovered one's outline.
   const regionGroup = Object.assign(new THREE.Group(), { renderOrder: 1 });
   const regionOutline = Object.assign(new THREE.Group(), { renderOrder: 2 });
-  root.add(bodies, lines, overlays, regionGroup, regionOutline, marks);
+  const peerGroup = Object.assign(new THREE.Group(), { renderOrder: 3 });
+  root.add(bodies, lines, overlays, regionGroup, regionOutline, marks, peerGroup);
   /** Model (Z up, mm) → the object's frame (Y up, m). */
   const toObject = new THREE.Matrix4().makeRotationX(-Math.PI / 2).scale(new THREE.Vector3(0.001, 0.001, 0.001));
   const inverse = new THREE.Matrix4();
@@ -183,7 +186,7 @@ export function sceneView(host: SceneHost): SceneView {
     // Highlights show through the model, so that they also show what other faces hide.
     const highlightFace = (c: Three.Color, opacity: number) => keep(new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide }));
     const highlightLine = (c: { c: Parameters<typeof luminance>[0]; three: Three.Color }, width: number) => ({ core: wideLine(c.three, width, true), halo: wideLine(inkFor(c), width + 3.5, true) });
-    const peers = new Map<string, HighlightMaterials>();
+    const peers = new Map<string, HighlightMaterials & { marker: Three.Material }>();
     const ghosts = new Map<string, Line>();
     const css = (value: string) => {
       const three = new THREE.Color().setStyle(value, THREE.SRGBColorSpace);
@@ -202,7 +205,7 @@ export function sceneView(host: SceneHost): SceneView {
       ring: { line: wideLine(accentLine.three, 10, true), halo: wideLine(inkFor(accentLine), 13.5, true) },
       peer(value) {
         let m = peers.get(value);
-        if (!m) peers.set(value, (m = { face: highlightFace(css(value).three, 0.3), line: highlightLine(css(value), 3) }));
+        if (!m) peers.set(value, (m = { face: highlightFace(css(value).three, 0.3), line: highlightLine(css(value), 3), marker: keep(new THREE.MeshBasicMaterial({ color: css(value).three, depthTest: false, depthWrite: false })) }));
         return m;
       },
       ghost(value) {
@@ -625,6 +628,11 @@ export function sceneView(host: SceneHost): SceneView {
     cameraDirection: () => camera.direction() ?? [0, 0, 0],
     viewCubePoint: (region) => cube?.point(region),
     intent: () => camera.intent(),
+    peerMarkers: () =>
+      [...markers].flatMap(([key, m]) => {
+        const s = toScreen(m.point);
+        return s ? [{ key, x: Math.round(s.x), y: Math.round(s.y) }] : [];
+      }),
     regions: () =>
       drawnRegions.map(({ region, mesh }) => {
         // The centroid of a triangle that a click there hits, as regions may be concave or have holes.
@@ -669,6 +677,146 @@ export function sceneView(host: SceneHost): SceneView {
     },
   };
 
+  // ── pins of comments and annotations, and collaborators' pointers, laid over the view, as Viewer.tsx's (D1, D2) ──
+  /** Where a pin on entities goes: on their biggest triangle or longest segment. */
+  const anchorOf = (body: string, kind: EntityKind, indices: number[]) => {
+    const shape = shapeOf(body);
+    return shape && indices.flatMap((i) => candidates(shape, kind, i)).sort((a, b) => b.size - a.size)[0]?.point;
+  };
+  /** A model point on the screen relative to the view's element, if the port shows it there. */
+  const placed = (point: Three.Vector3 | undefined, rect: DOMRect) => {
+    const s = point && toScreen(point);
+    if (!s) return undefined;
+    const [x, y] = [s.x - rect.left, s.y - rect.top];
+    return { x, y, visible: s.visible && x >= 0 && y >= 0 && x <= rect.width && y <= rect.height };
+  };
+  /** Buttons over the view at points on the model, which each frame places. */
+  const floating = new Map<string, { el: HTMLButtonElement; point: Three.Vector3 | undefined; onClick: (at: { x: number; y: number }) => void }>();
+  const float = (key: string, className: string, onClick: (at: { x: number; y: number }) => void) => {
+    let f = floating.get(key);
+    if (!f) {
+      const el = document.createElement("button");
+      // The view's element lets the pointer through to the scene; a pin takes it.
+      el.style.pointerEvents = "auto";
+      const created = { el, point: undefined, onClick };
+      el.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const r = el.getBoundingClientRect();
+        created.onClick({ x: r.left, y: r.bottom });
+      });
+      el.addEventListener("pointerenter", () => props?.onPinHover?.(el.dataset["key"]));
+      el.addEventListener("pointerleave", () => props?.onPinHover?.(undefined));
+      element?.append(el);
+      floating.set(key, created);
+      f = created;
+    }
+    f.onClick = onClick;
+    f.el.className = className;
+    return f;
+  };
+  const unfloat = (keep: (key: string) => boolean) => {
+    for (const [key, f] of floating) {
+      if (keep(key)) continue;
+      // Gone under the pointer: it is hovered no more.
+      if (f.el.matches(":hover")) props?.onPinHover?.(undefined);
+      f.el.remove();
+      floating.delete(key);
+    }
+  };
+  const drawPins = (pins: Pin[]) => {
+    const keys = new Set(pins.map((p) => `pin:${p.key}`));
+    unfloat((key) => !key.startsWith("pin:") || keys.has(key));
+    for (const pin of pins) {
+      const f = float(`pin:${pin.key}`, "cad-model__pin", (at) => props?.onPin?.(pin.key, at));
+      const drawnAs = JSON.stringify([pin.icons, pin.count]);
+      if (f.el.dataset["drawn"] !== drawnAs) {
+        f.el.dataset["drawn"] = drawnAs;
+        f.el.replaceChildren(...pin.icons.map((icon) => iconElement(icon, 12)), ...(pin.count === undefined ? [] : [String(pin.count)]));
+      }
+      f.el.title = pin.label;
+      f.el.setAttribute("aria-label", pin.label);
+      f.el.dataset["threads"] = String(pin.threads);
+      f.el.dataset["annotations"] = String(pin.annotations);
+      if (pin.state) f.el.dataset["state"] = pin.state;
+      else delete f.el.dataset["state"];
+      f.el.dataset["key"] = pin.key;
+      f.el.dataset["focused"] = pin.focused ? "true" : "false";
+      f.el.dataset["selected"] = pin.selected ? "true" : "false";
+      if (pin.new) f.el.dataset["new"] = "true";
+      else delete f.el.dataset["new"];
+      f.point = anchorOf(pin.body, pin.kind, pin.indices);
+    }
+    placeFloating();
+  };
+  const placeFloating = () => {
+    if (!floating.size || !element) return;
+    const rect = element.getBoundingClientRect();
+    for (const f of floating.values()) {
+      const at = placed(f.point, rect);
+      f.el.hidden = !at?.visible;
+      if (at) f.el.style.transform = `translate(${at.x}px, ${at.y}px)`;
+    }
+  };
+
+  /** A marker per collaborator: a dot on the model and their name next to it, which each frame places. */
+  const markers = new Map<string, { dot: Three.Mesh; label: HTMLDivElement; point: Three.Vector3 }>();
+  const dotGeometry = new THREE.SphereGeometry(1, 12, 8);
+  const drawPeers = (peers: PeerMarker[]) => {
+    const keys = new Set(peers.map((p) => p.key));
+    for (const [key, m] of markers) {
+      if (keys.has(key)) continue;
+      m.dot.removeFromParent();
+      m.label.remove();
+      markers.delete(key);
+    }
+    for (const peer of peers) {
+      let m = markers.get(peer.key);
+      if (!m) {
+        const label = document.createElement("div");
+        label.className = "cad-model__peer";
+        label.append(contactToken(peer.contactUrl));
+        element?.append(label);
+        m = { dot: new THREE.Mesh(dotGeometry), label, point: new THREE.Vector3() };
+        peerGroup.add(m.dot);
+        markers.set(peer.key, m);
+      }
+      if (materials) m.dot.material = materials.peer(peer.color).marker;
+      m.label.style.setProperty("--peer-color", peer.color);
+      m.point.set(...peer.point);
+      m.dot.position.copy(m.point);
+    }
+    if (element) element.dataset["peerMarkers"] = String(markers.size);
+    placeMarkers();
+  };
+  /** Places the markers' labels and sizes their dots to a constant few pixels. */
+  const placeMarkers = () => {
+    const c = camera.now();
+    const size = host.size();
+    if (!markers.size || !element || !c || !size) return;
+    const rect = element.getBoundingClientRect();
+    const tan = Math.tan(THREE.MathUtils.degToRad(c.fov / 2));
+    let resized = false;
+    for (const m of markers.values()) {
+      const at = placed(m.point, rect);
+      m.label.hidden = !at?.visible;
+      if (at) m.label.style.transform = `translate(${at.x}px, ${at.y}px)`;
+      const scale = (4 * 2 * c.position.distanceTo(new Local.Vector3(m.point.x, m.point.y, m.point.z)) * tan) / size.height;
+      // Drawn again only when a dot's size changes, not every frame.
+      if (Math.abs(scale - m.dot.scale.x) <= 1e-3 * scale) continue;
+      m.dot.scale.setScalar(scale);
+      resized = true;
+    }
+    if (resized) host.invalidate();
+  };
+  const clearOverlays = () => {
+    unfloat(() => false);
+    for (const m of markers.values()) {
+      m.dot.removeFromParent();
+      m.label.remove();
+    }
+    markers.clear();
+  };
+
   const Viewer: Component<ViewerProps> = (p) => {
     props = p;
     const el = Object.assign(document.createElement("div"), { cadViewer: hook });
@@ -709,6 +857,11 @@ export function sceneView(host: SceneHost): SceneView {
       drawLines();
     });
     createEffect(() => drawRegions(p.regions));
+    createEffect(() => {
+      void p.shapes;
+      drawPins(p.pins ?? []);
+    });
+    createEffect(() => drawPeers(p.peers ?? []));
     p.onApi?.(api);
     onCleanup(() => {
       if (props === p) props = undefined;
@@ -724,6 +877,7 @@ export function sceneView(host: SceneHost): SceneView {
       materials = undefined;
       cube?.dispose();
       cube = undefined;
+      clearOverlays();
       host.invalidate();
     });
     return el;
@@ -733,7 +887,11 @@ export function sceneView(host: SceneHost): SceneView {
     Viewer,
     input,
     moved,
-    update: () => cube?.render(),
+    update() {
+      cube?.render();
+      placeFloating();
+      placeMarkers();
+    },
     hovered: () => hovered,
     at(x, y) {
       const h = hitAt(x, y);
@@ -741,6 +899,8 @@ export function sceneView(host: SceneHost): SceneView {
     },
     dispose() {
       camera.dispose();
+      clearOverlays();
+      dotGeometry.dispose();
       for (const g of [bodies, marks, lines, overlays, regionGroup, regionOutline]) clear(g);
       materials?.dispose();
       root.removeFromParent();

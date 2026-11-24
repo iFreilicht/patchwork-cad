@@ -54,8 +54,8 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 | # | Gap | Decision |
 |---|---|---|
-| D1 | No pins of comments and annotations. | Fix |
-| D2 | No markers of collaborators' pointers; their highlights show. | Fix, alongside the scene's own presence |
+| D1 | No pins of comments and annotations. | Done |
+| D2 | No markers of collaborators' pointers; their highlights show. | Done: dots and names on the model, beside the scene's own presence (its people and their bodies, `scene.others`' selection boxes) |
 
 ### Tests
 
