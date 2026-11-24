@@ -1,6 +1,6 @@
 # Editing Models in a Scene
 
-A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: in progress, see [Plan](#plan). Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`.
+A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: in progress, see [Plan](#plan). Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`; the tests run against the scene with this document's scene changes (the submodule, [Plan](#plan)).
 
 ## How editing in a scene works
 
@@ -67,7 +67,7 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 | # | Gap | Decision |
 |---|---|---|
-| F1 | A model is built with its default parameters: a scene can't show a configuration. A source's parameters are its plugin metadata, the same for every document ([README](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/README.md): "every field but `load` must survive `structuredClone`"). | Fix, *scene*: parameters per document, from a hook of the source |
+| F1 | A model is built with its default parameters: a scene can't show a configuration. A source's parameters are its plugin metadata, the same for every document ([README](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/README.md): "every field but `load` must survive `structuredClone`"). | Done: the scene's `params(doc)` (its branch `scene/glb-textures`); a placed model is built with one of its configurations, chosen in the inspector's Settings, its linked values read as they are |
 | F2 | A built GLB's edges are drawn 1 px wide too. | Fix, *scene*: wide lines opt-in per primitive, so that other sources' GLBs stay as they are |
 
 ### Canvases

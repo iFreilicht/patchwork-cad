@@ -103,3 +103,13 @@ export async function annotationsOf(page: Page, model: string): Promise<{ id: st
     return JSON.parse(JSON.stringify((await repo.find(url)).doc().cad?.annotations ?? []));
   }, model);
 }
+
+/** The scene object's built GLB's bounds, as its render doc keeps them, once it has some. */
+export async function builtBounds(page: Page, scene: string): Promise<{ min: number[]; max: number[] } | undefined> {
+  return page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): Record<string, unknown> }> } }).repo;
+    const o = Object.values(((await repo.find(url)).doc()["objects"] ?? {}) as Record<string, { renderUrl?: string }>)[0];
+    const render = o?.renderUrl ? (await repo.find(o.renderUrl)).doc() : undefined;
+    return render?.["bounds"] ? JSON.parse(JSON.stringify(render["bounds"])) : undefined;
+  }, scene);
+}

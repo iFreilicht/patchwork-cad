@@ -1,14 +1,17 @@
 // The scene's content provider for CAD models (`scene:source` "cad-model-scene"): the scene calls
 // build() for a model placed in it and draws the GLB it returns, kept in the object's render doc and
-// built again when fingerprint() or one of dependencies() changes. The contract is the scene's
+// built again when fingerprint() or one of dependencies() changes. A placed model is built with a
+// configuration of its own (params(), research/23-scene-editing.md, F1). The contract is the scene's
 // README, "Writing a provider" (patchwork-experiments/scene).
 
-import type { UrlHeads } from "@automerge/automerge-repo";
+import type { AutomergeUrl, UrlHeads } from "@automerge/automerge-repo";
+import { resolvedFrom } from "../components/configurations.ts";
 import { createImports, docOf, headsOf } from "../components/imports.ts";
 import { documentImports, type Imports } from "../kernel/imports.ts";
 import type { MeshedShape, ModelError, FeatureTrace } from "../kernel/protocol.ts";
+import { configurations, isLinked } from "../model/configurations.ts";
 import { locksOf } from "../model/locks.ts";
-import type { CadModelDoc } from "../types.ts";
+import type { CadModelDoc, ParamValue } from "../types.ts";
 import { buildModel } from "./kernel.ts";
 import { modelGlb } from "./modelGlb.ts";
 
@@ -35,11 +38,52 @@ const sortedLocks = (doc: CadModelDoc | undefined) =>
     .sort(([a], [b]) => (a < b ? -1 : 1));
 
 /**
- * What build() reads of the model document: its code and the locks of the documents it follows.
- * Not its title, views, configurations, comments or annotations, so editing those builds nothing.
+ * What build() and params() read of the model document: its code, the locks of the documents it
+ * follows, and its configurations. Not its title, views, comments or annotations, so editing those
+ * builds nothing.
  */
 export function fingerprint(doc: CadModelDoc | undefined): string {
-  return `cad1:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc)]))}`;
+  return `cad2:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc), configurations(doc)]))}`;
+}
+
+/** The key of the configuration param: a model's configuration's id, or "" for its defaults. */
+export const CONFIGURATION = "configuration";
+
+/** A placed model's own params (the scene's `params(doc)`): which of its configurations it is built with. */
+export function params(doc: CadModelDoc | undefined) {
+  return [
+    {
+      key: CONFIGURATION,
+      label: "Configuration",
+      kind: "enum" as const,
+      default: "",
+      options: [{ value: "", label: "Defaults" }, ...configurations(doc).map((c) => ({ value: c.id, label: c.name }))],
+    },
+  ];
+}
+
+/** The values configuration `id` builds with, its linked ones read from their documents as they are now, and why some aren't there. */
+export async function configurationValues(doc: CadModelDoc, id: unknown, repo: Repo): Promise<{ values: Record<string, ParamValue> | undefined; problems: string[] }> {
+  const c = configurations(doc).find((x) => x.id === id);
+  if (!c) return { values: undefined, problems: [] };
+  const values: Record<string, ParamValue> = {};
+  const problems: string[] = [];
+  for (const [key, value] of Object.entries(c.params)) {
+    if (!isLinked(value)) values[key] = value as ParamValue;
+    else {
+      if (!repo) {
+        problems.push(`${key}: its linked value can't be read outside Patchwork`);
+        continue;
+      }
+      const linked = await repo.find<unknown>(value.link as AutomergeUrl).then(
+        (h) => resolvedFrom(h.doc()),
+        (error: unknown) => ({ value: undefined, problem: `can't be loaded: ${String((error as Error)?.message ?? error)}` }),
+      );
+      if (linked.problem === undefined) values[key] = linked.value!;
+      else problems.push(`${key}: its linked value ${linked.problem}`);
+    }
+  }
+  return { values: Object.keys(values).length ? values : undefined, problems };
 }
 
 /**
@@ -54,7 +98,9 @@ export function dependencies(doc: CadModelDoc | undefined): string[] {
     .filter((d) => !headsOf(d.specifier))
     .map((d) => docOf(d.specifier))
     .filter((url): url is NonNullable<typeof url> => !!url && !locks[url]);
-  return [...new Set(urls)];
+  // And the documents configurations link values to, read as they are (research/17, "Values from other documents").
+  const links = configurations(doc).flatMap((c) => Object.values(c.params).flatMap((v) => (isLinked(v) ? [docOf(v.link) ?? v.link] : [])));
+  return [...new Set([...urls, ...links])];
 }
 
 /**
@@ -92,17 +138,21 @@ export function notesOf(shapes: readonly MeshedShape[], sketches: number, trace:
 export interface BuildArgs {
   doc: CadModelDoc | undefined;
   repo?: Repo;
+  /** The placed model's params (params()), with their defaults filled in. */
+  params?: Record<string, unknown>;
 }
 
-/** The model at its default parameters, as a GLB in the scene's frame (Y up, metres). Never writes the model document. */
-export async function build({ doc, repo }: BuildArgs) {
+/** The model with its configuration's parameters (its defaults if none), as a GLB in the scene's frame (Y up, metres). Never writes the model document. */
+export async function build({ doc, repo, params: placed }: BuildArgs) {
   if (!doc) throw new Error("the CAD model isn't available");
   const source = String(doc.content ?? "");
-  const result = await buildModel(source, await readImports(source, doc, repo ?? globalThis.repo));
+  const r = repo ?? globalThis.repo;
+  const configured = await configurationValues(doc, placed?.[CONFIGURATION], r);
+  const result = await buildModel(source, await readImports(source, doc, r), configured.values);
   if (!result.ok) throw new Error(errorText(result.error));
   const { glb, bounds } = modelGlb(result.shapes, result.sketches);
-  const notes = notesOf(result.shapes, result.sketches.length, result.trace, result.dropped);
+  const notes = [notesOf(result.shapes, result.sketches.length, result.trace, result.dropped), ...configured.problems].filter(Boolean).join(". ") || undefined;
   return { kind: "glb" as const, glb, meta: { ...(bounds ? { bounds } : {}), ...(notes ? { notes } : {}) } };
 }
 
-export default { fingerprint, dependencies, build };
+export default { fingerprint, dependencies, params, build };

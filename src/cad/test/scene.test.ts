@@ -6,7 +6,7 @@ import { moduleKey } from "../src/kernel/imports.ts";
 import type { MeshedShape } from "../src/kernel/protocol.ts";
 import { parseGLB } from "../src/scene/glb.js";
 import { EDGE_COLOR, layerIds, linearColor, modelGlb, SKETCH_LAYER, toScene } from "../src/scene/modelGlb.ts";
-import { dependencies, errorText, fingerprint, notesOf, readImports } from "../src/scene/source.ts";
+import { configurationValues, dependencies, errorText, fingerprint, notesOf, params, readImports } from "../src/scene/source.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
@@ -15,12 +15,46 @@ const model = (content: string, cad: CadModelDoc["cad"] = {}): CadModelDoc => ({
 const A = generateAutomergeUrl();
 const B = generateAutomergeUrl();
 
-test("a model's fingerprint is its code and locks, nothing else it keeps", () => {
+test("a model's fingerprint is its code, locks and configurations, nothing else it keeps", () => {
   const base = model("export default () => 1;", { locks: { [A]: ["h2", "h1"] } });
   expect(fingerprint({ ...base, title: "Renamed", cad: { ...base.cad, views: [] } })).toBe(fingerprint(base));
   expect(fingerprint({ ...base, cad: { locks: { [A]: ["h1", "h2"] } } })).toBe(fingerprint(base));
   expect(fingerprint({ ...base, content: "export default () => 2;" })).not.toBe(fingerprint(base));
   expect(fingerprint({ ...base, cad: { locks: { [A]: ["h3"] } } })).not.toBe(fingerprint(base));
+  expect(fingerprint({ ...base, cad: { ...base.cad, configurations: [{ id: "c1", name: "Tall", params: { h: 30 } }] } })).not.toBe(fingerprint(base));
+});
+
+test("a placed model is built with one of its configurations, its defaults first", () => {
+  const doc = model("", { configurations: [{ id: "c1", name: "Tall", params: { h: 30 } }, { id: "c2", name: "Wide", params: { w: 90 } }] });
+  expect(params(doc)).toEqual([
+    {
+      key: "configuration",
+      label: "Configuration",
+      kind: "enum",
+      default: "",
+      options: [
+        { value: "", label: "Defaults" },
+        { value: "c1", label: "Tall" },
+        { value: "c2", label: "Wide" },
+      ],
+    },
+  ]);
+  expect(params(undefined)[0]?.options).toEqual([{ value: "", label: "Defaults" }]);
+});
+
+test("a configuration's values are read with its linked ones; a link that isn't a number says why", async () => {
+  const repo = new Repo();
+  const note = repo.create<{ width: string; nested: { not: string } }>({ width: "12.5", nested: { not: "a number" } });
+  const w = `${note.url}/width`;
+  const d = `${note.url}/nested`;
+  const doc = model("", { configurations: [{ id: "c1", name: "Linked", params: { h: 30, w: { link: w }, d: { link: d } } }] });
+  const read = await configurationValues(doc, "c1", repo);
+  expect(read.values).toEqual({ h: 30, w: 12.5 });
+  expect(read.problems).toEqual([expect.stringMatching(/^d: its linked value is .*not a number$/)]);
+  // The defaults: no values over the model's own.
+  expect(await configurationValues(doc, "", repo)).toEqual({ values: undefined, problems: [] });
+  // A configuration's links are documents it is built again for.
+  expect(dependencies(doc)).toEqual([note.url]);
 });
 
 test("a model depends on the documents it follows without a lock", () => {

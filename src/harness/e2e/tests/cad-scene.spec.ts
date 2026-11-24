@@ -7,7 +7,7 @@ import type { Page } from "@playwright/test";
 import { cameraDirection, clickHome, clickViewCube, docPathWith, entities, exampleSource, hideSidebars, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
 import { drag, sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { annotationsOf, built, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
+import { annotationsOf, built, builtBounds, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -328,4 +328,35 @@ test("an image inserted as a canvas is drawn in the scene, and Calibrate picks i
   expect(reachable.length).toBeGreaterThanOrEqual(2);
   for (const p of [reachable[0]!, reachable.at(-1)!]) await page.mouse.click(p.x, p.y);
   await expect(status(page)).toContainText("type the distance");
+});
+
+const TALL = `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";
+export const defaultParams = { h: 8 };
+export default function main({ h }) {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [40, 20] }) });
+  return { block: extrude({ sketch: sketch1, distance: h }) };
+}
+`;
+
+test("a placed model is built with a configuration chosen in the scene's inspector", async ({ page }) => {
+  await bootToFrame(page);
+  const { model, scene } = await modelInScene(page, TALL, "Block");
+  // The model's height, in metres up the scene: 8 mm by default.
+  await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.008, 5);
+
+  // A configuration of the model's own: 30 mm.
+  await page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { cad?: { configurations?: unknown[] } }) => void): void }> } }).repo;
+    (await repo.find(url)).change((d) => {
+      d.cad ??= {};
+      d.cad.configurations = [{ id: "tall", name: "Tall", params: { h: 30 } }];
+    });
+  }, model);
+  // The inspector's Settings; a select's accessible name has its option's text, so it is found by its key.
+  const choice = page.locator('.scene-tool .build-params label[data-key="configuration"] select');
+  await expect(choice.locator("option")).toHaveText(["Defaults", "Tall"]);
+  await choice.selectOption({ label: "Tall" });
+  await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.03, 5);
+  // The model's document is as it was: the choice is the placed model's.
+  expect(await sourceOf(page, model)).toBe(TALL);
 });
