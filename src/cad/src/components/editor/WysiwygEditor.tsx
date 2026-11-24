@@ -123,6 +123,8 @@ export function WysiwygEditor(props: WysiwygEditorProps) {
     placeCanvas: (face, anchor, point) => placeNewCanvas(shown(), face, anchor, point),
     info: documentInfo,
     element: props.element,
+    // A host's view lets the pointer through to the host: its place is the stage cell.
+    hostView: props.viewer ? () => stage : undefined,
   });
   const bodies = createBodies(editor, ui);
   const resultHovered = editor.resultHovered;

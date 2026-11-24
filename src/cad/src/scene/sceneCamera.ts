@@ -329,7 +329,8 @@ export function sceneCamera(m: CameraModel): SceneCamera {
     const next: Intent = { camera: given, given: true, classify: !given.fit && !given.subject };
     intent = next;
     const v = now();
-    if (!v) return;
+    // A fit of a model not built yet: placed once it is (refit).
+    if (!v || (given.fit && !m.modelPoints().length)) return;
     moveTo(poseOf(next, v), v, () => {
       classify(next);
       onEnd?.();

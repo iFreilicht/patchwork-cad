@@ -171,6 +171,11 @@ export function createInserts(props: {
   placeCanvas(face: Entity | undefined, anchor: CadAnchor | undefined, point: [number, number, number] | undefined): CanvasPlacement;
   info: (url: string) => DocumentInfo;
   element: HTMLElement;
+  /**
+   * The view's place when a host draws it, e.g. a scene (`WysiwygEditor`'s `viewer`): drags over it
+   * reach the host, not `element`, and are this editor's there, on a face or into the view.
+   */
+  hostView?: (() => HTMLElement | undefined) | undefined;
 }): Inserts {
   const { handle, editor, element } = props;
   const [pendingInsert, setPending] = createSignal<PendingInsert>();
@@ -466,8 +471,22 @@ export function createInserts(props: {
     end();
   };
 
+  /** Whether `event` is over the host's view, and not over this editor's own elements laid over it. */
+  const overHost = (event: Event) => {
+    const host = props.hostView?.();
+    if (!host || !(event instanceof MouseEvent) || event.composedPath().includes(element)) return false;
+    const r = host.getBoundingClientRect();
+    return event.clientX >= r.left && event.clientX <= r.right && event.clientY >= r.top && event.clientY <= r.bottom;
+  };
+
   /** What `event` is over: nothing of this editor's (another tool's view, e.g. a comment thread), or a target. */
   const targetOf = (event: Event): DropTarget | undefined => {
+    // In the host's view, which is the host's own element (e.g. a scene's canvas): a face of the model, else the view.
+    const host = props.hostView?.();
+    if (host && overHost(event)) {
+      const face = props.faceAt((event as MouseEvent).clientX, (event as MouseEvent).clientY);
+      return face ? { kind: "face", element: host, face } : { kind: "insert", element: host };
+    }
     let input = false;
     for (const node of event.composedPath()) {
       if (node === element) break;
@@ -593,6 +612,16 @@ export function createInserts(props: {
     editor.setNotice(urls.length > 1 ? `Only ${titleOf(first)} is inserted; the others are left out.` : undefined);
   };
 
+  // Drags over a host's view reach the host first: taken before it, on the way down.
+  const onHostDragOver = (event: DragEvent) => overHost(event) && onDragOver(event);
+  const onHostDragLeave = (event: DragEvent) => overHost(event) && onDragLeave();
+  const onHostDrop = (event: DragEvent) => overHost(event) && onDrop(event);
+  if (props.hostView) {
+    document.addEventListener("dragenter", onHostDragOver, true);
+    document.addEventListener("dragover", onHostDragOver, true);
+    document.addEventListener("dragleave", onHostDragLeave, true);
+    document.addEventListener("drop", onHostDrop, true);
+  }
   document.addEventListener("dragstart", onDragStart);
   document.addEventListener("dragend", onDragEnd, true);
   element.addEventListener("dragenter", onDragOver, true);
@@ -609,6 +638,10 @@ export function createInserts(props: {
     element.removeEventListener("dragleave", onDragLeave, true);
     element.removeEventListener("drop", onDrop, true);
     element.removeEventListener("paste", onPaste);
+    document.removeEventListener("dragenter", onHostDragOver, true);
+    document.removeEventListener("dragover", onHostDragOver, true);
+    document.removeEventListener("dragleave", onHostDragLeave, true);
+    document.removeEventListener("drop", onHostDrop, true);
   });
 
   return {

@@ -20,8 +20,12 @@ export async function sceneObjects(page: Page, scene: string): Promise<SceneObje
   }, scene);
 }
 
-/** Creates a model of `source` titled `title`, then a scene, and drops the model into the scene from the sidebar; returns both URLs. */
-export async function modelInScene(page: Page, source: string, title: string): Promise<{ model: string; scene: string }> {
+/**
+ * Creates a model of `source` titled `title`, then a scene, and drops the model into the scene from the
+ * sidebar; returns both URLs. The sidebars are hidden then, unless `sidebar`, which keeps the document
+ * sidebar to drag from.
+ */
+export async function modelInScene(page: Page, source: string, title: string, { sidebar = false } = {}): Promise<{ model: string; scene: string }> {
   await createModel(page);
   await setModelSource(page, source);
   const model = docUrl(page);
@@ -37,7 +41,8 @@ export async function modelInScene(page: Page, source: string, title: string): P
   await scenePort(page).waitFor({ timeout: 60_000 });
   await drag(page, title, scenePort(page));
   await expect.poll(() => sceneObjects(page, scene), { timeout: 30_000 }).toEqual([expect.objectContaining({ sourceUrl: model, providerId: "cad-model-scene" })]);
-  await hideSidebars(page);
+  if (sidebar) await page.getByRole("button", { name: "Hide context sidebar", exact: true }).click();
+  else await hideSidebars(page);
   // Built: the object's render doc has a GLB.
   await expect.poll(() => built(page, scene), { timeout: 60_000 }).toBe(true);
   return { model, scene };
@@ -88,5 +93,13 @@ export async function sourceOf(page: Page, model: string): Promise<string> {
   return page.evaluate(async (url) => {
     const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { content: string } }> } }).repo;
     return String((await repo.find(url)).doc().content);
+  }, model);
+}
+
+/** A model's annotations, read from the tab's repo by its URL. */
+export async function annotationsOf(page: Page, model: string): Promise<{ id: string; doc: string }[]> {
+  return page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { cad?: { annotations?: unknown[] } } }> } }).repo;
+    return JSON.parse(JSON.stringify((await repo.find(url)).doc().cad?.annotations ?? []));
   }, model);
 }

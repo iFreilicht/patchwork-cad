@@ -5,9 +5,9 @@
  */
 import type { Page } from "@playwright/test";
 import { cameraDirection, clickHome, clickViewCube, entities, exampleSource, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
-import { sidebarDocuments } from "../documents.ts";
+import { drag, sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sourceOf } from "../scene.ts";
+import { annotationsOf, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -163,4 +163,44 @@ test("an extrusion picks a sketch's profiles in the scene: hovered and chosen as
   await expect.poll(() => regions(page).then((r) => r.filter((x) => x.chosen).map((x) => x.key))).toEqual([region.key]);
   expect(await sourceOf(page, model)).toMatch(/const extrude1 = extrude\(\{[^\n]*regions: \[sketch2\.region\([^)]*\)\]/);
   if (shots) await page.screenshot({ path: `${shots}/scene-7-region-chosen.png` });
+});
+
+const status = (page: Page) => page.locator(".cad-model__status").first();
+
+/** Where a click reaches the first visible entity of `kind`. */
+async function visiblePoint(page: Page, kind: EntityKind): Promise<{ x: number; y: number }> {
+  for (const e of await entities(page, kind)) {
+    const at = await hostView(page).evaluate((el, x) => (el as unknown as { cadViewer: { screenPoint(e: unknown): { x: number; y: number } | undefined } }).cadViewer.screenPoint(x), e);
+    if (at) return at;
+  }
+  throw new Error(`no ${kind} is visible`);
+}
+
+test("documents dropped in the scene's view are the editor's: on a face pinned there, elsewhere waiting for their role", async ({ page }) => {
+  await bootToFrame(page);
+  const docs = await sidebarDocuments(page, {
+    "notes.txt": { file: "notes.txt", mimeType: "text/plain", text: "Anodize black" },
+    "squares.svg": { file: "squares.svg", mimeType: "image/svg+xml", text: SQUARES },
+  });
+  const { model, scene } = await modelInScene(page, plateWith(docs["squares.svg"]!), "Plate", { sidebar: true });
+  await openSelected(page);
+  await expect(timelineEntry(page, "sketch2")).toHaveAttribute("data-status", "unused", { timeout: 60_000 });
+  await clickHome(page);
+
+  // From Patchwork's sidebar onto a face: pinned there, and the scene places nothing.
+  const at = await visiblePoint(page, "face");
+  await drag(page, "notes.txt", at, false);
+  await expect(status(page)).toContainText("Pin notes.txt to the face");
+  await page.mouse.up();
+  await expect.poll(() => annotationsOf(page, model).then((l) => l.map((a) => a.doc))).toEqual([docs["notes.txt"]]);
+  expect(await sceneObjects(page, scene)).toHaveLength(1);
+
+  // A document row of the editor's browser into the view, off the model: it waits for its role.
+  const free = (await hostView(page).boundingBox())!;
+  const grip = page.locator('.cad-editor__document-row[data-name="squares"] .cad-editor__grip');
+  await drag(page, grip, { x: free.x + free.width - 40, y: free.y + free.height - 40 }, false);
+  await expect(status(page)).toContainText("Insert squares");
+  await page.mouse.up();
+  await expect(page.locator('.cad-editor__dialog[data-feature="insert"]')).toBeVisible();
+  expect(await sceneObjects(page, scene)).toHaveLength(1);
 });
