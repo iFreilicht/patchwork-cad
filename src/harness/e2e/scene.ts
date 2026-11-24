@@ -129,3 +129,18 @@ export async function builtGlb(page: Page, scene: string): Promise<{ layers: { i
     return { layers: json.scenes[0].extras?.layers ?? [], images: json.images ?? [], materials: json.materials ?? [], meshes: json.meshes, accessors: json.accessors };
   }, scene);
 }
+
+/** Selects an object of the scene by its row in the Inspector's tree, opening the Inspector first if it is closed. */
+export async function selectInScene(page: Page, name: string): Promise<void> {
+  // WebKit doesn't size the scene's grid column again when an edge that was empty (display: none by the
+  // stage's :has() rule) fills, e.g. with the drawer's rail: it keeps 0 px until the page is laid out
+  // anew. A resize of a pixel and back does that.
+  const size = page.viewportSize();
+  if (size) {
+    await page.setViewportSize({ width: size.width + 1, height: size.height });
+    await page.setViewportSize(size);
+  }
+  const row = page.locator(".scene-tool .stage-drawer").getByText(name, { exact: true }).first();
+  if (!(await row.isVisible())) await page.locator('.scene-tool button[aria-label="Inspector"]').click();
+  await row.click();
+}

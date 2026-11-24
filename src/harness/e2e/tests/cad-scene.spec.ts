@@ -7,7 +7,7 @@ import type { Page } from "@playwright/test";
 import { cameraDirection, clickHome, clickViewCube, docPathWith, entities, exampleSource, hideSidebars, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
 import { drag, pngBytes, sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { annotationsOf, built, builtBounds, builtGlb, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
+import { annotationsOf, built, builtBounds, builtGlb, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, selectInScene, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -251,13 +251,9 @@ test("pins and collaborators' pointers show in the scene: B sees A's annotation 
   // B opens the same scene, and the model's editor in it.
   await bootToFrame(b.page, docPathWith(a.page));
   await hideSidebars(b.page);
-  // Selected by a click on it, in the middle of B's view, once the scene shows all of it.
+  // Selected by its row in B's Inspector, once the scene has built it.
   await expect.poll(() => built(b.page, scene), { timeout: 60_000 }).toBe(true);
-  const port = (await scenePort(b.page).boundingBox())!;
-  await b.page.mouse.click(port.x + 10, port.y + port.height / 2);
-  await b.page.keyboard.press(".");
-  await b.page.waitForTimeout(600);
-  await scenePort(b.page).click();
+  await selectInScene(b.page, "Bracket");
   await openSelected(b.page);
   await expect(pins(b.page)).toHaveCount(1, { timeout: 30_000 });
   await expect(pins(b.page)).toBeVisible();
@@ -412,3 +408,4 @@ test("a placed model's image canvases are pictures in the scene's GLB: on XY and
   expect(y.max![1]).toBeCloseTo(0.00801, 7);
   if (shots) await page.screenshot({ path: `${shots}/scene-10-canvases-built.png` });
 });
+
