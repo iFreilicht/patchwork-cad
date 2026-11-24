@@ -16,7 +16,9 @@ import { contactToken } from "../components/presence.ts";
 import { entityIndex, pickingOf, type Hit, type Picking } from "./picking.ts";
 import { sceneCamera, type HostCamera } from "./sceneCamera.ts";
 import { sceneViewCube, type SceneViewCube } from "./sceneViewCube.ts";
-import { wideLines } from "./wideLines.js";
+import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import type { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import type { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
 export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions" | "peerMarkers" | "canvases" | "canvasPoint">;
@@ -28,6 +30,8 @@ const sameEntity = (a: Entity | undefined, b: Entity | undefined) => !!a && !!b 
 export interface SceneHost {
   /** The scene's three.js: every object drawn in its layer is made with it. */
   THREE: typeof Three;
+  /** The scene's wide lines, made with its three.js (scene STAGE.md, `api.wideLines`): WebGL draws its own one pixel wide. */
+  wideLines: { LineSegmentsGeometry: typeof LineSegmentsGeometry; LineMaterial: typeof LineMaterial; LineSegments2: typeof LineSegments2 };
   /** A group in the stage's frame, kept out of the scene's picking. */
   layer: Three.Group;
   /** The scene object's drawn matrix in the stage (16 numbers, column-major), or null while it has none. */
@@ -57,7 +61,7 @@ export interface HandEvent {
   locked?: boolean;
 }
 
-type Line = InstanceType<ReturnType<typeof wideLines>["LineMaterial"]>;
+type Line = LineMaterial;
 type HighlightMaterials = { face: Three.Material; line: { core: Line; halo: Line } };
 /** The materials of the view, in the theme's colours as Viewer.tsx's (research/14-edge-contrast.md). */
 interface Materials {
@@ -77,7 +81,7 @@ interface Materials {
   dispose(): void;
 }
 
-type Drawn = { shape: MeshedShape; mesh: Three.Mesh; wide: InstanceType<ReturnType<typeof wideLines>["LineSegments2"]> | undefined };
+type Drawn = { shape: MeshedShape; mesh: Three.Mesh; wide: LineSegments2 | undefined };
 
 
 export interface SceneView {
@@ -105,10 +109,10 @@ export interface SceneView {
 
 export function sceneView(host: SceneHost): SceneView {
   const { THREE } = host;
+  const { LineSegmentsGeometry, LineMaterial, LineSegments2 } = host.wideLines;
   const root = new THREE.Group();
   root.matrixAutoUpdate = false;
   host.layer.add(root);
-  const { LineSegmentsGeometry, LineMaterial, LineSegments2 } = wideLines(THREE);
   // As Viewer.tsx's groups: sketches, then overlays over the model, then highlights over everything.
   const bodies = new THREE.Group();
   const lines = new THREE.Group();

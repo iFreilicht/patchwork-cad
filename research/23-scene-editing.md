@@ -34,7 +34,7 @@ A model built twice in one page is built once: while an editor of it shows a bui
 
 | # | Gap | Decision |
 |---|---|---|
-| B1 | Every line is 1 px (`LineBasicMaterial`): edges, highlighted edges, sketches, overlays; no halos ([14](14-edge-contrast.md)). The scene draws wide lines itself (`LineMaterial`, `LineSegments2` in [`viewport.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/stage/viewport.js)) but doesn't give them to plugins, and ours are made with another copy of three.js, which the scene's renderer can't draw. | Done with a copy ([`wideLines.js`](../src/cad/src/scene/wideLines.js)), as of `glb.js`; then *scene*: expose them, and drop the copy |
+| B1 | Every line is 1 px (`LineBasicMaterial`): edges, highlighted edges, sketches, overlays; no halos ([14](14-edge-contrast.md)). The scene draws wide lines itself (`LineMaterial`, `LineSegments2` in [`viewport.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/stage/viewport.js)) but doesn't give them to plugins, and ours are made with another copy of three.js, which the scene's renderer can't draw. | Done: the scene gives plugins its own as `api.wideLines` (its branch `scene/wide-lines`); `sceneViewer` draws every line with them, as Viewer.tsx's |
 | B2 | Fixed colours instead of the theme's `--cad-model-*`: no dark mode; overlays orange. | Done: Viewer.tsx's materials, from the theme where the editor is |
 | B3 | A hovered face has no outline, a hovered selected edge no ring, ghosts no thin edges; face opacities differ. | Done, as in Viewer.tsx |
 | B4 | Bodies faded while picking keep their edges. | Done |

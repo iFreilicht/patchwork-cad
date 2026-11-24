@@ -11,7 +11,7 @@ import { WysiwygEditor, type EditorControls } from "../components/editor/Wysiwyg
 import { UNDO_IGNORE } from "../model/locks.ts";
 import type { CadModelDoc } from "../types.ts";
 import type { HostCamera } from "./sceneCamera.ts";
-import { sceneView, type HandEvent, type SceneView } from "./sceneViewer.ts";
+import { sceneView, type HandEvent, type SceneHost, type SceneView } from "./sceneViewer.ts";
 import "../styles.css";
 
 /** The scene source whose objects this edits (index.ts). */
@@ -20,6 +20,7 @@ export const SOURCE_ID = "cad-model-scene";
 /** The parts of the scene's api this uses: the view plugin's, and its focus stage's (`api.focus()`). */
 type Stage = {
   THREE: SceneViewTHREE;
+  wideLines: SceneHost["wideLines"];
   signal: AbortSignal;
   repo: { find(url: string): Promise<DocHandle<CadModelDoc>> };
   scene(): { objects: Record<string, { providerId?: string; sourceUrl?: string; name?: string } | undefined> };
@@ -93,6 +94,7 @@ export function create(api: ViewApi) {
     const show = stage.display(id, { hidden: true });
     const view = sceneView({
       THREE: stage.THREE,
+      wideLines: stage.wideLines,
       layer,
       frame: () => stage.worldOf(id),
       ray: (x, y) => stage.ray(x, y),
