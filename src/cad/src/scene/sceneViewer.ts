@@ -94,7 +94,7 @@ export interface SceneView {
   };
   /** The scene object moved: draw the model where it is now. */
   moved(): void;
-  /** Before the scene draws a frame: the ViewCube follows the camera. */
+  /** After the scene drew a frame: what lies over the view (the ViewCube, pins, collaborators' names) follows its camera. */
   update(): void;
   /** What is under the pointer now, for tests. */
   hovered(): Entity | undefined;

@@ -88,6 +88,8 @@ export function sceneViewCube(view: HTMLElement, camera: SceneCamera, collapsedA
     renderer.setSize(size, size, false);
     cube.orient(c);
     renderer.render(cube.scene, cube.camera);
+    // For tests: the direction it was drawn for, from the target to the camera.
+    root.dataset["direction"] = c.getWorldDirection(new THREE.Vector3()).negate().toArray().map((x) => x.toFixed(3)).join(",");
   };
   const hover = (region: Region | undefined) => {
     hovered = region;

@@ -83,6 +83,25 @@ async function expectDirection(page: Page, region: Region | [number, number, num
   await expect.poll(() => cameraDirection(page)).toEqual(region.map((c) => expect.closeTo(c / length, 2)));
 }
 
+/** Orbits the scene's camera by a left drag over an empty part of the view, `dx` pixels across. */
+async function orbit(page: Page, dx: number): Promise<void> {
+  const free = (await hostView(page).boundingBox())!;
+  const from = { x: free.x + free.width - 60, y: free.y + free.height - 60 };
+  const before = await cameraDirection(page);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x - dx, from.y, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(() => cameraDirection(page)).not.toEqual(before);
+}
+
+/** Whether the ViewCube was last drawn for the camera as it is now. */
+async function cubeFollows(page: Page): Promise<boolean> {
+  const drawnFor = (await hostView(page).locator(".cad-viewcube").getAttribute("data-direction"))?.split(",").map(Number) ?? [];
+  const now = await cameraDirection(page);
+  return drawnFor.length === 3 && drawnFor.every((c, i) => Math.abs(c - now[i]!) < 0.01);
+}
+
 type Intent = { fit?: number[]; subject?: { faces: unknown[] } } | undefined;
 const intent = (page: Page) => hostView(page).evaluate((el) => (el as unknown as { cadViewer: { intent(): Intent } }).cadViewer.intent());
 
@@ -115,10 +134,13 @@ test("views move the scene's camera: the ViewCube, Home, a named view made from 
   await expectDirection(page, [0.55, -0.85, 0.65]);
   await expect(row("Home")).toHaveAttribute("data-current", "true");
 
+  // Orbited with the scene's own controls: the ViewCube follows, though nothing the scene tells its plugins' update() changed.
+  await orbit(page, 120);
+  await expect.poll(() => cubeFollows(page)).toBe(true);
+
   // Close to a face: the model is cut off, and the faces in the view are its subject.
-  const face = (await entities(page, "face"))[0]!;
-  const at = await hostView(page).evaluate((el, e) => (el as unknown as { cadViewer: { screenPoint(e: unknown): { x: number; y: number } | undefined } }).cadViewer.screenPoint(e), face);
-  await page.mouse.move(at!.x, at!.y);
+  const at = await visiblePoint(page, "face");
+  await page.mouse.move(at.x, at.y);
   await expect.poll(async () => {
     await page.mouse.wheel(0, -400);
     return (await intent(page))?.subject?.faces.length ?? 0;
@@ -220,6 +242,11 @@ test("pins and collaborators' pointers show in the scene: B sees A's annotation 
   await expect(pins(a.page)).toHaveCount(1);
   await expect(pins(a.page)).toBeVisible();
   await expect(pins(a.page)).toHaveAttribute("aria-label", "notes");
+  // The pin stays on its face as the scene's camera orbits.
+  await hideSidebars(a.page);
+  const before = await pins(a.page).boundingBox();
+  await orbit(a.page, 80);
+  await expect.poll(() => pins(a.page).boundingBox()).not.toEqual(before);
 
   // B opens the same scene, and the model's editor in it.
   await bootToFrame(b.page, docPathWith(a.page));

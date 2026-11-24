@@ -40,6 +40,8 @@ type ViewApi = {
   focus(): Stage | null;
   overlay(): HTMLElement;
   hand(spec: { kind: string; name: string; input: object; pointer?: boolean; escape?: () => boolean; put?: () => void }): () => void;
+  /** Calls `fn` after every frame the scene draws; → off. */
+  afterRender(fn: () => void): () => void;
 };
 
 /**
@@ -121,10 +123,14 @@ export function create(api: ViewApi) {
     let unmount = () => {};
     let stopped = false;
     let putDown = () => {};
+    // What lies over the scene's view (the ViewCube, pins, collaborators' names) follows its camera in
+    // every frame drawn: an orbit changes nothing that update() is told of (scene STAGE.md, "`instance`").
+    const offRender = api.afterRender(() => view.update());
     const stop = () => {
       if (stopped) return;
       stopped = true;
       if (session?.id === id) session = undefined;
+      offRender();
       putDown();
       unmount();
       element.remove();
@@ -182,7 +188,6 @@ export function create(api: ViewApi) {
     ],
     update() {
       session?.view.moved();
-      session?.view.update();
     },
     dispose() {
       session?.stop();
