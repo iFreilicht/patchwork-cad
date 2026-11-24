@@ -5,9 +5,9 @@
  */
 import type { Page } from "@playwright/test";
 import { cameraDirection, clickHome, clickViewCube, docPathWith, entities, exampleSource, hideSidebars, timelineEntry, toolbarButton, type Entity, type EntityKind, type Region } from "../cad.ts";
-import { drag, sidebarDocuments } from "../documents.ts";
+import { drag, pngBytes, sidebarDocuments } from "../documents.ts";
 import { expect, test } from "../fixtures.ts";
-import { annotationsOf, built, builtBounds, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
+import { annotationsOf, built, builtBounds, builtGlb, entityKey, highlightedInScene, hostView, hoverInScene, modelInScene, openSelected, SCENE_MODULES, sceneEditor, sceneObjects, scenePort, sourceOf } from "../scene.ts";
 import { bootToFrame } from "../ui.ts";
 
 test.use({ siteModules: SCENE_MODULES });
@@ -359,4 +359,56 @@ test("a placed model is built with a configuration chosen in the scene's inspect
   await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.03, 5);
   // The model's document is as it was: the choice is the placed model's.
   expect(await sourceOf(page, model)).toBe(TALL);
+});
+
+test("a placed model's image canvases are pictures in the scene's GLB: on XY and on a face, each on a layer of its own", async ({ page }) => {
+  await bootToFrame(page);
+  const docs = await sidebarDocuments(page, {
+    "grid.svg": { file: "grid.svg", mimeType: "image/svg+xml", text: GRID_SVG },
+    "photo.png": { file: "photo.png", mimeType: "image/png", bytes: await pngBytes(page, 160, 120) },
+  });
+  const { model, scene } = await modelInScene(page, TALL, "Block", { sidebar: true });
+  // The drawing on XY, as the editor stores one.
+  await page.evaluate(
+    async ([url, image]) => {
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { cad?: { canvases?: unknown[] } }) => void): void }> } }).repo;
+      (await repo.find(url!)).change((d) => {
+        d.cad ??= {};
+        d.cad.canvases = [{ id: "grid", name: "grid", image, plane: { origin: [0, 0, 0], normal: [0, 0, 1], xDir: [1, 0, 0] }, at: [100, 50], position: [20, 10], scale: 0.2, angle: 0, opacity: 0.5, through: false }];
+      });
+    },
+    [model, docs["grid.svg"]!],
+  );
+
+  // The photo dropped on the block's top face in the scene's editor, as a canvas.
+  await openSelected(page);
+  await expect.poll(async () => Number(await hostView(page).getAttribute("data-vertices"))).toBeGreaterThan(0);
+  await clickHome(page);
+  let top: { x: number; y: number } | undefined;
+  for (const face of await entities(page, "face")) {
+    const c = await hostView(page).evaluate((el, e) => (el as unknown as { cadViewer: { centroid(e: unknown): number[] | undefined } }).cadViewer.centroid(e), face);
+    if (c && Math.abs(c[2]! - 8) < 1e-6) top = await hostView(page).evaluate((el, e) => (el as unknown as { cadViewer: { screenPoint(e: unknown): { x: number; y: number } | undefined } }).cadViewer.screenPoint(e), face);
+  }
+  await drag(page, "photo.png", top!, false);
+  await expect(status(page)).toContainText("Insert photo.png to the face");
+  await page.mouse.up();
+  await page.locator(".cad-editor__dialog").getByRole("radiogroup", { name: "Use as" }).getByText("Canvas", { exact: true }).click();
+  await expect.poll(() => sourceOf(page, model).then(() => page.evaluate(async (url) => ((await (window as unknown as { repo: { find(u: string): Promise<{ doc(): { cad?: { canvases?: unknown[] } } }> } }).repo.find(url)).doc().cad?.canvases ?? []).length, model))).toBe(2);
+  // Closed with the inspector's Close: the scene shows its build again.
+  await page.locator('.scene-tool button[data-command="cad-edit"]').click();
+  await expect(sceneEditor(page)).toHaveCount(0);
+
+  // Built again: a picture per canvas, on its own layer, the drawing marked as one.
+  await expect.poll(async () => (await builtGlb(page, scene))?.images.length ?? 0, { timeout: 60_000 }).toBe(2);
+  const glb = (await builtGlb(page, scene))!;
+  expect(glb.layers.map((l) => l.name)).toEqual(["block", "grid", "photo"]);
+  expect(glb.images.map((i) => i.mimeType)).toEqual(["image/png", "image/png"]);
+  const picture = (name: string) => glb.meshes.find((m) => m.name === name)!.primitives[0]!;
+  expect(glb.materials[picture("grid").material]!.extras).toEqual({ colorScheme: "light" });
+  expect(glb.materials[picture("photo").material]!.extras).toBeUndefined();
+  // On the top face, 8 mm up and 0.01 mm above it (modelGlb's CANVAS_LIFT): in metres, Y up.
+  const y = glb.accessors[picture("photo").attributes.POSITION]!;
+  expect(y.min![1]).toBeCloseTo(0.00801, 7);
+  expect(y.max![1]).toBeCloseTo(0.00801, 7);
+  if (shots) await page.screenshot({ path: `${shots}/scene-10-canvases-built.png` });
 });

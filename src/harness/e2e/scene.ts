@@ -113,3 +113,19 @@ export async function builtBounds(page: Page, scene: string): Promise<{ min: num
     return render?.["bounds"] ? JSON.parse(JSON.stringify(render["bounds"])) : undefined;
   }, scene);
 }
+
+/** The scene object's built GLB's JSON chunk, read from its render doc's GLB file, once it has one. */
+export async function builtGlb(page: Page, scene: string): Promise<{ layers: { id: string; name: string }[]; images: { mimeType: string }[]; materials: { extras?: object }[]; meshes: { name: string; primitives: { attributes: { POSITION: number }; material: number }[] }[]; accessors: { min?: number[]; max?: number[] }[] } | undefined> {
+  return page.evaluate(async (url) => {
+    const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): Record<string, unknown> }> } }).repo;
+    const o = Object.values(((await repo.find(url)).doc()["objects"] ?? {}) as Record<string, { renderUrl?: string }>)[0];
+    const render = o?.renderUrl ? (await repo.find(o.renderUrl)).doc() : undefined;
+    const glbUrl = render?.["glbUrl"] as string | undefined;
+    if (!glbUrl) return undefined;
+    const bytes = (await repo.find(glbUrl)).doc()["content"] as Uint8Array;
+    // GLB: a 12-byte header, then the JSON chunk's length, its type, and the JSON.
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + view.getUint32(12, true))));
+    return { layers: json.scenes[0].extras?.layers ?? [], images: json.images ?? [], materials: json.materials ?? [], meshes: json.meshes, accessors: json.accessors };
+  }, scene);
+}

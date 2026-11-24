@@ -8,6 +8,25 @@ export const EDGE_COLOR = "#1e1e1e";
 export const SKETCH_COLOR = "#2f6fd6";
 /** The layer of the sketches main returns. */
 export const SKETCH_LAYER = "sketches";
+/** A canvas's layer, by its id: each is shown and hidden on its own. */
+export const canvasLayer = (id: string) => `canvas:${id}`;
+/** How far a canvas lies off its plane, in model units, so that it shows over a face it lies on, as the editor's polygon offset does. */
+export const CANVAS_LIFT = 0.01;
+
+/** An image canvas as a build places it (canvasGlb.ts). */
+export interface GlbCanvas {
+  id: string;
+  name: string;
+  /** Its corners in the model's frame, counterclockwise from the image's bottom left. */
+  corners: readonly (readonly number[])[];
+  /** Its plane's normal, which it lies a hair off along. */
+  normal: readonly number[];
+  image: Uint8Array;
+  mimeType: "image/png" | "image/jpeg";
+  opacity: number;
+  /** A drawing, drawn for a light background, which a scene recolours for a dark one; not a photo. */
+  drawing: boolean;
+}
 
 /**
  * Points of the model (Z up, millimetres, replicad's convention) in a scene's frame (Y up, metres,
@@ -67,9 +86,10 @@ export interface ModelGlb {
 /**
  * A build's shapes and sketches as a GLB by the scene's conventions: a node per shape, named by it,
  * its faces in its colour (none: the theme's) and its edges dark; a layer per shape, so the scene can
- * show and hide bodies; the sketches main returns as lines on a layer of their own.
+ * show and hide bodies; the sketches main returns as lines on a layer of their own; each canvas a
+ * picture on a layer of its own.
  */
-export function modelGlb(shapes: readonly MeshedShape[], sketches: readonly ShownSketch[] = []): ModelGlb {
+export function modelGlb(shapes: readonly MeshedShape[], sketches: readonly ShownSketch[] = [], canvases: readonly GlbCanvas[] = []): ModelGlb {
   const meshes: GlbMesh[] = [];
   const nodes: GlbNode[] = [];
   const layers: { id: string; name: string }[] = [];
@@ -100,6 +120,17 @@ export function modelGlb(shapes: readonly MeshedShape[], sketches: readonly Show
     nodes.push({ name: "Sketches", mesh: meshes.length - 1, extras: { layer: SKETCH_LAYER } });
     layers.push({ id: SKETCH_LAYER, name: "Sketches" });
     for (const p of meshes.at(-1)!.primitives) grow(p.positions as Float32Array);
+  }
+  for (const c of canvases) {
+    const lifted = c.corners.flatMap((p) => p.map((x, k) => x + (c.normal[k] ?? 0) * CANVAS_LIFT));
+    const positions = toScene(lifted);
+    // glTF's (0, 0) is the image's top left; the corners start at its bottom left.
+    const uvs = [0, 1, 1, 1, 1, 0, 0, 0];
+    const picture = { positions, uvs, indices: [0, 1, 2, 0, 2, 3], texture: { image: c.image, mimeType: c.mimeType }, color: [1, 1, 1, c.opacity] as [number, number, number, number], blend: true, unlit: true, doubleSided: true, ...(c.drawing ? { materialExtras: { colorScheme: "light" } } : {}) };
+    meshes.push({ name: c.name, primitives: [picture] });
+    nodes.push({ name: c.name, mesh: meshes.length - 1, extras: { layer: canvasLayer(c.id) } });
+    layers.push({ id: canvasLayer(c.id), name: c.name });
+    grow(positions);
   }
   const glb = encodeGLB({ meshes, nodes, extras: { layers }, generator: "patchwork-cad" });
   return { glb, bounds, triangles };

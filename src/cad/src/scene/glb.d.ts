@@ -3,9 +3,19 @@
 type Floats = Float32Array | number[];
 type Color = string | [number, number, number] | [number, number, number, number];
 
+/** A PNG or JPEG as a primitive's base colour (glb.js v4). */
+export interface GlbTexture {
+  image: Uint8Array;
+  mimeType: "image/png" | "image/jpeg";
+  smooth?: boolean;
+  repeat?: boolean;
+}
+
 export interface GlbPrimitive {
   positions: Floats;
   normals?: Floats;
+  /** TEXCOORD_0 per vertex; (0, 0) is the image's top left. */
+  uvs?: Floats;
   indices?: Uint32Array | Uint16Array | number[];
   mode?: number;
   color?: Color;
@@ -14,6 +24,9 @@ export interface GlbPrimitive {
   doubleSided?: boolean;
   unlit?: boolean;
   blend?: boolean;
+  texture?: GlbTexture;
+  /** The material's `extras`, e.g. `{ colorScheme: "light" }` for a picture drawn for a light background (glb.js v5). */
+  materialExtras?: object;
 }
 
 export interface GlbMesh {

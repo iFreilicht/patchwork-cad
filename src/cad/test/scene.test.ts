@@ -5,7 +5,7 @@ import { beforeAll, expect, test } from "vitest";
 import { moduleKey } from "../src/kernel/imports.ts";
 import type { MeshedShape } from "../src/kernel/protocol.ts";
 import { parseGLB } from "../src/scene/glb.js";
-import { EDGE_COLOR, layerIds, linearColor, modelGlb, SKETCH_LAYER, toScene } from "../src/scene/modelGlb.ts";
+import { CANVAS_LIFT, canvasLayer, EDGE_COLOR, layerIds, linearColor, modelGlb, SKETCH_LAYER, toScene, type GlbCanvas } from "../src/scene/modelGlb.ts";
 import { configurationValues, dependencies, errorText, fingerprint, notesOf, params, readImports } from "../src/scene/source.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
@@ -141,6 +141,39 @@ test("a build is a GLB of a node per shape, on its own layer, with dark edges an
   expect(bounds?.min.map((v) => +v.toFixed(6))).toEqual([0, 0, -0.01]);
   expect(bounds?.max.map((v) => +v.toFixed(6))).toEqual([0.01, 0.02, 0]);
 });
+
+test("a canvas is a picture on a layer of its own, a hair off its plane; a drawing says it was drawn for a light background", () => {
+  const image = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const drawing: GlbCanvas = { id: "c1", name: "plan", corners: [[0, 0, 0], [20, 0, 0], [20, 10, 0], [0, 10, 0]], normal: [0, 0, 1], image, mimeType: "image/png", opacity: 0.5, drawing: true };
+  const photo: GlbCanvas = { ...drawing, id: "c2", name: "photo", image: new Uint8Array([0xff, 0xd8, 0xff, 4]), mimeType: "image/jpeg", drawing: false };
+  const { glb } = modelGlb([square("plate", 0)], [], [drawing, photo]);
+  const { json } = parseGLB(glb);
+  expect(json.scenes[0].extras.layers.slice(1)).toEqual([
+    { id: canvasLayer("c1"), name: "plan" },
+    { id: canvasLayer("c2"), name: "photo" },
+  ]);
+  const [, plan, picture] = json.meshes;
+  const primitive = plan.primitives[0];
+  // The image's top left is its corners' last.
+  expect(Array.from(readFloats(json, glb, primitive.attributes.TEXCOORD_0))).toEqual([0, 1, 1, 1, 1, 0, 0, 0]);
+  // Z up in millimetres, lifted along the plane's normal, to Y up in metres.
+  expect(Array.from(readFloats(json, glb, primitive.attributes.POSITION)).slice(0, 3).map((v) => +v.toFixed(9))).toEqual([0, +(CANVAS_LIFT / 1000).toFixed(9), 0]);
+  const material = json.materials[primitive.material];
+  expect(material.alphaMode).toBe("BLEND");
+  expect(material.pbrMetallicRoughness.baseColorFactor[3]).toBe(0.5);
+  expect(material.extras).toEqual({ colorScheme: "light" });
+  expect(json.materials[picture.primitives[0].material].extras).toBeUndefined();
+  expect(json.images.map((i: { mimeType: string }) => i.mimeType)).toEqual(["image/png", "image/jpeg"]);
+});
+
+/** An accessor's floats, read from the GLB's binary chunk. */
+function readFloats(json: { accessors: { bufferView: number; count: number; type: string; byteOffset?: number }[]; bufferViews: { byteOffset?: number }[] }, glb: Uint8Array, index: number): Float32Array {
+  const { bin } = parseGLB(glb);
+  const a = json.accessors[index]!;
+  const size = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type]!;
+  const offset = (json.bufferViews[a.bufferView]!.byteOffset ?? 0) + (a.byteOffset ?? 0);
+  return new Float32Array(bin!.buffer.slice(bin!.byteOffset + offset, bin!.byteOffset + offset + a.count * size * 4));
+}
 
 test("an empty build is a valid GLB with nothing in it", () => {
   const { glb, bounds } = modelGlb([]);

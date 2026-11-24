@@ -9,9 +9,11 @@ import { resolvedFrom } from "../components/configurations.ts";
 import { createImports, docOf, headsOf } from "../components/imports.ts";
 import { documentImports, type Imports } from "../kernel/imports.ts";
 import type { MeshedShape, ModelError, FeatureTrace } from "../kernel/protocol.ts";
+import { canvases } from "../model/canvases.ts";
 import { configurations, isLinked } from "../model/configurations.ts";
 import { locksOf } from "../model/locks.ts";
 import type { CadModelDoc, ParamValue } from "../types.ts";
+import { canvasImages, faceRefsOf, placedCanvases } from "./canvasGlb.ts";
 import { buildModel } from "./kernel.ts";
 import { modelGlb } from "./modelGlb.ts";
 
@@ -39,11 +41,11 @@ const sortedLocks = (doc: CadModelDoc | undefined) =>
 
 /**
  * What build() and params() read of the model document: its code, the locks of the documents it
- * follows, and its configurations. Not its title, views, comments or annotations, so editing those
- * builds nothing.
+ * follows, its configurations and its canvases. Not its title, views, comments or annotations, so
+ * editing those builds nothing.
  */
 export function fingerprint(doc: CadModelDoc | undefined): string {
-  return `cad2:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc), configurations(doc)]))}`;
+  return `cad3:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc), configurations(doc), canvases(doc)]))}`;
 }
 
 /** The key of the configuration param: a model's configuration's id, or "" for its defaults. */
@@ -100,7 +102,8 @@ export function dependencies(doc: CadModelDoc | undefined): string[] {
     .filter((url): url is NonNullable<typeof url> => !!url && !locks[url]);
   // And the documents configurations link values to, read as they are (research/17, "Values from other documents").
   const links = configurations(doc).flatMap((c) => Object.values(c.params).flatMap((v) => (isLinked(v) ? [docOf(v.link) ?? v.link] : [])));
-  return [...new Set([...urls, ...links])];
+  // And the images of its canvases, which it follows unless a canvas names a version.
+  return [...new Set([...urls, ...links, ...canvasImages(doc)])];
 }
 
 /**
@@ -148,10 +151,11 @@ export async function build({ doc, repo, params: placed }: BuildArgs) {
   const source = String(doc.content ?? "");
   const r = repo ?? globalThis.repo;
   const configured = await configurationValues(doc, placed?.[CONFIGURATION], r);
-  const result = await buildModel(source, await readImports(source, doc, r), configured.values);
+  const { result, located } = await buildModel(source, await readImports(source, doc, r), configured.values, faceRefsOf(doc).map((f) => f.ref));
   if (!result.ok) throw new Error(errorText(result.error));
-  const { glb, bounds } = modelGlb(result.shapes, result.sketches);
-  const notes = [notesOf(result.shapes, result.sketches.length, result.trace, result.dropped), ...configured.problems].filter(Boolean).join(". ") || undefined;
+  const pictures = await placedCanvases(doc, r, result.shapes, located);
+  const { glb, bounds } = modelGlb(result.shapes, result.sketches, pictures.canvases);
+  const notes = [notesOf(result.shapes, result.sketches.length, result.trace, result.dropped), ...configured.problems, ...pictures.problems].filter(Boolean).join(". ") || undefined;
   return { kind: "glb" as const, glb, meta: { ...(bounds ? { bounds } : {}), ...(notes ? { notes } : {}) } };
 }
 

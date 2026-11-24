@@ -351,7 +351,7 @@ const readable = (context: CanvasRenderingContext2D) => {
  * SVG with what its HTML falls back on, alike in every browser, and without its other HTML if the
  * browser won't let it be a texture otherwise. Rejects with why not.
  */
-async function drawImage(bytes: Uint8Array, mimeType: string, svg: string | undefined): Promise<CanvasImage> {
+export async function drawImage(bytes: Uint8Array, mimeType: string, svg: string | undefined): Promise<CanvasImage> {
   if (svg === undefined) return (await drawOnce(bytes, mimeType, svg)).image;
   const fallen = withoutHtml(svg, false);
   const drawn = await drawOnce(new TextEncoder().encode(sizedSvg(fallen)), mimeType, svg);
