@@ -5,7 +5,7 @@ import { beforeAll, expect, test } from "vitest";
 import { moduleKey } from "../src/kernel/imports.ts";
 import type { MeshedShape } from "../src/kernel/protocol.ts";
 import { parseGLB } from "../src/scene/glb.js";
-import { CANVAS_LIFT, canvasLayer, EDGE_COLOR, layerIds, linearColor, modelGlb, SKETCH_LAYER, toScene, type GlbCanvas } from "../src/scene/modelGlb.ts";
+import { CANVAS_LIFT, canvasLayer, EDGE_COLOR, layerIds, LINE_WIDTH, linearColor, modelGlb, SKETCH_LAYER, toScene, type GlbCanvas } from "../src/scene/modelGlb.ts";
 import { configurationValues, dependencies, errorText, fingerprint, notesOf, params, readImports } from "../src/scene/source.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
@@ -112,7 +112,7 @@ const square = (name: string, z: number, extra: Partial<MeshedShape> = {}): Mesh
   ...extra,
 });
 
-test("a build is a GLB of a node per shape, on its own layer, with dark edges and sketches on a layer", () => {
+test("a build is a GLB of a node per shape, on its own layer, with dark edges and sketches on a layer, both drawn as wide as the editor draws them", () => {
   const sketch = { name: "sketch1", outline: [{ points: [[0, 0, 0], [10, 0, 0], [10, 10, 0]] as [number, number, number][], closed: true }] };
   const { glb, bounds, triangles } = modelGlb([square("plate", 0), square("lid", 20, { color: "#00ff00" })], [sketch]);
   const { json } = parseGLB(glb);
@@ -135,6 +135,9 @@ test("a build is a GLB of a node per shape, on its own layer, with dark edges an
   const edge = json.materials[plate.primitives[1].material];
   expect(edge.extensions).toHaveProperty("KHR_materials_unlit");
   expect(EDGE_COLOR).toMatch(/^#/);
+  expect(edge.extras).toEqual({ lineWidth: LINE_WIDTH });
+  expect(json.materials[sketches.primitives[0].material].extras).toEqual({ lineWidth: LINE_WIDTH });
+  expect(json.materials[plate.primitives[0].material]?.extras).toBeUndefined();
   // A closed outline of three points is three segments.
   expect(json.accessors[sketches.primitives[0].attributes.POSITION].count).toBe(6);
   expect(triangles).toBe(4);

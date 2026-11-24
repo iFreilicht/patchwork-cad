@@ -27,9 +27,16 @@ async function openM1InScene(page: Page): Promise<void> {
   await expect.poll(async () => Number(await hostView(page).getAttribute("data-vertices"))).toBeGreaterThan(0);
 }
 
-test("a model dropped into a scene is built there, and its Open edits it in place", async ({ page }) => {
+test("a model dropped into a scene is built there, its edges and sketches as wide as the editor draws them, and its Open edits it in place", async ({ page }) => {
   await bootToFrame(page);
-  await modelInScene(page, exampleSource("m1"), "Bracket");
+  const { scene } = await modelInScene(page, exampleSource("m1"), "Bracket");
+  // Its GLB's lines ask for the editor's width, which the scene draws them at (its README, "GLB conventions").
+  await expect.poll(async () => (await builtGlb(page, scene))?.meshes.length ?? 0, { timeout: 60_000 }).toBeGreaterThan(0);
+  const glb = (await builtGlb(page, scene))!;
+  const [surface, lines] = glb.meshes[0]!.primitives;
+  expect(glb.materials[lines!.material]!.extras).toEqual({ lineWidth: 1.5 });
+  expect(glb.materials[surface!.material]?.extras).toBeUndefined();
+  if (shots) await page.screenshot({ path: `${shots}/scene-0-built.png` });
   await openSelected(page);
   // The live build, drawn by the scene.
   await expect.poll(async () => Number(await hostView(page).getAttribute("data-vertices"))).toBeGreaterThan(0);

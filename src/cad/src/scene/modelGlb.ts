@@ -6,6 +6,8 @@ import { computeBounds, computeNormals, encodeGLB, MODE, type Bounds, type GlbMe
 export const EDGE_COLOR = "#1e1e1e";
 /** Sketches main returns, as the editor draws them. */
 export const SKETCH_COLOR = "#2f6fd6";
+/** Edges and sketches are drawn this wide, in CSS pixels, as the editor draws them (the scene's README, "GLB conventions": wide lines). */
+export const LINE_WIDTH = 1.5;
 /** The layer of the sketches main returns. */
 export const SKETCH_LAYER = "sketches";
 /** A canvas's layer, by its id: each is shown and hidden on its own. */
@@ -107,7 +109,7 @@ export function modelGlb(shapes: readonly MeshedShape[], sketches: readonly Show
     const normals = shape.faces.normals?.length === shape.faces.vertices.length ? toScene(shape.faces.normals, 1) : computeNormals(positions, indices);
     const color = linearColor(shape.color, shape.opacity);
     const faces = { positions, normals, indices, roughness: 0.45, metallic: 0.15, ...(color ? { color } : {}) };
-    const edges = shape.edges?.lines.length ? [{ positions: toScene(shape.edges.lines), mode: MODE.LINES, color: EDGE_COLOR, unlit: true }] : [];
+    const edges = shape.edges?.lines.length ? [{ positions: toScene(shape.edges.lines), mode: MODE.LINES, color: EDGE_COLOR, unlit: true, materialExtras: { lineWidth: LINE_WIDTH } }] : [];
     meshes.push({ name: shape.name, primitives: [faces, ...edges] });
     nodes.push({ name: shape.name, mesh: meshes.length - 1, extras: { layer: id } });
     layers.push({ id, name: shape.name || id });
@@ -116,7 +118,7 @@ export function modelGlb(shapes: readonly MeshedShape[], sketches: readonly Show
   });
   const lines = sketches.map(segments).filter((s) => s.length);
   if (lines.length) {
-    meshes.push({ name: "Sketches", primitives: lines.map((l) => ({ positions: toScene(l), mode: MODE.LINES, color: SKETCH_COLOR, unlit: true })) });
+    meshes.push({ name: "Sketches", primitives: lines.map((l) => ({ positions: toScene(l), mode: MODE.LINES, color: SKETCH_COLOR, unlit: true, materialExtras: { lineWidth: LINE_WIDTH } })) });
     nodes.push({ name: "Sketches", mesh: meshes.length - 1, extras: { layer: SKETCH_LAYER } });
     layers.push({ id: SKETCH_LAYER, name: "Sketches" });
     for (const p of meshes.at(-1)!.primitives) grow(p.positions as Float32Array);

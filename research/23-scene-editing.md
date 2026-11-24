@@ -1,6 +1,6 @@
 # Editing Models in a Scene
 
-A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: in progress, see [Plan](#plan). Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`; the tests run against the scene with this document's scene changes (the submodule, [Plan](#plan)).
+A CAD model placed in a [scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene) is built as its content and edited where it stands ([src/cad/README.md](../src/cad/README.md#in-a-scene)). Editing there falls short of the editor's own view in many ways. This document lists every gap and what we decided to do about it. Live documents on canvases ([22](22-document-canvases.md)) are left out: they need more research and possibly changes to Patchwork. Status: done; the *scene* changes are still to be sent, see [Plan](#plan). Scene references are to [`288280e7`](https://github.com/inkandswitch/patchwork-experiments/tree/288280e74dbee3ec63c8747317dedcbf7733042f/scene) of `scene-stage`; the tests run against the scene with this document's scene changes (the submodule, [Plan](#plan)).
 
 ## How editing in a scene works
 
@@ -70,7 +70,7 @@ A model built twice in one page is built once: while an editor of it shows a bui
 | # | Gap | Decision |
 |---|---|---|
 | F1 | A model is built with its default parameters: a scene can't show a configuration. A source's parameters are its plugin metadata, the same for every document ([README](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/README.md): "every field but `load` must survive `structuredClone`"). | Done: the scene's `params(doc)` (its branch `scene/glb-textures`); a placed model is built with one of its configurations, chosen in the inspector's Settings, its linked values read as they are |
-| F2 | A built GLB's edges are drawn 1 px wide too. | Fix, *scene*: wide lines opt-in per primitive, so that other sources' GLBs stay as they are |
+| F2 | A built GLB's edges are drawn 1 px wide too. | Done: a line primitive's material may say `extras.lineWidth` (the scene's branch `scene/glb-line-width`), so other sources' GLBs stay as they are; [`modelGlb.ts`](../src/cad/src/scene/modelGlb.ts) gives edges and sketches the editor's width |
 
 ### Canvases
 
@@ -93,4 +93,4 @@ The e2e harness gets the scene as a git submodule of a fork of `patchwork-experi
 
 1. E1, so that every later fix is tested in the scene.
 2. The other gaps without *scene*, one commit each.
-3. The *scene* changes, one commit each, each with the commit here that uses it: A5, B1, F1, F2.
+3. The *scene* changes, one commit each, each with the commit here that uses it: F1 and G1 (`scene/glb-textures`), A5 (`scene/orthographic`), B1 (`scene/wide-lines`), F2 (`scene/glb-line-width`), each branch on the one before.
