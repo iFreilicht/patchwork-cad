@@ -40,13 +40,16 @@ const sortedLocks = (doc: CadModelDoc | undefined) =>
     .map(([url, heads]) => [url, [...heads].sort()] as const)
     .sort(([a], [b]) => (a < b ? -1 : 1));
 
+/** The version of what build() makes: a new one builds every model placed before again, e.g. 4, edges and sketches as wide as the editor draws them. */
+export const BUILD_VERSION = 4;
+
 /**
  * What build() and params() read of the model document: its code, the locks of the documents it
- * follows, its configurations and its canvases. Not its title, views, comments or annotations, so
- * editing those builds nothing.
+ * follows, its configurations and its canvases, after `BUILD_VERSION`. Not its title, views,
+ * comments or annotations, so editing those builds nothing.
  */
 export function fingerprint(doc: CadModelDoc | undefined): string {
-  return `cad3:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc), configurations(doc), canvases(doc)]))}`;
+  return `cad${BUILD_VERSION}:${hash(JSON.stringify([String(doc?.content ?? ""), sortedLocks(doc), configurations(doc), canvases(doc)]))}`;
 }
 
 /** The key of the configuration param: a model's configuration's id, or "" for its defaults. */

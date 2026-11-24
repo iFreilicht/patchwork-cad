@@ -6,7 +6,7 @@ import { moduleKey } from "../src/kernel/imports.ts";
 import type { MeshedShape } from "../src/kernel/protocol.ts";
 import { parseGLB } from "../src/scene/glb.js";
 import { CANVAS_LIFT, canvasLayer, EDGE_COLOR, layerIds, LINE_WIDTH, linearColor, modelGlb, SKETCH_LAYER, toScene, type GlbCanvas } from "../src/scene/modelGlb.ts";
-import { configurationValues, dependencies, errorText, fingerprint, notesOf, params, readImports } from "../src/scene/source.ts";
+import { BUILD_VERSION, configurationValues, dependencies, errorText, fingerprint, notesOf, params, readImports } from "../src/scene/source.ts";
 import type { CadModelDoc } from "../src/types.ts";
 
 beforeAll(() => initSubduction());
@@ -22,6 +22,8 @@ test("a model's fingerprint is its code, locks and configurations, nothing else 
   expect(fingerprint({ ...base, content: "export default () => 2;" })).not.toBe(fingerprint(base));
   expect(fingerprint({ ...base, cad: { locks: { [A]: ["h3"] } } })).not.toBe(fingerprint(base));
   expect(fingerprint({ ...base, cad: { ...base.cad, configurations: [{ id: "c1", name: "Tall", params: { h: 30 } }] } })).not.toBe(fingerprint(base));
+  // What build() makes: a model placed before a new version is built again.
+  expect(fingerprint(base)).toMatch(new RegExp(`^cad${BUILD_VERSION}:`));
 });
 
 test("a placed model is built with one of its configurations, its defaults first", () => {
