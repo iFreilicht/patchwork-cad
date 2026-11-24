@@ -22,12 +22,12 @@ A model built twice in one page is built once: while an editor of it shows a bui
 
 | # | Gap | Decision |
 |---|---|---|
-| A1 | The `view` prop is ignored: choosing a named view doesn't move the camera. | Done: [`sceneCamera.ts`](../src/cad/src/scene/sceneCamera.ts) moves the scene's camera, through the object's frame, as `Viewer.tsx` moves its own; the scene keeps its lens, so a view is fitted by the distance and its `eye` isn't kept. Views fit the part of the port the editor's panels leave free, as `Viewer.tsx`'s canvas |
+| A1 | The `view` prop is ignored: choosing a named view doesn't move the camera. | Done: [`sceneCamera.ts`](../src/cad/src/scene/sceneCamera.ts) moves the scene's camera, through the object's frame, as `Viewer.tsx` moves its own; the scene keeps its lens, so a view is fitted by the distance, in either projection (A5), and its `eye` isn't kept. Views fit the part of the port the editor's panels leave free, as `Viewer.tsx`'s canvas |
 | A2 | `ViewerApi.camera()` is undefined: a view can't be made or updated from the camera, and the browser marks no view as current. | Done: read from the scene's camera, in that part |
 | A3 | `home()` and `homeCamera()` do nothing. | Done |
 | A4 | Fits to the model's margins and close-ups ([20](20-view-framing.md)) are neither shown nor saved. | Done |
-| A5 | The scene's camera is perspective only; its one orthographic camera is the axes triad's ([`axes.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/parts/axes.js)). | Later, *scene* |
-| A6 | No ViewCube, Home or projection buttons. | Done ([`sceneViewCube.ts`](../src/cad/src/scene/sceneViewCube.ts)), on a canvas of its own; its projection button is disabled until A5 |
+| A5 | The scene's camera is perspective only; its one orthographic camera is the axes triad's ([`axes.js`](https://github.com/inkandswitch/patchwork-experiments/blob/288280e74dbee3ec63c8747317dedcbf7733042f/scene/src/parts/axes.js)). | Done: the scene's orthographic camera (its branch `scene/orthographic`), which shows at the target what the perspective one shows from the same eye, as `Viewer.tsx`'s; the ViewCube's projection button and the scene's *Orthographic* switch it, and a view keeps its projection. Edges are picked by a pixel's size along the ray, which parallel rays keep |
+| A6 | No ViewCube, Home or projection buttons. | Done ([`sceneViewCube.ts`](../src/cad/src/scene/sceneViewCube.ts)), on a canvas of its own |
 | A7 | A user's camera in a scene isn't kept per user, and the editor doesn't open at the one kept from its own view. | Intended: the scene keeps the camera |
 
 ### Look
@@ -93,4 +93,4 @@ The e2e harness gets the scene as a git submodule of a fork of `patchwork-experi
 
 1. E1, so that every later fix is tested in the scene.
 2. The other gaps without *scene*, one commit each.
-3. The *scene* changes, one commit each, each with the commit here that uses it: B1, F1, F2. A5 later.
+3. The *scene* changes, one commit each, each with the commit here that uses it: A5, B1, F1, F2.

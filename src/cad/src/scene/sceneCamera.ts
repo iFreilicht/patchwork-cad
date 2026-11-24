@@ -2,8 +2,8 @@
 // the editor moves to a view, Home or a ViewCube region, and reads back to make or mark a view. It
 // follows Viewer.tsx's camera (research/20-view-framing.md) in the model's frame (Z up, millimetres),
 // with one difference: the scene keeps its lens, so a view is fitted by the camera's distance, not
-// by the field of view, and a view's `eye` isn't kept. The scene has no orthographic camera. And the
-// view is the part of the scene's port that the editor's panels leave free, as Viewer.tsx's canvas
+// by the field of view, and a view's `eye` isn't kept. Its orthographic camera shows at the target what
+// the perspective one shows from the same eye, so both fit by that distance. And the view is the part of the scene's port that the editor's panels leave free, as Viewer.tsx's canvas
 // is: the camera fits and measures there, shifted sideways to centre it.
 //
 // Only arithmetic is done with this package's three.js; the scene's camera is read and set as numbers.
@@ -14,11 +14,13 @@ import type { FaceRefs } from "../components/Viewer.tsx";
 import type { RefData } from "../kernel/protocol.ts";
 import type { CameraState, Margins, StoredCamera } from "../types.ts";
 
+type Projection = CameraState["projection"];
+
 /** The scene's camera, in the stage's frame (scene STAGE.md, `api.camera`). */
 export interface HostCamera {
-  get(): { position: number[]; target: number[]; fov: number; up: number[] } | null;
-  set(camera: { position: number[]; target: number[] }): void;
-  /** Calls `fn` when someone has moved the camera: an orbit, a zoom or a Frame; → off. */
+  get(): { position: number[]; target: number[]; fov: number; up: number[]; projection?: Projection } | null;
+  set(camera: { position?: number[]; target?: number[]; projection?: Projection }): void;
+  /** Calls `fn` when someone has moved the camera: an orbit, a zoom, a Frame or a switch of projection; → off. */
   onEnd(fn: () => void): () => void;
 }
 
@@ -71,8 +73,9 @@ const roundRef = (ref: RefData): RefData => (ref.near ? { ...ref, near: ref.near
 interface Now {
   position: THREE.Vector3;
   target: THREE.Vector3;
+  projection: Projection;
   /** For projecting points of the model, as the scene's camera does. */
-  camera: THREE.PerspectiveCamera;
+  camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   /** The port's size, and the free part of it. */
   port: { width: number; height: number };
   free: { x: number; y: number; width: number; height: number };
@@ -114,7 +117,12 @@ export interface SceneCamera {
   /** The direction from the target to the camera, in the model's frame. */
   direction(): [number, number, number] | undefined;
   /** For the ViewCube: the scene's camera in the model's frame. */
-  now(): THREE.PerspectiveCamera | undefined;
+  now(): THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined;
+  /** The size of a pixel at `p`, in the model's frame. */
+  pixelAt(p: THREE.Vector3): number | undefined;
+  projection(): Projection;
+  /** Switches between perspective and orthographic, keeping the picture at the target. */
+  toggleProjection(): void;
   intent(): CameraState | undefined;
   dispose(): void;
 }
@@ -137,19 +145,23 @@ export function sceneCamera(m: CameraModel): SceneCamera {
     const target = new THREE.Vector3().fromArray(c.target).applyMatrix4(from);
     const up = new THREE.Vector3().fromArray(c.position).add(new THREE.Vector3().fromArray(c.up)).applyMatrix4(from).sub(position).normalize();
     const distance = Math.max(position.distanceTo(target), 1e-9);
-    const camera = new THREE.PerspectiveCamera(c.fov, size.width / size.height, distance / 300, distance * 33);
+    const tan = Math.tan(THREE.MathUtils.degToRad(c.fov / 2));
+    const projection = c.projection ?? "perspective";
+    // Orthographic: what the perspective camera shows at the target; it shows everything before and behind it.
+    const [h, w] = [distance * tan, distance * tan * (size.width / size.height)];
+    const camera = projection === "orthographic" ? new THREE.OrthographicCamera(-w, w, h, -h, -distance * 1e3, distance * 1e3) : new THREE.PerspectiveCamera(c.fov, size.width / size.height, distance / 300, distance * 33);
     camera.position.copy(position);
     camera.up.copy(up);
     camera.lookAt(target);
     camera.updateMatrixWorld();
-    return { position, target, camera, port: size, free, tan: Math.tan(THREE.MathUtils.degToRad(c.fov / 2)), to };
+    return { position, target, projection, camera, port: size, free, tan, to };
   };
   const keyOf = () => {
     const c = m.camera.get();
     return c ? JSON.stringify([...c.position, ...c.target].map((x) => Math.round(x * 1e6))) : undefined;
   };
   /** The free part's lens: its aspect, and tan of half its vertical field of view. */
-  const lens = (v: Now): Lens & { tan: number } => ({ perspective: true, aspect: v.free.width / v.free.height, tan: (v.tan * v.free.height) / v.port.height });
+  const lens = (v: Now): Lens & { tan: number } => ({ perspective: v.projection === "perspective", aspect: v.free.width / v.free.height, tan: (v.tan * v.free.height) / v.port.height });
   const directionOf = (v: Now) => v.position.clone().sub(v.target).normalize();
   /** How far the free part's centre is from the port's, in pixels, x right and y down. */
   const offset = (v: Pick<Now, "port" | "free">) => ({ x: v.free.x + v.free.width / 2 - v.port.width / 2, y: v.free.y + v.free.height / 2 - v.port.height / 2 });
@@ -175,7 +187,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
     const c = i.camera;
     const along = new THREE.Vector3(...c.direction).normalize();
     const around = (points: THREE.Vector3[], margins: Margins) => {
-      const fit = fitted(points, along, fitLens(true));
+      const fit = fitted(points, along, fitLens(c.projection === "perspective"));
       return fit && expand(fit, margins, along);
     };
     const rect = c.fit ? around(m.modelPoints(), c.fit) : c.subject && i.points?.length ? around(i.points, c.subject.fit) : undefined;
@@ -183,7 +195,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
   };
   /**
    * Where `i` puts the camera with the scene's lens: as far as shows its rectangle in the free part,
-   * and all of the model's depth for a fit, and shifted sideways so that the free part's centre shows
+   * and in perspective all of the model's depth for a fit, and shifted sideways so that the free part's centre shows
    * the rectangle's.
    */
   const poseOf = (i: Intent, v: Now): Pose => {
@@ -192,7 +204,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
     const l = lens(v);
     let distance = meet(rect.width, rect.height, l.aspect) / (2 * l.tan);
     // The model's nearest parts look larger than the plane through its middle, which the margins are measured in.
-    if (i.camera.fit)
+    if (i.camera.fit && i.camera.projection === "perspective")
       for (let k = 0; k < 8; k++) {
         const needed = tanToShow(m.modelPoints(), rect.center, along, distance, l.aspect);
         if (needed <= l.tan * (1 + 1e-6)) break;
@@ -207,6 +219,12 @@ export function sceneCamera(m: CameraModel): SceneCamera {
     const o = offset(v);
     const target = rect.center.clone().addScaledVector(right, -o.x * perPixel).addScaledVector(up, o.y * perPixel);
     return { target, position: target.clone().addScaledVector(along, distance) };
+  };
+  /** The camera's projection now. */
+  const projectionNow = (): Projection => m.camera.get()?.projection ?? "perspective";
+  /** Switches the scene's camera to `projection`, which keeps the picture at the target; the scene says it moved (onEnd). */
+  const project = (projection: Projection) => {
+    if (projection !== projectionNow()) m.camera.set({ projection });
   };
   const place = (pose: Pose, v: Now) => {
     m.camera.set({ position: pose.position.clone().applyMatrix4(v.to).toArray(), target: pose.target.clone().applyMatrix4(v.to).toArray() });
@@ -245,7 +263,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
   /** The margins the fit of `points` has in the view now; at least zero. */
   const marginsNow = (v: Now, points: THREE.Vector3[]): Margins | undefined => {
     const s = shot(v);
-    const fit = fitted(points, s.direction, fitLens(true));
+    const fit = fitted(points, s.direction, fitLens(v.projection === "perspective"));
     return fit && (marginsOf(fit, trimmed(fit, visibleAt(s, lens(v), fit.center), s.direction), s.direction).map((x) => round(Math.max(0, x))) as Margins);
   };
   /** The eye's distance from `rect`, in multiples of the distance at which `rect` just fits a square 45° view (`CameraState.eye`). */
@@ -254,10 +272,10 @@ export function sceneCamera(m: CameraModel): SceneCamera {
   const measure = (v: Now): CameraState => {
     const s = shot(v);
     const extent: [number, number] = [s.height * lens(v).aspect, s.height];
-    const camera: CameraState = { direction: vector(s.direction), target: vector(s.target), extent: [round(extent[0]), round(extent[1])], projection: "perspective", eye: eyeFor(v, { center: s.target, width: extent[0], height: extent[1] }) };
+    const camera: CameraState = { direction: vector(s.direction), target: vector(s.target), extent: [round(extent[0]), round(extent[1])], projection: v.projection, eye: eyeFor(v, { center: s.target, width: extent[0], height: extent[1] }) };
     const all = m.vertices();
     const fit = all.length && all.every((p) => inView(v, p, SLIVER)) ? marginsNow(v, m.modelPoints()) : undefined;
-    const fitRect = fit && fitted(m.modelPoints(), s.direction, fitLens(true));
+    const fitRect = fit && fitted(m.modelPoints(), s.direction, fitLens(v.projection === "perspective"));
     return fit && fitRect ? { ...camera, fit, eye: eyeFor(v, expand(fitRect, fit, s.direction)) } : camera;
   };
   /** A given camera with only a region: once shown, it gets margins if it shows all of the model, as it would if saved now. */
@@ -326,6 +344,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
 
   const apply = (stored: StoredCamera, onEnd?: () => void) => {
     const given = cameraOf(stored);
+    project(given.projection);
     const next: Intent = { camera: given, given: true, classify: !given.fit && !given.subject };
     intent = next;
     const v = now();
@@ -339,7 +358,7 @@ export function sceneCamera(m: CameraModel): SceneCamera {
   };
   /** The Home view before anyone changed it: the model from the front, right and above, with the default margins. */
   const defaultHome = (): CameraState => {
-    const camera: CameraState = { direction: vector(HOME_DIRECTION), target: [0, 0, 0], extent: [1, 1], projection: "perspective", fit: DEFAULT_MARGINS };
+    const camera: CameraState = { direction: vector(HOME_DIRECTION), target: [0, 0, 0], extent: [1, 1], projection: projectionNow(), fit: DEFAULT_MARGINS };
     const rect = rectOf({ camera, given: true });
     return { ...camera, target: vector(rect.center), extent: [round(rect.width), round(rect.height)] };
   };
@@ -396,6 +415,17 @@ export function sceneCamera(m: CameraModel): SceneCamera {
       return v && (directionOf(v).toArray() as [number, number, number]);
     },
     now: () => now()?.camera,
+    pixelAt(p) {
+      const v = now();
+      if (!v) return undefined;
+      const at = v.projection === "orthographic" ? v.position.distanceTo(v.target) : v.position.distanceTo(p);
+      return (2 * at * v.tan) / v.port.height;
+    },
+    projection: projectionNow,
+    toggleProjection() {
+      stop();
+      project(projectionNow() === "perspective" ? "orthographic" : "perspective");
+    },
     intent: () => intent?.camera,
     dispose() {
       turning = 0;

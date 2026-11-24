@@ -404,10 +404,12 @@ export function sceneView(host: SceneHost): SceneView {
     const ray = localRay(x, y);
     const next = localRay(x + 1, y);
     if (!ray || !next) return undefined;
-    const angle = ray.direction.angleTo(next.direction);
+    // A pixel's size at `t` along the ray: in perspective it grows with `t`, orthographic it doesn't.
+    const [a, b] = [new THREE.Vector3(), new THREE.Vector3()];
+    const px = (t: number) => Math.max(ray.at(t, a).distanceTo(next.at(t, b)), 1e-9);
     const face = faceHit(ray);
     if (kind !== "face") {
-      const edge = edgeHit(ray, (t) => Math.max(t * angle, 1e-9), face?.t ?? Infinity);
+      const edge = edgeHit(ray, px, face?.t ?? Infinity);
       if (edge) return edge;
       if (kind === "edge") return undefined;
     }
@@ -873,13 +875,12 @@ export function sceneView(host: SceneHost): SceneView {
     const size = host.size();
     if (!markers.size || !element || !c || !size) return;
     const rect = element.getBoundingClientRect();
-    const tan = Math.tan(THREE.MathUtils.degToRad(c.fov / 2));
     let resized = false;
     for (const m of markers.values()) {
       const at = placed(m.point, rect);
       m.label.hidden = !at?.visible;
       if (at) m.label.style.transform = `translate(${at.x}px, ${at.y}px)`;
-      const scale = (4 * 2 * c.position.distanceTo(new Local.Vector3(m.point.x, m.point.y, m.point.z)) * tan) / size.height;
+      const scale = 4 * (camera.pixelAt(new Local.Vector3(m.point.x, m.point.y, m.point.z)) ?? 0);
       // Drawn again only when a dot's size changes, not every frame.
       if (Math.abs(scale - m.dot.scale.x) <= 1e-3 * scale) continue;
       m.dot.scale.setScalar(scale);

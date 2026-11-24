@@ -1,7 +1,7 @@
 // The ViewCube in a scene (research/23-scene-editing.md, A6): Viewer.tsx's, with its Home and
 // projection buttons, over the scene's view. It draws on a canvas of its own with this package's
-// three.js, as the scene's renderer can't draw it, and turns and orbits the scene's camera
-// (sceneCamera.ts). The scene has no orthographic camera, so the projection button is disabled.
+// three.js, as the scene's renderer can't draw it, and turns, orbits and projects the scene's camera
+// (sceneCamera.ts).
 
 import * as THREE from "three";
 import { themeColor } from "../components/Viewer.tsx";
@@ -49,8 +49,6 @@ export function sceneViewCube(view: HTMLElement, camera: SceneCamera, collapsedA
   const toggle = button("toggle", "ViewCube", "", ["M8 1.5 14 5V11L8 14.5 2 11V5ZM2 5 8 8.5 14 5M8 8.5V14.5"]);
   const home = button("home", "Home view", "Home view", ["M2 8 8 2.5 14 8M4 6.5V13.5H12V6.5"]);
   const projection = button("projection", "Orthographic", "Orthographic", ["M1.5 5.5H4L5.5 3.5H10.5L12 5.5H14.5V13H1.5Z"], [8, 9, 2.5]);
-  projection.disabled = true;
-  projection.setAttribute("aria-pressed", "false");
   const cubeElement = document.createElement("div");
   cubeElement.className = "cad-viewcube__cube";
   const canvas = document.createElement("canvas");
@@ -79,6 +77,7 @@ export function sceneViewCube(view: HTMLElement, camera: SceneCamera, collapsedA
   let drawn: string | undefined;
   let hovered: Region | undefined;
   const render = () => {
+    projection.setAttribute("aria-pressed", String(camera.projection() === "orthographic"));
     const c = camera.now();
     if (!c || collapsed) return;
     const size = cubeElement.clientWidth;
@@ -146,6 +145,7 @@ export function sceneViewCube(view: HTMLElement, camera: SceneCamera, collapsedA
   cubeElement.addEventListener("pointerleave", onLeave);
   toggle.addEventListener("click", () => setCollapsed(!collapsed));
   home.addEventListener("click", () => camera.home());
+  projection.addEventListener("click", () => camera.toggleProjection());
   setCollapsed(collapsedAtFirst);
 
   return {

@@ -102,7 +102,7 @@ async function cubeFollows(page: Page): Promise<boolean> {
   return drawnFor.length === 3 && drawnFor.every((c, i) => Math.abs(c - now[i]!) < 0.01);
 }
 
-type Intent = { fit?: number[]; subject?: { faces: unknown[] } } | undefined;
+type Intent = { fit?: number[]; subject?: { faces: unknown[] }; target: number[]; extent: [number, number]; projection: string } | undefined;
 const intent = (page: Page) => hostView(page).evaluate((el) => (el as unknown as { cadViewer: { intent(): Intent } }).cadViewer.intent());
 
 test("views move the scene's camera: the ViewCube, Home, a named view made from the camera, a close-up's subject", async ({ page }) => {
@@ -147,6 +147,47 @@ test("views move the scene's camera: the ViewCube, Home, a named view made from 
   }, { timeout: 30_000 }).toBeGreaterThan(0);
   expect((await intent(page))?.fit).toBeUndefined();
   if (shots) await page.screenshot({ path: `${shots}/scene-5-close-up.png` });
+});
+
+test("the ViewCube's projection button and the scene's Orthographic switch the scene's camera, and a view keeps its projection", async ({ page }) => {
+  await bootToFrame(page);
+  await openM1InScene(page);
+  const views = page.locator(".cad-editor__browser").getByRole("list", { name: "Views" });
+  const row = (name: string) => views.locator(`.cad-editor__named-row[data-name="${name}"]`);
+  await clickHome(page);
+  const cube = hostView(page).getByRole("button", { name: "Orthographic" });
+  const scenes = page.locator('.scene-tool button[data-command="orthographic"]');
+  await expect(cube).toHaveAttribute("aria-pressed", "false");
+
+  const before = await intent(page);
+  await cube.click();
+  await expect(cube).toHaveAttribute("aria-pressed", "true");
+  await expect(scenes).toHaveAttribute("aria-pressed", "true");
+  // The picture at the target stays, as the editor's own view switches.
+  await expect.poll(async () => (await intent(page))?.projection).toBe("orthographic");
+  const after = (await intent(page))!;
+  expect(after.target).toEqual(before!.target.map((c) => expect.closeTo(c, 3)));
+  expect(after.extent[1]).toBeCloseTo(before!.extent[1], 3);
+  // Home fits all of the model orthographically.
+  await clickHome(page);
+  expect((await intent(page))?.fit).toBeDefined();
+  expect((await intent(page))?.projection).toBe("orthographic");
+  // Its rays are parallel: an edge is picked all the same.
+  await hoverFirst(page, "edge");
+  if (shots) await page.screenshot({ path: `${shots}/scene-6-orthographic.png` });
+  await page.getByRole("button", { name: "New view from the current camera" }).click();
+  await views.locator(".cad-editor__rename").fill("Flat");
+  await views.locator(".cad-editor__rename").press("Enter");
+  await expect(row("Flat")).toHaveAttribute("data-current", "true");
+
+  // The scene's own switch: the ViewCube follows, and the view isn't shown any more.
+  await scenes.click();
+  await expect(cube).toHaveAttribute("aria-pressed", "false");
+  await expect(row("Flat")).not.toHaveAttribute("data-current", "true");
+  await row("Flat").click();
+  await expect(hostView(page)).toHaveAttribute("data-turning", "false");
+  await expect(cube).toHaveAttribute("aria-pressed", "true");
+  await expect(row("Flat")).toHaveAttribute("data-current", "true");
 });
 
 /** Two squares side by side: two profiles. */

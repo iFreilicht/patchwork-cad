@@ -10,6 +10,7 @@ import type { DocHandle } from "@automerge/automerge-repo";
 import { WysiwygEditor, type EditorControls } from "../components/editor/WysiwygEditor.tsx";
 import { UNDO_IGNORE } from "../model/locks.ts";
 import type { CadModelDoc } from "../types.ts";
+import type { HostCamera } from "./sceneCamera.ts";
 import { sceneView, type HandEvent, type SceneView } from "./sceneViewer.ts";
 import "../styles.css";
 
@@ -28,7 +29,7 @@ type Stage = {
   ray(x: number, y: number): { origin: number[]; dir: number[] } | null;
   /** A point in the stage's frame in port pixels, and whether the port shows it. */
   project(point: number[]): { x: number; y: number; visible: boolean } | null;
-  camera: { get(): { position: number[]; target: number[]; fov: number; up: number[] } | null; set(camera: { position: number[]; target: number[] }): void; onEnd(fn: () => void): () => void };
+  camera: HostCamera;
   invalidate(): void;
   frame(fn: () => void): () => void;
 };
