@@ -247,3 +247,58 @@ test("pins and collaborators' pointers show in the scene: B sees A's annotation 
   await a.page.mouse.move(0, 0);
   await expect(hostView(b.page)).toHaveAttribute("data-peer-markers", "0");
 });
+
+const GRID_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect x="1" y="1" width="198" height="98" fill="#eef6ff" stroke="#204080" stroke-width="2"/>
+  <path d="M20 0V100M40 0V100M60 0V100M80 0V100M100 0V100M120 0V100M140 0V100M160 0V100M180 0V100M0 20H200M0 40H200M0 60H200M0 80H200" stroke="#80a0d0" stroke-width="0.5"/>
+  <circle cx="40" cy="50" r="6" fill="#d04020"/>
+</svg>`;
+type DrawnCanvas = { id: string; highlight: string | undefined };
+const drawnCanvases = (page: Page) => hostView(page).evaluate((el) => (el as unknown as { cadViewer: { canvases(): DrawnCanvas[] } }).cadViewer.canvases());
+const canvasPoint = (page: Page, id: string, u: number, v: number) =>
+  hostView(page).evaluate((el, [id, u, v]) => (el as unknown as { cadViewer: { canvasPoint(id: string, u: number, v: number): { x: number; y: number } | undefined } }).cadViewer.canvasPoint(id as string, u as number, v as number), [id, u, v] as const);
+
+test("an image inserted as a canvas is drawn in the scene, and Calibrate picks its points there", async ({ page }) => {
+  await bootToFrame(page);
+  const docs = await sidebarDocuments(page, {
+    "grid.svg": { file: "grid.svg", mimeType: "image/svg+xml", text: GRID_SVG },
+    "squares.svg": { file: "squares.svg", mimeType: "image/svg+xml", text: SQUARES },
+  });
+  const { model } = await modelInScene(page, plateWith(docs["squares.svg"]!), "Plate", { sidebar: true });
+  await openSelected(page);
+  await expect(timelineEntry(page, "sketch2")).toHaveAttribute("data-status", "unused", { timeout: 60_000 });
+  await clickHome(page);
+
+  // Dropped off the model, it waits; Canvas puts it on XY.
+  const free = (await hostView(page).boundingBox())!;
+  await drag(page, "grid.svg", { x: free.x + free.width - 40, y: free.y + 40 }, false);
+  await expect(status(page)).toContainText("Insert grid.svg");
+  await page.mouse.up();
+  await page.locator(".cad-editor__dialog").getByRole("radiogroup", { name: "Use as" }).getByRole("radio").getByText("Canvas", { exact: true }).click();
+  const stored = () =>
+    page.evaluate(async (url) => {
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ doc(): { cad?: { canvases?: { id: string }[] } } }> } }).repo;
+      return JSON.parse(JSON.stringify((await repo.find(url)).doc().cad?.canvases ?? [])) as { id: string }[];
+    }, model);
+  await expect.poll(() => stored().then((l) => l.length)).toBe(1);
+  const id = (await stored())[0]!.id;
+  // Drawn, outlined while selected.
+  await expect.poll(() => drawnCanvases(page), { timeout: 30_000 }).toEqual([expect.objectContaining({ id, highlight: "accent" })]);
+  if (shots) await page.screenshot({ path: `${shots}/scene-9-canvas.png` });
+
+  // Calibrate: two points of the image, picked in the scene's view, beside the dialog.
+  await hideSidebars(page);
+  await clickHome(page);
+  await page.locator(".cad-editor__dialog").getByRole("button", { name: "Calibrate", exact: true }).click();
+  await expect(status(page)).toContainText("click the first of two points");
+  await expect(hostView(page)).toHaveAttribute("data-canvas-pick", "true");
+  const reachable: { x: number; y: number }[] = [];
+  // Inside the image: a point on its edge may round to a pixel just outside it.
+  for (let i = 1; i < 20; i++) {
+    const p = await canvasPoint(page, id, i / 20, 0.25);
+    if (p && (await page.evaluate(({ x, y }) => document.elementFromPoint(x, y) instanceof HTMLCanvasElement, p))) reachable.push(p);
+  }
+  expect(reachable.length).toBeGreaterThanOrEqual(2);
+  for (const p of [reachable[0]!, reachable.at(-1)!]) await page.mouse.click(p.x, p.y);
+  await expect(status(page)).toContainText("type the distance");
+});

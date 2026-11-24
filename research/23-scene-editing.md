@@ -77,7 +77,7 @@ Image canvases ([21](21-embedding.md)) are images on planes: PNG, JPEG and SVG f
 | # | Gap | Decision |
 |---|---|---|
 | G1 | The built GLB has no canvases. | Fix: a textured quad per canvas, on a layer of its own, named by it, so that the scene shows and hides each; `glb.js` gets textures. Canvases go into `fingerprint`, their images into `dependencies` |
-| G2 | `sceneViewer` ignores `canvases` and `canvasPick`: no canvases while editing, and no Calibrate. | Fix |
+| G2 | `sceneViewer` ignores `canvases` and `canvasPick`: no canvases while editing, and no Calibrate. | Done |
 
 Two differences stay. A canvas's eye is per user in the editor ([21](21-embedding.md)), while a scene's layers are the object's, the same for everyone. A canvas drawn through the model is hidden behind it in the GLB, which can't draw through; while editing, `sceneViewer` draws it through.
 

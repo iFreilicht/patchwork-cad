@@ -10,7 +10,7 @@ import { createEffect, onCleanup, type Component } from "solid-js";
 import * as Local from "three";
 import type * as Three from "three";
 import type { MeshedShape } from "../kernel/protocol.ts";
-import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type PeerMarker, type Pin, type ShownRegion, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
+import { luminance, themeColor, type Entity, type EntityKind, type Highlight, type HighlightStyle, type Overlay, type PeerMarker, type Pin, type ShownCanvas, type ShownRegion, type ViewerApi, type ViewerProps, type ViewerTestHook } from "../components/Viewer.tsx";
 import { iconElement } from "../components/icons.tsx";
 import { contactToken } from "../components/presence.ts";
 import { entityIndex, pickingOf, type Hit, type Picking } from "./picking.ts";
@@ -19,7 +19,7 @@ import { sceneViewCube, type SceneViewCube } from "./sceneViewCube.ts";
 import { wideLines } from "./wideLines.js";
 
 /** What the e2e helpers ask of a view (`ViewerTestHook`), as far as a scene has it. */
-export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions" | "peerMarkers">;
+export type SceneTestHook = Pick<ViewerTestHook, "entities" | "screenPoint" | "highlighted" | "centroid" | "cameraDirection" | "viewCubePoint" | "intent" | "regions" | "peerMarkers" | "canvases" | "canvasPoint">;
 
 /** An entity as `body:kind:index`, for tests, as Viewer.tsx's. */
 const entityKey = (e: Entity | undefined) => (e ? `${e.body}:${e.kind}:${e.index}` : "");
@@ -118,7 +118,8 @@ export function sceneView(host: SceneHost): SceneView {
   const regionGroup = Object.assign(new THREE.Group(), { renderOrder: 1 });
   const regionOutline = Object.assign(new THREE.Group(), { renderOrder: 2 });
   const peerGroup = Object.assign(new THREE.Group(), { renderOrder: 3 });
-  root.add(bodies, lines, overlays, regionGroup, regionOutline, marks, peerGroup);
+  const canvasGroup = new THREE.Group();
+  root.add(bodies, canvasGroup, lines, overlays, regionGroup, regionOutline, marks, peerGroup);
   /** Model (Z up, mm) → the object's frame (Y up, m). */
   const toObject = new THREE.Matrix4().makeRotationX(-Math.PI / 2).scale(new THREE.Vector3(0.001, 0.001, 0.001));
   const inverse = new THREE.Matrix4();
@@ -413,6 +414,61 @@ export function sceneView(host: SceneHost): SceneView {
     return face;
   };
 
+  // ── canvases (research/21, "Canvas"), as Viewer.tsx's: images on planes. Live documents on canvases aren't drawn in a scene (research/23, G2) ──
+  /** A texture per drawn image, kept while a canvas shows it. */
+  const textures = new Map<HTMLCanvasElement, Three.CanvasTexture>();
+  let drawnCanvases: { canvas: ShownCanvas; mesh: Three.Mesh }[] = [];
+  const drawCanvases = (list: ShownCanvas[]) => {
+    for (const d of drawnCanvases) (d.mesh.material as Three.Material).dispose();
+    clear(canvasGroup);
+    for (const [image, texture] of textures) {
+      if (list.some((c) => c.image === image)) continue;
+      texture.dispose();
+      textures.delete(image);
+    }
+    const m = materials;
+    drawnCanvases = list.flatMap((c) => {
+      if (!c.image || !m) return [];
+      let texture = textures.get(c.image);
+      if (!texture) {
+        texture = new THREE.CanvasTexture(c.image);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        textures.set(c.image, texture);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(c.corners.flat(), 3));
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+      geometry.setIndex([0, 1, 2, 0, 2, 3]);
+      // In front of a face it lies on, which the faces' polygon offset pushes back; through the model if it is drawn through it.
+      const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: c.opacity, side: THREE.DoubleSide, depthWrite: false, depthTest: !c.through, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+      const mesh = new THREE.Mesh(geometry, material);
+      canvasGroup.add(mesh);
+      if (c.highlight) canvasGroup.add(...wide(pairsOf({ points: c.corners, closed: true }), [m.highlight[c.highlight].line.halo, m.highlight[c.highlight].line.core]).map((l) => Object.assign(l, { renderOrder: 2 + l.renderOrder })));
+      return [{ canvas: c, mesh }];
+    });
+    if (element) element.dataset["canvases"] = String(drawnCanvases.length);
+    host.invalidate();
+  };
+  /** The point of canvas `id`'s image at port pixel (x, y), as fractions of it from the bottom left. */
+  const canvasAt = (id: string, x: number, y: number): [number, number] | undefined => {
+    const c = drawnCanvases.find((d) => d.canvas.id === id)?.canvas;
+    const ray = localRay(x, y);
+    if (!c || !ray) return undefined;
+    const [a, b, , d] = c.corners.map((p) => new THREE.Vector3(...p)) as [Three.Vector3, Three.Vector3, Three.Vector3, Three.Vector3];
+    const plane = new THREE.Plane().setFromCoplanarPoints(a, b, d);
+    const at = ray.intersectPlane(plane, new THREE.Vector3());
+    if (!at) return undefined;
+    // In the image's axes: along its bottom edge and its left edge.
+    const [u, v] = [b.clone().sub(a), d.clone().sub(a)];
+    const rel = at.sub(a);
+    const uu = u.dot(u), uv = u.dot(v), vv = v.dot(v), ru = rel.dot(u), rv = rel.dot(v);
+    const det = uu * vv - uv * uv;
+    const s = (ru * vv - rv * uv) / det;
+    const t = (rv * uu - ru * uv) / det;
+    if (s < 0 || s > 1 || t < 0 || t > 1) return undefined;
+    return [Math.round(s * 1e6) / 1e6, Math.round(t * 1e6) / 1e6];
+  };
+
   /** The region at port pixel (x, y): the nearest, as they all lie in one plane and over the model. */
   const regionAt = (x: number, y: number): string | undefined => {
     const ray = localRay(x, y);
@@ -449,6 +505,13 @@ export function sceneView(host: SceneHost): SceneView {
     drawMarks();
   };
   const hover = (ev: HandEvent) => {
+    // While points of a canvas are picked, e.g. to calibrate it, nothing of the model is hovered.
+    if (props?.canvasPick) {
+      setHovered(undefined);
+      props.onCanvasHover?.(props.canvasPick, canvasAt(props.canvasPick, ev.x, ev.y));
+      props.onPointer?.(hitAt(ev.x, ev.y, "face")?.point);
+      return;
+    }
     // While regions of a sketch are picked, nothing of the model is hovered.
     if (props?.regions?.length) {
       setHovered(undefined);
@@ -476,6 +539,12 @@ export function sceneView(host: SceneHost): SceneView {
     },
     click(ev) {
       if (!props) return false;
+      // A point of a canvas, e.g. to calibrate it, before anything else a click does.
+      if (props.canvasPick) {
+        const uv = canvasAt(props.canvasPick, ev.x, ev.y);
+        if (uv) props.onCanvasPick?.(props.canvasPick, uv);
+        return true;
+      }
       // A region of a sketch, which hides the model's faces and edges while regions are picked.
       if (props.regions?.length) {
         const key = regionAt(ev.x, ev.y);
@@ -505,6 +574,7 @@ export function sceneView(host: SceneHost): SceneView {
       pending = undefined;
       setHovered(undefined);
       setHoveredRegion(undefined);
+      if (props?.canvasPick) props.onCanvasHover?.(props.canvasPick, undefined);
       props?.onPointer?.(undefined);
     },
     cursor: () => (props?.pick ? "crosshair" : null),
@@ -628,6 +698,15 @@ export function sceneView(host: SceneHost): SceneView {
     cameraDirection: () => camera.direction() ?? [0, 0, 0],
     viewCubePoint: (region) => cube?.point(region),
     intent: () => camera.intent(),
+    canvases: () =>
+      drawnCanvases.map(({ canvas: c }) => ({ id: c.id, opacity: c.opacity, through: c.through, highlight: c.highlight, world: c.corners, corners: c.corners.flatMap((p) => toScreen(new THREE.Vector3(...p)) ?? []).map(({ x, y }) => ({ x, y })) })),
+    canvasPoint(id, u, v) {
+      const c = drawnCanvases.find((d) => d.canvas.id === id)?.canvas;
+      if (!c) return undefined;
+      const [a, b, , d] = c.corners.map((p) => new THREE.Vector3(...p)) as [Three.Vector3, Three.Vector3, Three.Vector3, Three.Vector3];
+      const s = toScreen(a.clone().addScaledVector(b.clone().sub(a), u).addScaledVector(d.clone().sub(a), v));
+      return s?.visible ? { x: Math.round(s.x), y: Math.round(s.y) } : undefined;
+    },
     peerMarkers: () =>
       [...markers].flatMap(([key, m]) => {
         const s = toScreen(m.point);
@@ -857,6 +936,11 @@ export function sceneView(host: SceneHost): SceneView {
       drawLines();
     });
     createEffect(() => drawRegions(p.regions));
+    createEffect(() => drawCanvases(p.canvases ?? []));
+    createEffect(() => {
+      if (p.canvasPick) el.dataset["canvasPick"] = "true";
+      else delete el.dataset["canvasPick"];
+    });
     createEffect(() => {
       void p.shapes;
       drawPins(p.pins ?? []);
@@ -868,6 +952,7 @@ export function sceneView(host: SceneHost): SceneView {
       if (element === el) element = undefined;
       hovered = undefined;
       selected = undefined;
+      drawCanvases([]);
       for (const g of [bodies, marks, lines, overlays, regionGroup, regionOutline]) clear(g);
       drawn = [];
       picking = pickingOf(THREE, []);
