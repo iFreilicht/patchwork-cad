@@ -56,6 +56,9 @@ export function buildModel(source: string, imports: Imports, params?: BuildParam
           reject,
         };
         kernel().build(source, params, imports);
+        // For tests: how many builds this page's scenes made themselves.
+        const counted = globalThis as { patchworkCadSceneBuilds?: number };
+        counted.patchworkCadSceneBuilds = (counted.patchworkCadSceneBuilds ?? 0) + 1;
       }),
   );
   queue = run

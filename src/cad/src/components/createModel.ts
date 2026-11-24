@@ -1,4 +1,5 @@
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
+import { paramsKey, shareBuilds } from "./sharedBuilds.ts";
 import type { DocHandle, UrlHeads } from "@automerge/automerge-repo";
 import { Engine, type BuildResult } from "../kernel/engine.ts";
 import type { Imports } from "../kernel/imports.ts";
@@ -51,8 +52,6 @@ export interface Model {
   held: Accessor<HeldDocument[]>;
 }
 
-/** The same values of parameters, whichever order their keys are in. */
-const paramsKey = (params: BuildParams | undefined) => (params ? JSON.stringify(Object.entries(params).sort(([a], [b]) => (a < b ? -1 : 1))) : "");
 
 /** A build's errors, as locks compare them. */
 const errorsOf = (result: BuildResult): BuildErrors => ({ error: result.ok ? undefined : result.error, failures: result.trace.flatMap((t) => (t.status === "ok" ? [] : [{ name: t.name, status: t.status, message: t.message }])) });
@@ -127,7 +126,10 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
       setError(undefined);
     } else setError(result.error);
     const plan = plans.get(result.imports);
-    if (plan) setDocuments((plan.locked?.imports === result.imports ? plan.locked : plan.latest).documents);
+    const read = plan && (plan.locked?.imports === result.imports ? plan.locked : plan.latest);
+    if (read) setDocuments(read.documents);
+    // For a scene in this page that builds the same model from the same (research/23).
+    shared.show(result.ok && read ? { source: result.source, params: paramsKey(result.params), imports: read.key, result, locate: (bodies, refs) => engine.locate(bodies, refs) } : undefined);
   };
   /** Shows what was decided for the current plan, and writes its locks. */
   const finish = (plan: Plan, result: BuildResult, decision: Decision, texts: Record<string, string> = {}) => {
@@ -183,6 +185,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
     engine.build(plan.source, plan.params, other.imports);
   };
 
+  const shared = shareBuilds(handle.url, building);
   const engine = new Engine({
     onResult: (result) => void onResult(result),
     onReady: (timings) => setInit(timings),
@@ -238,6 +241,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
     handle.off("change", onChange);
     imports.dispose();
     engine.dispose();
+    shared.stop();
   });
 
   const status = (): ModelStatus => (initError() ? "init-failed" : !init() ? "loading" : building() ? "building" : error() ? "error" : "ready");

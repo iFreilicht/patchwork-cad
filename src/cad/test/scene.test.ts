@@ -72,13 +72,13 @@ test("imports are read at the editor's locks, from the repo the scene gives", as
   data.change((d) => (d.width = 20));
   const source = `import { width } from "${data.url}";\n`;
   const latest = await readImports(source, model(source), repo);
-  expect(latest[data.url]).toEqual({ kind: "data", value: { width: 20 } });
+  expect(latest.imports[data.url]).toEqual({ kind: "data", value: { width: 20 } });
   const locked = await readImports(source, model(source, { locks: { [data.url]: before } }), repo);
-  expect(locked[data.url]).toEqual({ kind: "data", value: { width: 10 } });
+  expect(locked.imports[data.url]).toEqual({ kind: "data", value: { width: 10 } });
   // A lock this repo doesn't have the version of reads the document as it is.
   const unknown = await readImports(source, model(source, { locks: { [data.url]: ["2ZpxcJvGYuEcyRaZUAgfQMTVkZz6HTaLMLtrmn4sDmDw"] } }), repo);
-  expect(unknown[data.url]).toEqual({ kind: "data", value: { width: 20 } });
-  expect((await readImports(`import x from "${A}" with { type: "text" };`, model(""), undefined))[moduleKey(A, "text")]).toMatchObject({ kind: "problem" });
+  expect(unknown.imports[data.url]).toEqual({ kind: "data", value: { width: 20 } });
+  expect((await readImports(`import x from "${A}" with { type: "text" };`, model(""), undefined)).imports[moduleKey(A, "text")]).toMatchObject({ kind: "problem" });
 });
 
 test("points go from Z up in millimetres to Y up in metres", () => {

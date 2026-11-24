@@ -12,6 +12,8 @@ A view plugin has the scene's camera nevertheless ([STAGE.md](https://github.com
 
 > `camera` | `{ get, set, frame(box), hold, ride, touched, watch, onEnd }`
 
+A model built twice in one page is built once: while an editor of it shows a build, the scene's build of the model waits for the editor's and takes it, if it was built from the same code, parameters and versions of the documents it imports ([`sharedBuilds.ts`](../src/cad/src/components/sharedBuilds.ts)); otherwise, e.g. with another configuration shown in the editor, the scene builds it in its own kernel.
+
 ## Gaps and decisions
 
 **Fix**: to be done. **Later**: wanted, not now. **Accepted**: the difference stays. **Intended**: the difference is right. A gap marked *scene* needs a change to the scene, sent to pvh's branch ([Plan](#plan)).

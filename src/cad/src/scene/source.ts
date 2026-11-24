@@ -14,7 +14,8 @@ import { configurations, isLinked } from "../model/configurations.ts";
 import { locksOf } from "../model/locks.ts";
 import type { CadModelDoc, ParamValue } from "../types.ts";
 import { canvasImages, faceRefsOf, placedCanvases } from "./canvasGlb.ts";
-import { buildModel } from "./kernel.ts";
+import { paramsKey, sharedBuild } from "../components/sharedBuilds.ts";
+import { buildModel, type Located } from "./kernel.ts";
 import { modelGlb } from "./modelGlb.ts";
 
 type Repo = typeof globalThis.repo;
@@ -108,9 +109,10 @@ export function dependencies(doc: CadModelDoc | undefined): string[] {
 
 /**
  * The documents `source` imports, at the versions the editor last built with: a followed document
- * at its lock if this repo has that version, else as it is (as the read-only editor reads them).
+ * at its lock if this repo has that version, else as it is (as the read-only editor reads them);
+ * and the read's key, which names those documents and versions.
  */
-export async function readImports(source: string, doc: CadModelDoc, repo: Repo): Promise<Imports> {
+export async function readImports(source: string, doc: CadModelDoc, repo: Repo): Promise<{ imports: Imports; key: string }> {
   const reader = createImports(() => {}, repo);
   try {
     const latest = await reader.read(source);
@@ -120,7 +122,8 @@ export async function readImports(source: string, doc: CadModelDoc, repo: Repo):
       const lock = d.doc && !headsOf(d.specifier) ? (locks[d.doc] as UrlHeads | undefined) : undefined;
       if (d.doc && lock && reader.has(d.doc, lock)) at[d.doc] = lock;
     }
-    return Object.keys(at).length ? (await reader.read(source, at)).imports : latest.imports;
+    const read = Object.keys(at).length ? await reader.read(source, at) : latest;
+    return { imports: read.imports, key: read.key };
   } finally {
     reader.dispose();
   }
@@ -140,18 +143,27 @@ export function notesOf(shapes: readonly MeshedShape[], sketches: number, trace:
 
 export interface BuildArgs {
   doc: CadModelDoc | undefined;
+  /** The model's URL, by which the build an editor in this page shows of it is found. */
+  url?: string;
   repo?: Repo;
   /** The placed model's params (params()), with their defaults filled in. */
   params?: Record<string, unknown>;
 }
 
 /** The model with its configuration's parameters (its defaults if none), as a GLB in the scene's frame (Y up, metres). Never writes the model document. */
-export async function build({ doc, repo, params: placed }: BuildArgs) {
+export async function build({ doc, url, repo, params: placed }: BuildArgs) {
   if (!doc) throw new Error("the CAD model isn't available");
   const source = String(doc.content ?? "");
   const r = repo ?? globalThis.repo;
   const configured = await configurationValues(doc, placed?.[CONFIGURATION], r);
-  const { result, located } = await buildModel(source, await readImports(source, doc, r), configured.values, faceRefsOf(doc).map((f) => f.ref));
+  const read = await readImports(source, doc, r);
+  const refs = faceRefsOf(doc).map((f) => f.ref);
+  // What an editor in this page has just built from the same, e.g. after the same edit, isn't built again.
+  const model = url && docOf(url);
+  const shown = model ? await sharedBuild(model, source, paramsKey(configured.values), read.key) : undefined;
+  const { result, located }: { result: Awaited<ReturnType<typeof buildModel>>["result"]; located: Located } = shown
+    ? { result: shown.result, located: refs.length ? await shown.locate([...new Set(shown.result.shapes.flatMap((s) => (s.body ? [s.body] : [])))], refs).catch(() => refs.map(() => [])) : [] }
+    : await buildModel(source, read.imports, configured.values, refs);
   if (!result.ok) throw new Error(errorText(result.error));
   const pictures = await placedCanvases(doc, r, result.shapes, located);
   const { glb, bounds } = modelGlb(result.shapes, result.sketches, pictures.canvases);

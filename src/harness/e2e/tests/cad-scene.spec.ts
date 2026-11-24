@@ -409,3 +409,33 @@ test("a placed model's image canvases are pictures in the scene's GLB: on XY and
   if (shots) await page.screenshot({ path: `${shots}/scene-10-canvases-built.png` });
 });
 
+const sceneBuilds = (page: Page) => page.evaluate(() => (globalThis as { patchworkCadSceneBuilds?: number }).patchworkCadSceneBuilds ?? 0);
+const setSource = (page: Page, model: string, source: string) =>
+  page.evaluate(
+    async ([url, text]) => {
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { content: string }) => void): void }> } }).repo;
+      (await repo.find(url!)).change((d) => (d.content = text!));
+    },
+    [model, source],
+  );
+
+test("while its editor is open in the scene, the scene takes the editor's build of the model instead of building it again", async ({ page }) => {
+  await bootToFrame(page);
+  const { model, scene } = await modelInScene(page, TALL, "Block");
+  await openSelected(page);
+  await expect.poll(async () => Number(await hostView(page).getAttribute("data-vertices"))).toBeGreaterThan(0);
+  await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.008, 5);
+  const before = await sceneBuilds(page);
+
+  // An edit: the editor builds it, and the scene's GLB follows with that build.
+  await setSource(page, model, TALL.replace("h: 8", "h: 12"));
+  await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.012, 5);
+  expect(await sceneBuilds(page)).toBe(before);
+
+  // With the editor closed, the scene builds the model itself.
+  await page.locator('.scene-tool button[data-command="cad-edit"]').click();
+  await expect(sceneEditor(page)).toHaveCount(0);
+  await setSource(page, model, TALL.replace("h: 8", "h: 16"));
+  await expect.poll(async () => (await builtBounds(page, scene))?.max[1], { timeout: 30_000 }).toBeCloseTo(0.016, 5);
+  expect(await sceneBuilds(page)).toBe(before + 1);
+});
