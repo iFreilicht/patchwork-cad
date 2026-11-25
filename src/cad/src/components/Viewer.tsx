@@ -141,6 +141,11 @@ export interface ViewerProps {
   /** A right click, not a drag, which pans: the face or edge of a feature-library body under the pointer, if any, and where it was. */
   onContextMenu?: (entity: Entity | undefined, at: { x: number; y: number }) => void;
   highlight?: Highlight[] | undefined;
+  /**
+   * While a build's progress shows, the features it is done with (research/23, "The view"): faces of
+   * the shown shapes whose owning features aren't all done are drawn stale.
+   */
+  built?: { has(feature: string): boolean } | undefined;
   /** Outlines drawn over the model, e.g. of the open sketch, as a hovered edge is. */
   overlays?: Overlay[] | undefined;
   /** The sketches the model shows, drawn as lines on it. */
@@ -467,6 +472,8 @@ export function Viewer(props: ViewerProps) {
     const lineMaterial = new THREE.LineBasicMaterial({ visible: false });
     const accent = themeColor(container, "--cad-model-accent");
     const background = themeColor(container, "--cad-model-bg");
+    // Faces of the last result that a running build hasn't reached (research/23, "The view"): see-through as unpickable bodies are, which reads as "not there yet" in both themes, whatever the shading.
+    const staleMaterial = fadedFaceMaterial;
     // Lines need the contrast of the text variant, e.g. a sketch outline against a light background.
     const accentLine = themeColor(container, "--cad-model-accent-text");
     const hover = themeColor(container, "--cad-model-hover");
@@ -1111,10 +1118,25 @@ export function Viewer(props: ViewerProps) {
       renders();
       for (const r of rendered) {
         const faded = !pickableShape(r);
-        r.mesh.material = faded ? fadedFaceMaterial : faceMaterial;
+        // Groups of stale faces take the second material (see below).
+        r.mesh.material = [faded ? fadedFaceMaterial : faceMaterial, staleMaterial];
         if (r.wide) r.wide.material = faded ? fadedEdgeMaterial : edgeMaterial;
       }
       container.dataset["faded"] = rendered.filter((r) => !pickableShape(r)).map((r) => r.id).join(" ");
+    });
+
+    // A running build's stale faces (research/23, "The view"): a face is stale until every feature that created or changed it has run again.
+    createEffect(() => {
+      renders();
+      const built = props.built;
+      let stale = 0;
+      for (const r of rendered) {
+        const faces = new Set<number>();
+        if (built) for (const [feature, shaped] of Object.entries(r.shape.shapers ?? {})) if (!built.has(feature)) for (const face of shaped) faces.add(face);
+        r.mesh.geometry.groups.forEach((g, gi) => (g.materialIndex = faces.has(groupEntity(r.shape.faceIndex, gi)) ? 1 : 0));
+        stale += faces.size;
+      }
+      container.dataset["stale"] = String(stale);
     });
 
     /** The highlighted entities by style, for tests. */
@@ -1178,6 +1200,7 @@ export function Viewer(props: ViewerProps) {
       dispose([...sketchGroup.children]);
       sketchGroup.clear();
       for (const sketch of props.sketches ?? []) for (const line of sketch.outline) sketchGroup.add(new LineSegments2(segments(line), sketchMaterial));
+      container.dataset["sketches"] = (props.sketches ?? []).map((sketch) => sketch.name).join(" ");
     });
     createEffect(() => {
       dispose([...overlayGroup.children]);

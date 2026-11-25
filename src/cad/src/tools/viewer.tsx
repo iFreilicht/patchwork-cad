@@ -10,6 +10,7 @@ import { createNamedViews } from "../components/namedViews.ts";
 import { createConfigurations } from "../components/configurations.ts";
 import { sameCamera, Viewer, type ViewerApi, type ViewerProps } from "../components/Viewer.tsx";
 import { HOME } from "../model/views.ts";
+import { changedSketches } from "../components/progress.ts";
 import type { CadModelDoc, CadModelEmbedDoc, CameraState } from "../types.ts";
 import type { Model } from "../components/createModel.ts";
 import { createComments } from "../components/comments.ts";
@@ -21,6 +22,12 @@ import { timeline } from "../model/timeline.ts";
 import { createDocumentInfo, heldProblems, type DocumentInfo } from "../components/documentInfo.ts";
 import { createAnnotationStore, placeAnnotations } from "../components/annotations.tsx";
 import "../styles.css";
+
+/** While a slow build runs, the outlines of the sketches it changed (research/23, "The view"). */
+const builtSketches = (model: Model) => {
+  const states = model.buildStates();
+  return states ? changedSketches(states.done, model.trace()) : [];
+};
 
 const VIEWER_TOOL_ID = "cad-model-viewer";
 
@@ -117,7 +124,7 @@ function ModelViewer(props: { handle: DocHandle<CadModelDoc>; element: HTMLEleme
   let root!: HTMLDivElement;
   return (
     <div class="cad-model cad-model--viewer" ref={root} {...modelAttributes(model)}>
-      <Viewer shapes={model.shapes()} sketches={model.sketches()} view={goTo() ?? ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
+      <Viewer shapes={model.shapes()} sketches={[...model.sketches(), ...builtSketches(model)]} built={model.buildStates()?.done} view={goTo() ?? ui.view(VIEWER_TOOL_ID)} onViewChange={(view) => ui.setView(VIEWER_TOOL_ID, view)} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
       {popover(() => root)}
       <StatusBar model={model} problems={heldProblems(model, info)} />
     </div>
@@ -220,7 +227,7 @@ function Embed(props: { handle: DocHandle<CadModelEmbedDoc>; doc: () => CadModel
   return (
     <div class="cad-model cad-model--viewer cad-model--embed" ref={root} {...modelAttributes(model)} data-view={view()?.name ?? ""} data-deleted={deleted() ? "true" : "false"} data-configuration={configuration()?.name ?? ""} data-configuration-deleted={configurationDeleted() ? "true" : "false"}>
       <div class="cad-embed__stage" ref={stage}>
-        <Viewer shapes={model.shapes()} sketches={model.sketches()} view={shown()} onViewChange={onViewChange} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
+        <Viewer shapes={model.shapes()} sketches={[...model.sketches(), ...builtSketches(model)]} built={model.buildStates()?.done} view={shown()} onViewChange={onViewChange} onApi={(api) => (viewer = api)} home={views.home()} faceRefs={faceRefs(model)} collapseViewCube {...presence} />
         <div class="cad-embed__edit">
           <select class="cad-editor__button" aria-label="View" title={deleted() ? "This view was deleted from the model; choose another" : "The model's view this embed shows"} onChange={(event) => choose(event.currentTarget.value)}>
             <Show when={!view()}>

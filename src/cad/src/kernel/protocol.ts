@@ -33,6 +33,8 @@ export interface MeshedShape {
   edgeIndex: number[] | undefined;
   /** The body's faces and edges by the feature that created or split them (research/12). */
   features: Owned | undefined;
+  /** The body's faces by every feature that created or changed them; a running build shows them stale until all of these ran (research/23). */
+  shapers: Record<string, number[]> | undefined;
 }
 
 /** A polyline in world coordinates, e.g. a path of a sketch's profile. */
@@ -147,7 +149,7 @@ export type WorkerResponse =
   /** `dropped`: how many of the values main returned can't be shown, e.g. a string. */
   /** Feature `name` of build `id` started (research/23); `variable`: whether its name is a variable. */
   | { type: "featureStarted"; id: number; name: string; featureType: string; line: number | undefined; variable: boolean }
-  /** A feature of build `id` is done: its trace without what only the whole build tells, i.e. sketch geometry and `unused`. */
+  /** A feature of build `id` is done: its trace without a sketch's regions and size, and without `unused`, which only the whole build tells. */
   | { type: "featureDone"; id: number; feature: FeatureTrace }
   | { type: "built"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number; paramValues: ParamValues }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }

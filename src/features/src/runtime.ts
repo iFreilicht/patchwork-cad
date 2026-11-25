@@ -12,7 +12,7 @@ import { owningFeatures, refForm, setFeaturePrinter, type Name, type Vec } from 
 import { Ref, resolve } from "./refs.ts";
 import { cast, type AnyShape } from "replicad";
 import { oc, progress, subShapes, type Kind } from "./oc.ts";
-import { entities } from "./topo.ts";
+import { entities, opsOf } from "./topo.ts";
 
 /** The built-in features by function name, for recognizing calls and rendering their forms. */
 export const builtins = { sketch, extrude, fillet, chamfer, combine, move, body } as const;
@@ -37,6 +37,18 @@ export function owners(b: Body): Owned {
     const faces = new Set(owned.faces);
     edgeFaces.forEach((adjacent, edge) => adjacent.some((f) => faces.has(f)) && owned.edges.push(edge));
   }
+  return out;
+}
+
+/**
+ * Indices of a body's faces by every feature that created or changed them, also by only modifying
+ * them (`Topo.faceOps`): a face shows as it will until all of them have run again (research/23).
+ */
+export function shapers(b: Body): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  b.topo.faces.forEach((_, face) => {
+    for (const feature of opsOf(b.topo, face)) (out[feature] ??= []).push(face);
+  });
   return out;
 }
 

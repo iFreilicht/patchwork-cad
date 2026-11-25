@@ -31,7 +31,7 @@ Tested by [`names.test.ts`](../src/features/test/names.test.ts) on M1, [`body.te
 
 ## Limits
 
-- **Only creation and splits are in the names.** A face that a feature only modifies, e.g. one a fillet trims, keeps its names (`propagate` in [`topo.ts`](../src/features/src/topo.ts) gives a single Modified result the input's names), so it isn't highlighted. Fusion's "impacted geometry" may include such faces; recording them would need a per-face list of modifying features in `Topo`.
+- **Only creation and splits are in the names.** A face that a feature only modifies, e.g. one a fillet trims, keeps its names (`propagate` in [`topo.ts`](../src/features/src/topo.ts) gives a single Modified result the input's names), so it isn't highlighted. Fusion's "impacted geometry" may include such faces. `Topo.faceOps` records them, for the stale faces of a running build ([23](23-build-progress.md#the-view)); highlights don't use it.
 - **Splits make a feature own faces of another.** The notch owns the pieces of `extrude1.side.front`, which both features highlight.
 - **A `body()` owns its bodies' faces by the bodies' names** ([11](11-adopting-shapes.md)): its `faceAt` names carry the body's name (`left`, `right`), not the entry's. The editor therefore matches an entry by its feature's name and its bodies' names, and fetches a result past the marker by body name.
 

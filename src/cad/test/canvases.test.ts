@@ -231,6 +231,7 @@ const plate = {
   opacity: undefined,
   edges: undefined,
   features: undefined,
+  shapers: undefined,
   faces: {
     vertices: [0, 0, 0, 20, 0, 0, 20, 10, 0, 0, 10, 0, 0, 0, 5, 20, 0, 5, 20, 10, 5, 0, 10, 5],
     normals: [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],

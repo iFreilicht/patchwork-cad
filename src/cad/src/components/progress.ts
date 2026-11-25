@@ -3,7 +3,7 @@
  * how far the running build is. The status bar and the timeline show it once a build has run for a while.
  */
 import type { AutomergeUrl } from "@automerge/automerge-repo";
-import type { FeatureTrace } from "../kernel/protocol.ts";
+import type { FeatureTrace, ShownSketch } from "../kernel/protocol.ts";
 
 /** How long a build runs before its progress shows, and how long progress shows at least, so that it doesn't flash. */
 export const PROGRESS_DELAY_MS = 500;
@@ -71,6 +71,29 @@ export function remainingText(ms: number): string {
   if (ms < 10_000) return "a few seconds left";
   if (ms < 60_000) return `about ${Math.ceil(ms / 5000) * 5} s left`;
   return `about ${Math.ceil(ms / 60_000)} min left`;
+}
+
+/** Whether a sketch of the running build looks different from the last build's, by its trace entry, which stays the same object while the build runs. */
+const changed = new WeakMap<FeatureTrace, boolean>();
+
+/**
+ * The sketches the running build is done with that are new or look different from the last build's
+ * (`trace`): the view shows their outlines at once, before the features that use them have run
+ * (research/23, "The view").
+ */
+export function changedSketches(done: ReadonlyMap<string, FeatureTrace>, trace: readonly FeatureTrace[]): ShownSketch[] {
+  const out: ShownSketch[] = [];
+  for (const t of done.values()) {
+    if (!t.outline) continue;
+    let differs = changed.get(t);
+    if (differs === undefined) {
+      const before = trace.find((x) => x.name === t.name)?.outline;
+      differs = JSON.stringify(before) !== JSON.stringify(t.outline);
+      changed.set(t, differs);
+    }
+    if (differs) out.push({ name: t.name, outline: t.outline });
+  }
+  return out;
 }
 
 /** A feature's name, or for one without a variable its type and line. */

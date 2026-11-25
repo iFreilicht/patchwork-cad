@@ -45,6 +45,7 @@ import { onPlane } from "../../model/canvases.ts";
 import type { DocumentCamera, StoredCanvas } from "../../types.ts";
 import { CANVAS_PICK, createCalibration } from "./CanvasFields.tsx";
 import { chosenRegions, sketchVariable, toggleRegion } from "./regions.ts";
+import { changedSketches } from "../progress.ts";
 
 const EDITOR_TOOL_ID = "cad-model";
 /** Experiment: a view of tldraw documents without UI or background, for canvases (research/22-document-canvases/tldraw-view). */
@@ -321,7 +322,12 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
   const shown = createMemo(() => built().filter((s) => !s.body || bodies.shows(s.body)), [], { equals: sameShapes });
   /** Bodies the view would show but this user hid: collaborators' highlights on them show as ghosts. */
   const hidden = createMemo(() => built().filter((s) => s.body && !bodies.shows(s.body)), [], { equals: sameShapes });
-  const shownSketches = () => (rolledBackTo()?.sketches ?? model.sketches()).filter((s) => bodies.shows(s.name));
+  /** While a slow build runs, the outlines of the sketches it changed, shown before the features that use them have run (research/23). */
+  const builtSketches = createMemo(() => {
+    const states = model.buildStates();
+    return states ? changedSketches(states.done, model.trace()) : [];
+  });
+  const shownSketches = () => [...(rolledBackTo()?.sketches ?? model.sketches()).filter((s) => bodies.shows(s.name)), ...builtSketches()];
   /** All faces of a shown body, or of a mesh of it as a ghost. */
   const wholeBody = (name: string, style: Highlight["style"]): Highlight[] => {
     const visible = shown().find((s) => s.body === name);
@@ -837,6 +843,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
       <div class="cad-editor__stage" ref={stage} tabindex="-1" data-drop="insert">
         <Viewer
           shapes={rolledBack() || model.shapes() ? shown() : undefined}
+          built={model.buildStates()?.done}
           pick={editor.pickTarget()?.kind === "body" || editor.pickTarget()?.kind === "version" ? "face" : editor.pickTarget()?.kind === "sketch" || editor.pickTarget()?.kind === "region" ? undefined : (editor.pickTarget()?.kind as "face" | "edge" | undefined)}
           onPick={pick}
           hoverHighlight={!editor.pickingVersion()}

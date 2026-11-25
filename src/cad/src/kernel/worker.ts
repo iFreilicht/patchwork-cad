@@ -5,7 +5,7 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, shapers, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { loadFonts, mayDrawText } from "./fonts.ts";
 import { moduleKey, type Imports } from "./imports.ts";
 import { dataNamespace, evaluate, fileNamespace, lineFromStack, type Namespace } from "./modules.ts";
@@ -236,7 +236,7 @@ function liveSketches(trace: readonly TraceEntry[], end: number): ShownSketch[] 
   return ran.flatMap((t) => (t.sketch && !used.has(t.sketch) ? shownSketch(t.sketch) : []));
 }
 
-/** A trace entry as a feature's progress message sends it: without its sketch's geometry, and not unused, which only the whole build tells. */
+/** A trace entry as a feature's progress message sends it: a sketch's outline, which the view shows early, but not its regions; not unused, which only the whole build tells. */
 const brief = (t: TraceEntry): FeatureTrace => ({
   name: t.name,
   type: t.type,
@@ -250,7 +250,7 @@ const brief = (t: TraceEntry): FeatureTrace => ({
   result: t.result?.name,
   results: t.results.map((b) => b.name),
   names: t.names,
-  outline: undefined,
+  outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
   warnings: t.warnings,
   unused: false,
   ms: t.ms,
@@ -260,7 +260,6 @@ const brief = (t: TraceEntry): FeatureTrace => ({
 const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | features.Sketch> = new Set()): FeatureTrace[] =>
   trace.map((t) => ({
     ...brief(t),
-    outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
     regions: t.sketch && !t.sketch.broken ? regionsOf(t.sketch) : undefined,
     size: t.sketch && !t.sketch.broken ? sizeOf(t.sketch) : undefined,
     unused: t.sketch ? unused.has(t.sketch) : t.results.length > 0 && t.results.every((b) => unused.has(b)),
@@ -319,6 +318,7 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
     faceIndex: faces.faceGroups?.map((g) => faceIds.indexOf(g.faceId)),
     edgeIndex: edges?.edgeGroups?.map((g) => edgeIds.indexOf(g.edgeId)),
     features: owners(body),
+    shapers: shapers(body),
   };
 }
 
@@ -367,7 +367,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
     if (shape.format === "svg" || !shape.mesh) return [];
     const body = bodies.get(kept[i]?.shape);
     const edges = shape.edges ?? undefined;
-    const pickable = body ? indices(body, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
+    const pickable = body ? indices(body, shape.mesh, edges) : { body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined, shapers: undefined };
     return [{ name: shape.name, color: shape.color, opacity: shape.opacity, faces: shape.mesh, edges, ...pickable }];
   });
   lastTrace = [...currentTrace()];
@@ -424,7 +424,7 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" | "exp
       id: request.id,
       shapes: shapes.map((shape, i) => {
         const meshable = shape as unknown as { mesh(o: typeof MESH): MeshedShape["faces"]; meshEdges(o: typeof MESH): NonNullable<MeshedShape["edges"]> };
-        return { name: `${request.feature}:changed:${i}`, color: undefined, opacity: undefined, faces: meshable.mesh(MESH), edges: meshable.meshEdges(MESH), body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined };
+        return { name: `${request.feature}:changed:${i}`, color: undefined, opacity: undefined, faces: meshable.mesh(MESH), edges: meshable.meshEdges(MESH), body: undefined, faceIndex: undefined, edgeIndex: undefined, features: undefined, shapers: undefined };
       }),
     });
   } else if (request.type === "refs") {

@@ -137,11 +137,29 @@ A new worker until OCCT is ready, warm, median of 5: 111 ms in Chromium, 364 ms 
 
 ### The view
 
-Three layers, cheapest first:
+Three layers, cheapest first; the first two are built:
 
-1. **The last result, marked stale.** The view keeps the last shapes while building, as today, but greys out the faces whose owning features haven't run yet in this build, and restores each face once all its owners have ([12](12-hover-highlighting.md#design): every shown face already comes with the features that made it). Progress is painted onto the model at no cost in the worker. Geometry that the edit changes is shown as it was until the new result arrives, which the greying says.
-2. **Sketch outlines as soon as their sketch has run.** Outlines are computed per sketch anyway (`outline` in [`worker.ts`](../src/cad/src/kernel/worker.ts)); sent with the feature's message, a new profile shows within milliseconds of the edit, before the booleans that use it.
-3. **Intermediate bodies, within a budget.** Meshing every feature's result triples a build ([results](#reporting-cost)). Meshing the visible bodies only when that keeps meshing under 10 % of the time shows the model growing a few times per second in a slow build at a cost of about that much. It replaces the old result with an unfinished one, e.g. holes without their fillets, which may read as a regression; whether that helps more than layer 1 is a question for users, so it should be a setting at first.
+1. **The last result, stale where the build hasn't reached it.** The view keeps the last shapes while building. A face is stale until every feature that created or changed it has run in this build, and shown as it was once they have; the new geometry only arrives with the result. Faces carry the features that made them ([12](12-hover-highlighting.md#design)), but not those that only changed them, e.g. the cut that makes a hole in a face, so a face with a hole whose radius changed would count as up to date while the cut waits. `Topo.faceOps` therefore records, per face, every feature along its history that created, split or modified it ([`topo.ts`](../src/features/src/topo.ts)); `shapers` turns them into the meshes' faces by feature. Building the plate (244 features) in Node took about 3.8 s with and without them, naming 400–660 ms either way, which the host's load (about 15) spread more than any difference. The worker does nothing more while building: the view paints the progress onto the model.
+2. **Changed sketches at once.** A sketch's done message carries its outline, and the view draws the outlines that are new or differ from the last build's, as sketches are drawn, until the result arrives: a new profile shows before the booleans that use it.
+3. **Intermediate bodies, within a budget: not built.** Meshing every feature's result triples a build ([results](#reporting-cost)); within 10 % of the time, the model would grow a few times per second. But it replaces the old result with an unfinished one, e.g. holes without their fillets, which may read as a regression, and it would help most in a model's first build, which no cache speeds up and which meshing slows down most.
+
+#### The look of stale faces
+
+Stale faces have to look inactive next to built ones in both themes, from every angle. Bodies are a grey between background and text ([14](14-edge-contrast.md)), which in dark mode is close to the background, so a darker or less saturated grey hardly shows, and shading changes lightness with the angle anyway. Five looks, compared on M3 paused after its upright, when only the base's bottom face is built (`cad-progress.spec.ts` with a temporary switch):
+
+| | light | dark |
+|---|---|---|
+| built | ![](23-build-progress/stale/light-built.png) | ![](23-build-progress/stale/dark-built.png) |
+| see-through (chosen) | ![](23-build-progress/stale/light-ghost-1.png) | ![](23-build-progress/stale/dark-ghost-1.png) |
+| hatched | ![](23-build-progress/stale/light-hatch-1.png) | ![](23-build-progress/stale/dark-hatch-1.png) |
+| flat, unlit, half way to the background | ![](23-build-progress/stale/light-flat-1.png) | ![](23-build-progress/stale/dark-flat-1.png) |
+| edges only | ![](23-build-progress/stale/light-edges-1.png) | ![](23-build-progress/stale/dark-edges-1.png) |
+| see-through and hatched | ![](23-build-progress/stale/light-ghosthatch-1.png) | ![](23-build-progress/stale/dark-ghosthatch-1.png) |
+| see-through, paused after the hole's sketch, its new outline over the old hole | ![](23-build-progress/stale/light-ghost-2.png) | ![](23-build-progress/stale/dark-ghost-2.png) |
+
+- **Flat** is hardly visible in dark mode. **Hatched** is loud in light mode and faint in dark mode, and reads as a texture of the material rather than as inactive.
+- **Edges only** is the strongest, but the old faces vanish, which reads as removed rather than as waiting.
+- **See-through** is clear in both themes whatever the shading: stale faces are those of the bodies that can't be picked (25 % opacity), so inactive looks the same everywhere in the view, as rolled-back and suppressed features are drawn in CAD systems. Edges stay, so the shape stays legible. Hatching adds nothing to it.
 
 With per-feature caching ([00](00-status.md#not-started)), only the features after the edited one run: the waiting entries and the stale faces are then exactly what the edit affects, and the estimate covers only them.
 
@@ -157,24 +175,25 @@ With per-feature caching ([00](00-status.md#not-started)), only the features aft
 1. The hook and the progress message, forwarded by the engine. This alone removes the 10 s limit on builds ([Reporting](#reporting)).
 2. The status bar: "Building…" at once; after a delay the running feature, elapsed time, Abort; the estimate from the previous build, stored per user.
 3. Build states in the timeline and the code pane, with statuses as features finish.
-4. The stale view and early sketch outlines.
+4. The stale view and changed sketches at once.
 5. Aborting superseded builds; "Build again" after an abort.
-6. Settings to try with users: intermediate bodies within a budget, building up to the marker.
+6. A setting to try with users: building up to the marker.
 
 ## Implementation
 
-Steps 1–3 of the [suggested order](#suggested-order):
+Steps 1–4 of the [suggested order](#suggested-order):
 
 - **Library:** `beginBuild({ lenient, onFeature })` ([`feature.ts`](../src/features/src/feature.ts)); `progress.test.ts` checks the calls, also of a feature that fails in a strict build.
 - **Kernel:** the worker's `featureStarted` and `featureDone` messages ([`protocol.ts`](../src/cad/src/kernel/protocol.ts)); the engine forwards them with a `build` and an `ended` event around each build, keeps the features that were done for a build it replaces, and has `abort()` ([`engine.ts`](../src/cad/src/kernel/engine.ts)). An aborted build fails as aborted with the features that were done: the shapes stay, the timeline greys out what didn't run, and nothing builds until the next edit, also not a newer source that waited.
 - **Progress:** the model turns the events into a progress state ten times a second, once a build has run for 0.5 s, and keeps it at least 0.5 s, full at the end ([`createModel.ts`](../src/cad/src/components/createModel.ts)); estimates, times and texts are in [`progress.ts`](../src/cad/src/components/progress.ts).
 - **Status bar:** "Building…" at once in place of the last build time; from 0.5 s the running feature, the ribbed bar, the elapsed time, from 10 s the remaining time, and Abort; after a slow build its slowest feature, e.g. "build 6.1 s, slowest a 2.0 s" ([`StatusBar.tsx`](../src/cad/src/components/StatusBar.tsx)). Without motion where the user asks for reduced motion.
 - **Timeline and code:** entries and lane nodes get `data-build` (done, running, waiting), statuses as features finish, and their last time in the tooltip ([`Timeline.tsx`](../src/cad/src/components/editor/Timeline.tsx)); the code pane ribs the running feature's line ([`CodeEditor.tsx`](../src/cad/src/components/CodeEditor.tsx)).
-- **Tests:** `cad-progress.spec.ts` builds three features of 2 s each under a 5 s watchdog in every browser, with the states of the status bar, the timeline and the code pane on the way and an estimate in the second build, and aborts a 60 s feature.
+- **View:** `Topo.faceOps` and `shapers` in the library; the meshes' `shapers`; the viewer's `built` (the features done), whose stale faces take the see-through material by their geometry groups, and the outlines of changed sketches from `changedSketches` ([`Viewer.tsx`](../src/cad/src/components/Viewer.tsx), [`progress.ts`](../src/cad/src/components/progress.ts)), in the editor and the viewer.
+- **Tests:** `cad-progress.spec.ts` builds three features of 2 s each under a 5 s watchdog in every browser, with the states of the status bar, the timeline and the code pane on the way and an estimate in the second build, aborts a 60 s feature, and pauses M3's build twice, in light and dark mode, for its stale faces and the hole's new outline (screenshots with `CAD_SHOTS`); the library's `progress.test.ts` checks that a cut into a face counts among its features.
 
 ## Open
 
-- Whether intermediate bodies or the stale last result communicate progress better; only users can tell.
+- Whether intermediate bodies would communicate progress better than the stale last result; only users can tell, and the first build of a model, where they would help most, is where they cost most.
 - Progress inside one OCCT operation, and stopping one, which need a `Message_ProgressIndicator` that JS can implement in a custom OCCT build.
 - A cooperative stop between features, which needs a cross-origin-isolated Patchwork; it matters once per-feature caching makes a restart costlier.
 - Matching features of two builds by name fails for unnamed features after their line moved (`extrude@L12#3`, [07](07-poc-modelling-ui.md#open)); position and type can stand in.

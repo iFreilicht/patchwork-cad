@@ -1,7 +1,7 @@
-/** The build hook an editor shows progress with (research/23): each feature as it starts and when it is done. */
+/** What an editor shows a build's progress with (research/23): each feature as it starts and when it is done, and which features shaped each face. */
 import { beforeAll, expect, test } from "vitest";
-import { extrude, plane, rect, sketch } from "../src/index.ts";
-import { beginBuild, type TraceEntry } from "../src/runtime.ts";
+import { circle, extrude, plane, rect, sketch } from "../src/index.ts";
+import { beginBuild, describe, shapers, type TraceEntry } from "../src/runtime.ts";
 import { loadOC } from "./oc.ts";
 
 beforeAll(loadOC);
@@ -28,4 +28,21 @@ test("a strict build reports a failed feature before it throws", () => {
   const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) }, { name: "sketch1" });
   expect(() => extrude({ sketch: sketch1, distance: 0 }, { name: "extrude1" })).toThrow();
   expect(done).toEqual(["sketch1:ok", "extrude1:failed"]);
+});
+
+test("shapers: a face lists the features that created or changed it, also by only cutting into it", () => {
+  beginBuild({ lenient: false });
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [20, 10] }) }, { name: "sketch1" });
+  const plate = extrude({ sketch: sketch1, distance: 5 }, { name: "plate" });
+  const sketch2 = sketch({ plane: plane("XY", 5), profile: circle({ center: [10, 5], radius: 2 }) }, { name: "sketch2" });
+  const hole = extrude({ sketch: sketch2, distance: -2, operation: "cut", target: plate }, { name: "hole" });
+  const by = shapers(hole);
+  const top = hole.topo.faces.findIndex((_, i) => Math.abs(describe(hole.topo.faces[i]!, "face").centroid[2] - 5) < 1e-6);
+  const side = hole.topo.faces.findIndex((_, i) => Math.abs(describe(hole.topo.faces[i]!, "face").centroid[1]) < 1e-6);
+  // The top keeps its names from the plate, but the cut changed it.
+  expect(by["plate"]).toContain(top);
+  expect(by["hole"]).toContain(top);
+  // The side the cut didn't touch.
+  expect(by["plate"]).toContain(side);
+  expect(by["hole"]).not.toContain(side);
 });

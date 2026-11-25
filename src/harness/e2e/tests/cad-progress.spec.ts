@@ -1,10 +1,11 @@
 /**
  * Build progress (research/23-build-progress.md): a slow build reports each feature, so the kernel's
  * watchdog limits one feature, not the build; after a delay the status bar shows the running feature,
- * a bar and Abort, the timeline and the code pane what the build is doing, and Abort stops it.
+ * a bar and Abort, the timeline and the code pane what the build is doing, the view which faces it
+ * hasn't reached and the sketches it changed, and Abort stops it.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, cadView, createModel, openCode, setModelSource, timelineEntry, vertices } from "../cad.ts";
+import { CAD_MODULES, cadView, createModel, exampleSource, openCode, setModelSource, timelineEntry, vertices } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -117,3 +118,52 @@ test("Abort stops a slow build and keeps the last result", async ({ users }) => 
   await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 60_000 });
   await expect(timelineEntry(page, "c")).toHaveAttribute("data-status", "ok");
 });
+
+/** M3 busy for `ms` after the upright and after the hole's sketch, with the hole's radius `r`. */
+const slowM3 = (ms: number, r: number) =>
+  exampleSource("m3", [
+    ["export default function", `const busy = (ms) => {\n  const end = performance.now() + ms;\n  while (performance.now() < end);\n};\n\nexport default function`],
+    ["  let body = upright;", `  busy(${ms});\n  let body = upright;`],
+    ["radius: 4 }) });", `radius: ${r} }) });\n  busy(${ms});`],
+  ]);
+
+// The view: faces the build hasn't reached, i.e. whose features (also those that only changed them,
+// as the hole changes the back face) haven't all run again, are see-through; a sketch that changed
+// shows at once. Screenshots to `CAD_SHOTS`, if set, in light and dark mode.
+for (const colorScheme of ["light", "dark"] as const)
+  test.describe(colorScheme, () => {
+    test.use({ colorScheme });
+    test("a slow build shows the faces it hasn't reached as stale, and changed sketches at once", async ({ users }) => {
+      test.setTimeout(120_000);
+      const [user] = await users(1);
+      const { page } = user!;
+      await openModel(page);
+      const viewer = page.locator(".cad-model__viewer").first();
+      const stale = async () => Number(await viewer.getAttribute("data-stale"));
+      const shot = async (name: string) => {
+        const shots = process.env["CAD_SHOTS"];
+        if (shots) await viewer.screenshot({ path: `${shots}/stale-${colorScheme}-${name}.png` });
+      };
+      await setModelSource(page, slowM3(0, 4));
+      await expect(timelineEntry(page, "extrude1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+      await expect(cadView(page)).toHaveAttribute("data-state", "ready");
+      expect(await stale()).toBe(0);
+
+      await setModelSource(page, slowM3(2000, 7));
+      // Base and upright have run; the ribs, fillet, chamfer and hole haven't.
+      await expect(timelineEntry(page, "upright")).toHaveAttribute("data-build", "done");
+      await expect.poll(stale).toBeGreaterThan(0);
+      const early = await stale();
+      await shot("1");
+      // The hole's new sketch has run, its cut hasn't: only the faces the cut makes or changes are stale.
+      await expect(timelineEntry(page, "sketch3")).toHaveAttribute("data-build", "done", { timeout: 10_000 });
+      await expect(viewer).toHaveAttribute("data-sketches", /\bsketch3\b/);
+      await expect.poll(stale).toBeLessThan(early);
+      expect(await stale()).toBeGreaterThan(0);
+      await shot("2");
+
+      await expect(cadView(page)).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+      expect(await stale()).toBe(0);
+      await expect(viewer).not.toHaveAttribute("data-sketches", /\bsketch3\b/);
+    });
+  });
