@@ -1,5 +1,6 @@
 import { beforeAll, expect, test } from "vitest";
-import { circle, extrude, plane, rect, sketch } from "../src/index.ts";
+import { circle, extrude, plane, polygon, rect, sketch } from "../src/index.ts";
+import { describe } from "../src/geom.ts";
 import { beginBuild, currentTrace } from "../src/runtime.ts";
 import { loadOC } from "./oc.ts";
 import { oc } from "../src/oc.ts";
@@ -33,4 +34,25 @@ test("the distance runs along the sketch's normal, whatever the operation: into 
   // Away from the plate, a cut takes nothing away.
   expect(volume(extrude({ sketch: sketch2, distance: 2, operation: "cut", target: plate }))).toBeCloseTo(1000);
   expect(currentTrace().every((t) => t.status === "ok")).toBe(true);
+});
+
+// OCCT appends the pieces that unifying same-domain faces rebuilt in the order of a map hashed by
+// address, so `piece(hole, 1)` named another face after the heap changed (research/03, kernel findings).
+test("piece indices are the same in every build, also of pieces that unifying faces rebuilt", () => {
+  // A U whose sides are two coplanar faces each, meeting at the hole's height: unifying them merges the hole's rims.
+  const build = () => {
+    beginBuild({ lenient: false });
+    const profile = polygon({ a: [0, 0], b: [50, 0], b2: [50, 25], c: [50, 40], d: [40, 40], d2: [40, 25], e: [40, 10], f: [10, 10], f2: [10, 25], g: [10, 40], h: [0, 40], h2: [0, 25] });
+    const u = extrude({ sketch: sketch({ plane: plane("XY"), profile }), distance: 10 }, { name: "u" });
+    const hole = extrude({ sketch: sketch({ plane: plane("YZ"), profile: circle({ center: [25, 5], radius: 3 }) }), operation: "cut", target: u, extent: "through" }, { name: "hole" });
+    const piece = hole.topo.faceHist.findIndex((h) => h.has("ref.hole.side.c.piece(ref.hole, 1)"));
+    return describe(hole.topo.faces[piece]!, "face").centroid[0];
+  };
+  const first = build();
+  for (let i = 0; i < 10; i++) {
+    // Shapes kept alive in between, so that the next build's shapes are elsewhere in the heap.
+    const kept = Array.from({ length: 100 * (i + 1) }, (_, j) => new (oc().BRepPrimAPI_MakeBox)(1 + j, 2, 3).Shape());
+    expect(build()).toBeCloseTo(first, 6);
+    kept.forEach((s) => s.delete());
+  }
 });

@@ -284,6 +284,8 @@ const REFIT_BELOW = 0.5;
 const SLIVER = 0.02;
 /** How long the camera turns to a ViewCube region. */
 const TURN_MS = 300;
+/** An edge this many CSS pixels from the pointer is under it, at any zoom, so that zooming in reaches a face narrower than that, e.g. a small chamfer. */
+const EDGE_PICK_PX = 6;
 
 /** Relative luminance (WCAG), from a colour's linear components. */
 const luminance = (c: THREE.Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
@@ -1627,7 +1629,6 @@ export function Viewer(props: ViewerProps) {
       const rect = canvas.getBoundingClientRect();
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
       aim(pointer);
-      raycaster.params.Line = { threshold: radius * 0.015 };
       // While picking, bodies that can't be picked are see-through: they neither hover nor hide others.
       const candidates = rendered.filter(pickableShape);
       const faceHit = raycaster.intersectObjects(candidates.map((r) => r.mesh), false)[0];
@@ -1637,6 +1638,10 @@ export function Viewer(props: ViewerProps) {
         const index = groupEntity(r.shape.faceIndex, getFaceIndex(faceHit.faceIndex, r.mesh.geometry));
         return index < 0 ? undefined : { body: r.id, kind, index };
       }
+      // A pixel's size at the face under the pointer, or at the target.
+      const depth = faceHit?.distance ?? camera.position.distanceTo(controls.target);
+      const pixel = (camera === orthographic ? (orthographic.top - orthographic.bottom) / orthographic.zoom : 2 * depth * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) / rect.height;
+      raycaster.params.Line = { threshold: pixel * EDGE_PICK_PX };
       const lineHit = raycaster.intersectObjects(candidates.flatMap((r) => (r.lines ? [r.lines] : [])), false)[0];
       if (!lineHit || lineHit.index == null) return undefined;
       // An edge behind a face is hidden; the threshold lets edges on the face's border through.

@@ -5,7 +5,7 @@
  * features that made it.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, createModel, editorView, entities, exampleSource, hideSidebars, openCode, openWithTool, setModelSource, timelineEntry, type Entity, type EntityKind } from "../cad.ts";
+import { CAD_MODULES, createModel, docUrl, editorView, entities, exampleSource, hideSidebars, openCode, openWithTool, setModelSource, timelineEntry, type Entity, type EntityKind } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -233,6 +233,49 @@ test("a body() entry highlights all its bodies, and opening code highlights at i
   await page.getByRole("menu").getByRole("menuitem", { name: "Edit code" }).click();
   await page.mouse.move(0, 0);
   await expect.poll(bodies).toEqual(expected);
+});
+
+// An edge's reach was a share of the model's size, so a chamfer narrower than twice that hovered
+// only its edges, however close the camera came.
+test("close up, a face narrower than an edge's reach at the home view hovers", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await hideSidebars(page);
+  // Home looks at the chamfer from 12 mm across.
+  const home = { direction: [0, -1, 1].map((x) => x / Math.SQRT2), target: [0, -4.5, 9.5], extent: [12, 12], projection: "perspective" };
+  await page.evaluate(
+    async ([url, camera]) => {
+      const repo = (window as unknown as { repo: { find(u: string): Promise<{ change(fn: (d: { cad?: { home?: unknown } }) => void): void }> } }).repo;
+      (await repo.find(url as string)).change((d) => {
+        d.cad ??= {};
+        d.cad.home = camera;
+      });
+    },
+    [docUrl(page), home] as const,
+  );
+  // A 1 mm chamfer, and blocks far apart, so that the model is large.
+  await setModelSource(
+    page,
+    `import { sketch, plane, rect, extrude, chamfer, edge } from "@patchwork-cad/features";
+
+export default function main() {
+  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [-5, -5], to: [5, 5] }) });
+  const block = extrude({ sketch: sketch1, distance: 10 });
+  const chamfer1 = chamfer({ body: block, edges: [edge(block.end, block.side.front)], distance: 1 });
+  const sketch2 = sketch({ plane: plane("XY"), profile: rect({ from: [-205, -5], to: [-195, 5] }) });
+  const left = extrude({ sketch: sketch2, distance: 10 });
+  const sketch3 = sketch({ plane: plane("XY"), profile: rect({ from: [195, -5], to: [205, 5] }) });
+  const right = extrude({ sketch: sketch3, distance: 10 });
+  return { chamfer1, left, right };
+}
+`,
+  );
+  await expect(timelineEntry(page, "chamfer1")).toHaveAttribute("data-status", "ok", { timeout: 120_000 });
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready");
+  await hoverNamed(page, "face", "chamfer1.face(edge(block.end, block.side.front))");
 });
 
 test("the viewer tool hovers faces and edges but doesn't name them", async ({ users }) => {
