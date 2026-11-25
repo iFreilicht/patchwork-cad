@@ -1,6 +1,7 @@
 import { createEffect, createSignal, on, onCleanup, type Accessor } from "solid-js";
 import type { DocHandle, UrlHeads } from "@automerge/automerge-repo";
-import { Engine, type BuildResult } from "../kernel/engine.ts";
+import { Engine, type BuildEvent, type BuildResult } from "../kernel/engine.ts";
+import { estimate, loadTimes, PROGRESS_DELAY_MS, PROGRESS_MIN_MS, SLOW_BUILD_MS, storeTimes, timesOf, type FeatureTimes, type RunningFeature } from "./progress.ts";
 import type { Imports } from "../kernel/imports.ts";
 import { createImports, headsOf, type ImportedDocument, type ReadImports } from "./imports.ts";
 import type { BuildParams, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch } from "../kernel/protocol.ts";
@@ -24,6 +25,25 @@ export interface HeldDocument {
   errors: string[];
 }
 
+/** A running build's progress, once it has run for `PROGRESS_DELAY_MS` (research/23-build-progress.md). */
+export interface BuildProgress {
+  elapsed: number;
+  /** How far it is by the previous build's feature times; undefined without them. Never moves back. */
+  fraction: number | undefined;
+  remaining: number | undefined;
+  /** The feature that runs, or between two the last one that started. */
+  running: RunningFeature | undefined;
+  /** The result arrived: the bar is full while it stays for the rest of `PROGRESS_MIN_MS`. */
+  finished: boolean;
+}
+
+/** What each feature of a running build is doing, once its progress shows. Features of the last build that aren't in either are waiting. */
+export interface BuildStates {
+  running: RunningFeature | undefined;
+  /** Features that are done in this build, with their new status. */
+  done: ReadonlyMap<string, FeatureTrace>;
+}
+
 /** A model document built by one kernel worker: the shared core of every tool that shows the model. */
 export interface Model {
   engine: Engine;
@@ -38,6 +58,10 @@ export interface Model {
   initError: Accessor<string | undefined>;
   last: Accessor<BuildResult | undefined>;
   building: Accessor<boolean>;
+  progress: Accessor<BuildProgress | undefined>;
+  buildStates: Accessor<BuildStates | undefined>;
+  /** Stops the running build (`Engine.abort`); nothing builds until the next change. */
+  abort(): void;
   status: Accessor<ModelStatus>;
   /** The values of parameters it builds with over the model's defaults, if any. */
   params: Accessor<BuildParams | undefined>;
@@ -108,6 +132,64 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
   const [building, setBuilding] = createSignal(false);
   const [documents, setDocuments] = createSignal<ImportedDocument[]>([]);
   const [held, setHeld] = createSignal<HeldDocument[]>([]);
+  const [progress, setProgress] = createSignal<BuildProgress>();
+  const [buildStates, setBuildStates] = createSignal<BuildStates>();
+
+  // Progress (research/23): the running build, its features, and the last build's feature times.
+  let run: { started: number; done: Map<string, FeatureTrace>; running: (RunningFeature & { since: number }) | undefined; last: RunningFeature | undefined; fraction: number; changed: boolean } | undefined;
+  /** When progress started to show, until it is hidden again. */
+  let shownAt: number | undefined;
+  let times: FeatureTimes | undefined = loadTimes(handle.url);
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  const tick = () => {
+    const now = performance.now();
+    if (!run) {
+      if (shownAt !== undefined && now - shownAt < PROGRESS_MIN_MS) return;
+      shownAt = undefined;
+      setProgress(undefined);
+      clearInterval(ticker);
+      ticker = undefined;
+      return;
+    }
+    const elapsed = now - run.started;
+    if (shownAt === undefined && elapsed < PROGRESS_DELAY_MS) return;
+    shownAt ??= now;
+    const estimated = times && estimate(times, run.done, run.running, elapsed);
+    if (estimated) run.fraction = Math.max(run.fraction, estimated.fraction);
+    setProgress({ elapsed, fraction: estimated && run.fraction, remaining: estimated?.remaining, running: run.last, finished: false });
+    if (run.changed || !buildStates()) setBuildStates({ running: run.running && run.last, done: new Map(run.done) });
+    run.changed = false;
+  };
+  const onProgress = (event: BuildEvent) => {
+    const now = performance.now();
+    if (event.kind === "build") {
+      run = { started: now, done: new Map(), running: undefined, last: undefined, fraction: 0, changed: true };
+      ticker ??= setInterval(tick, 100);
+    } else if (!run) return;
+    else if (event.kind === "ended") {
+      // Before the result: a waiting build may start right after.
+      run = undefined;
+      setBuildStates(undefined);
+      const shown = progress();
+      if (shown) setProgress({ ...shown, fraction: shown.fraction === undefined ? undefined : 1, remaining: 0, finished: true });
+      tick();
+    } else if (event.kind === "started") {
+      run.last = { name: event.name, type: event.type, line: event.line, variable: event.variable };
+      run.running = { ...run.last, since: now - run.started };
+    }
+    else {
+      run.done.set(event.feature.name, event.feature);
+      run.running = undefined;
+    }
+    if (run) run.changed = true;
+  };
+  /** A successful build's feature times predict the next build's progress. */
+  const learn = (result: BuildResult) => {
+    if (!result.ok) return;
+    times = timesOf(result.trace, result.timings.total);
+    if (result.timings.total >= SLOW_BUILD_MS) storeTimes(handle.url, times);
+  };
+  onCleanup(() => clearInterval(ticker));
 
   let latest = handle.doc()?.content ?? "";
   let latestParams = paramsKey(params?.());
@@ -154,6 +236,12 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
   };
 
   const onResult = async (result: BuildResult) => {
+    learn(result);
+    if (!result.ok && result.aborted) {
+      show(result);
+      setBuilding(false);
+      return;
+    }
     const plan = plans.get(result.imports);
     // A build for an older plan: shown while the newest builds, as before locks, unless it may be one to hold back.
     if (!plan || plan !== current) {
@@ -185,6 +273,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
 
   const engine = new Engine({
     onResult: (result) => void onResult(result),
+    onProgress,
     onReady: (timings) => setInit(timings),
     onInitFailed: setInitError,
   });
@@ -250,7 +339,7 @@ export function createModel(handle: DocHandle<CadModelDoc>, params?: Accessor<Bu
     const at = Object.fromEntries(held().map((h) => [h.doc, h.locked]));
     return (await imports.read(source, at)).imports;
   };
-  const model: Model = { engine, shapes, sketches, error, trace, init, initError, last, building, status, params: () => params?.(), paramValues, imports: shownImports, documents, held };
+  const model: Model = { engine, shapes, sketches, error, trace, init, initError, last, building, progress, buildStates, abort: () => engine.abort(), status, params: () => params?.(), paramValues, imports: shownImports, documents, held };
   return model;
 }
 

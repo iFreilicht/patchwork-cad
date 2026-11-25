@@ -236,27 +236,34 @@ function liveSketches(trace: readonly TraceEntry[], end: number): ShownSketch[] 
   return ran.flatMap((t) => (t.sketch && !used.has(t.sketch) ? shownSketch(t.sketch) : []));
 }
 
+/** A trace entry as a feature's progress message sends it: without its sketch's geometry, and not unused, which only the whole build tells. */
+const brief = (t: TraceEntry): FeatureTrace => ({
+  name: t.name,
+  type: t.type,
+  line: t.line,
+  variable: t.variable,
+  status: t.status,
+  message: t.message,
+  refs: t.refs,
+  before: t.before.map((b) => b.name),
+  inputs: t.inputs.map((b) => b.name),
+  result: t.result?.name,
+  results: t.results.map((b) => b.name),
+  names: t.names,
+  outline: undefined,
+  warnings: t.warnings,
+  unused: false,
+  ms: t.ms,
+  namingMs: t.namingMs,
+});
+
 const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | features.Sketch> = new Set()): FeatureTrace[] =>
   trace.map((t) => ({
-    name: t.name,
-    type: t.type,
-    line: t.line,
-    variable: t.variable,
-    status: t.status,
-    message: t.message,
-    refs: t.refs,
-    before: t.before.map((b) => b.name),
-    inputs: t.inputs.map((b) => b.name),
-    result: t.result?.name,
-    results: t.results.map((b) => b.name),
-    names: t.names,
+    ...brief(t),
     outline: t.sketch && !t.sketch.broken ? outline(t.sketch) : undefined,
-    warnings: t.warnings,
     regions: t.sketch && !t.sketch.broken ? regionsOf(t.sketch) : undefined,
     size: t.sketch && !t.sketch.broken ? sizeOf(t.sketch) : undefined,
     unused: t.sketch ? unused.has(t.sketch) : t.results.length > 0 && t.results.every((b) => unused.has(b)),
-    ms: t.ms,
-    namingMs: t.namingMs,
   }));
 
 /** A sketch's width and height on its plane, as far as its curves reach. */
@@ -335,7 +342,11 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
   const t1 = performance.now();
   buildModule = undefined;
   returned = undefined;
-  beginBuild({ lenient: true });
+  // A message per feature, which also tells the engine's watchdog that the build is alive (research/23).
+  beginBuild({
+    lenient: true,
+    onFeature: (t, done) => post(done ? { type: "featureDone", id, feature: brief(t) } : { type: "featureStarted", id, name: t.name, featureType: t.type, line: t.line, variable: t.variable }),
+  });
   const result = (await builder.buildShapesFromCode(source).finally(() => (buildModule = undefined))) as
     | BuiltShape[]
     | { error: true; message: string; stack?: unknown };

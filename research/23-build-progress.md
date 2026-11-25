@@ -111,8 +111,8 @@ A new worker until OCCT is ready, warm, median of 5: 111 ms in Chromium, 364 ms 
 
 ### Reporting
 
-- **A hook in the library, a message per feature.** `beginBuild` takes a callback that `call` invokes when a feature is done, with its trace entry; the worker posts its name, status, message and time, and the engine passes it on. The message is the entry `serialize` already makes, minus what only the final trace needs.
-- **The watchdog becomes per feature for free.** It restarts on every message from the worker ([`engine.ts`](../src/cad/src/kernel/engine.ts), `#watch`), so with a message per feature only a single feature, or model code between two features, that runs 10 s without finishing is cut off; a model of any length builds. Whether one long feature is stuck or slow can't be told ([08](08-module-evaluation.md#conclusions)); with an abort button the user can decide, so the automatic limit for a single feature can grow, e.g. to a minute, and stays for viewers that nobody watches.
+- **A hook in the library, a message per feature.** `beginBuild` takes an `onFeature` callback that `call` invokes with the feature's trace entry when it starts and when it is done; the worker posts the start with the name and line, and the end with the entry `serialize` makes, minus what only the final trace needs (a sketch's geometry, whether a result is unused). The engine passes both on. The start is what names the running feature; two messages per feature cost twice the 2–7 ms per build of [Reporting cost](#reporting-cost).
+- **The watchdog becomes per feature for free.** It restarts on every message from the worker ([`engine.ts`](../src/cad/src/kernel/engine.ts), `#watch`), so with a message per feature only a single feature, or model code between two features, that runs too long without finishing is cut off; a model of any length builds. Whether one long feature is stuck or slow can't be told ([08](08-module-evaluation.md#conclusions)); with an abort button the user can decide, so the automatic limit is a minute, which stays for viewers that nobody watches. Its error names the feature: "fillet3 didn't finish within 60 s, so the kernel was restarted".
 
 ### Estimates
 
@@ -120,17 +120,18 @@ A new worker until OCCT is ready, warm, median of 5: 111 ms in Chromium, 364 ms 
 - **Within a long feature, by its expected duration.** Between messages the bar moves on by the running feature's previous time, slowing towards a cap if it overruns instead of stopping; otherwise a 4 s `combine` is a 4 s pause.
 - **Biased towards an accelerating end.** An estimate that is too long makes the bar jump to the end when the build finishes early, the movement Harrison et al. found favoured; one that is too short makes it stall near the end, the one they found worst. So the remaining time is rounded up, the bar stays below 100 % until the result arrives, and never moves back.
 - **Not by count.** Features done over features is what OpenSCAD's stuck 999/1000 comes from; later features work on larger bodies and take longer, and one feature can take most of a build ([results](#prediction)).
-- **Kept across sessions.** Each build's feature times are stored with the per-user state ([10](10-view-state.md)) by model, so the first build after opening a slow model has an estimate too; without one, the bar is indeterminate.
+- **Kept across sessions, in the browser.** A slow build's feature times (1 s or more) are kept in the browser's `localStorage` by model, as cameras are ([10](10-view-state.md)), so the first build after opening a slow model has an estimate too. They are this machine's times, so they don't sync to the user's other devices as the per-user state would.
+- **Only times of the same model.** Once a build has run features and none of them were in the previous build, e.g. after the code was replaced, the bar is indeterminate, as it is without times: the times are another model's.
 
 ### Status bar
 
 - **At once, a word in a fixed place.** The status bar's slot for the build always exists and changes its text from the last build time to "Building…" when a build starts, so the view is never taken for the new result while it is stale; text that changes in place doesn't flicker as a bar that appears does.
-- **The bar only after a delay,** since "1.0 second is about the limit for the user's flow of thought to stay uninterrupted" ([Nielsen](https://www.nngroup.com/articles/response-times-3-important-limits/)), almost every build of a part is far below it, and a bar that flashes on every edit is noise. After the delay (0.5–1 s, to be tuned), and once shown for at least half a second: the running feature's name, the elapsed time, a bar with backward-moving ribbing (Harrison et al. 2010) and an Abort button: "Anything slower than 10 seconds needs a percent-done indicator as well as a clearly signposted way for the user to interrupt the operation" ([Nielsen](https://www.nngroup.com/articles/response-times-3-important-limits/)). From 10 s on, also the estimated remaining time in words ("about 20 s left").
+- **The bar only after a delay,** since "1.0 second is about the limit for the user's flow of thought to stay uninterrupted" ([Nielsen](https://www.nngroup.com/articles/response-times-3-important-limits/)), almost every build of a part is far below it, and a bar that flashes on every edit is noise. After the delay (0.5 s, to be tuned), and once shown for at least half a second: the running feature's name, the elapsed time, a bar with backward-moving ribbing (Harrison et al. 2010) and an Abort button: "Anything slower than 10 seconds needs a percent-done indicator as well as a clearly signposted way for the user to interrupt the operation" ([Nielsen](https://www.nngroup.com/articles/response-times-3-important-limits/)). From 10 s on, also the estimated remaining time in words ("about 20 s left").
 - **The status bar's build time stays**, and after a slow build also says what took longest, the diagnosis the CAD systems give in a separate panel.
 
 ### Timeline and code
 
-- **Each entry has a build state:** done in this build, waiting, or running. Waiting entries keep their last status but are dimmed, as FreeCAD's "has to be recomputed" mark; the running one has the bar's ribbing; a done one shows its new status at once. So a reference that broke in the third feature shows while the three-hundredth still builds, and the user can fix it, or abort, without waiting.
+- **Each entry has a build state** once the bar shows, not before, which would flash on every edit as the bar would: done in this build, waiting, or running. Waiting entries keep their last status but are dimmed, as FreeCAD's "has to be recomputed" mark; the running one has the bar's ribbing; a done one shows its new status at once. So a reference that broke in the third feature shows while the three-hundredth still builds, and the user can fix it, or abort, without waiting.
 - **The running entry is a build cursor** that moves along the timeline, as the marker does ([07](07-poc-modelling-ui.md#the-timeline-marker)), in its lane ([15](15-bodies.md)). The code pane marks the running feature's line the same way.
 - **Slow features are visible afterwards:** an entry's tooltip has its time, and features that take a large share of the build are marked, so that a user can put the marker before them, as Onshape advises.
 
@@ -158,6 +159,17 @@ With per-feature caching ([00](00-status.md#not-started)), only the features aft
 4. The stale view and early sketch outlines.
 5. Aborting superseded builds; Rebuild and paused rebuilding.
 6. Settings to try with users: intermediate bodies within a budget, building up to the marker.
+
+## Implementation
+
+Steps 1–3 of the [suggested order](#suggested-order):
+
+- **Library:** `beginBuild({ lenient, onFeature })` ([`feature.ts`](../src/features/src/feature.ts)); `progress.test.ts` checks the calls, also of a feature that fails in a strict build.
+- **Kernel:** the worker's `featureStarted` and `featureDone` messages ([`protocol.ts`](../src/cad/src/kernel/protocol.ts)); the engine forwards them with a `build` and an `ended` event around each build, keeps the features that were done for a build it replaces, and has `abort()` ([`engine.ts`](../src/cad/src/kernel/engine.ts)). An aborted build fails as aborted with the features that were done: the shapes stay, the timeline greys out what didn't run, and nothing builds until the next edit, also not a newer source that waited.
+- **Progress:** the model turns the events into a progress state ten times a second, once a build has run for 0.5 s, and keeps it at least 0.5 s, full at the end ([`createModel.ts`](../src/cad/src/components/createModel.ts)); estimates, times and texts are in [`progress.ts`](../src/cad/src/components/progress.ts).
+- **Status bar:** "Building…" at once in place of the last build time; from 0.5 s the running feature, the ribbed bar, the elapsed time, from 10 s the remaining time, and Abort; after a slow build its slowest feature, e.g. "build 6.1 s, slowest a 2.0 s" ([`StatusBar.tsx`](../src/cad/src/components/StatusBar.tsx)). Without motion where the user asks for reduced motion.
+- **Timeline and code:** entries and lane nodes get `data-build` (done, running, waiting), statuses as features finish, and their last time in the tooltip ([`Timeline.tsx`](../src/cad/src/components/editor/Timeline.tsx)); the code pane ribs the running feature's line ([`CodeEditor.tsx`](../src/cad/src/components/CodeEditor.tsx)).
+- **Tests:** `cad-progress.spec.ts` builds three features of 2 s each under a 5 s watchdog in every browser, with the states of the status bar, the timeline and the code pane on the way and an estimate in the second build, and aborts a 60 s feature.
 
 ## Open
 

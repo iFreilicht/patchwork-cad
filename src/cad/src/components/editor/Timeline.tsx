@@ -4,6 +4,8 @@ import type { FeatureTrace } from "../../kernel/protocol.ts";
 import type { Span } from "../../model/analyze.ts";
 import type { Entry, FeatureEntry, ScriptEntry } from "../../model/timeline.ts";
 import type { Editor } from "./state.ts";
+import type { BuildStates } from "../createModel.ts";
+import { duration } from "../progress.ts";
 import { ContactToken } from "../presence.ts";
 import type { CommentStore } from "../comments.ts";
 import { CommentsPopover } from "../CommentsPopover.tsx";
@@ -23,14 +25,37 @@ const pickEntry = (editor: Editor, index: number, version = editor.versionAt(ind
   editor.setNotice(version ? editor.pickVersion(version) : "That entry isn't one body or sketch.");
 };
 
+/** A feature's trace, with its status and message from the running build once that is done with it (research/23). */
+const live = (trace: FeatureTrace | undefined, states: BuildStates | undefined, name = trace?.name): FeatureTrace | undefined => {
+  const now = name === undefined ? undefined : states?.done.get(name);
+  if (!now) return trace;
+  return trace ? { ...trace, status: now.status, message: now.message } : now;
+};
 /** A feature's status in the timeline; an unused result greys out a feature that built fine. */
 const status = (trace: FeatureTrace | undefined) => (!trace ? "not-run" : trace.status === "ok" && trace.unused ? "unused" : trace.status);
 /** An entry's status: a feature's, or a Custom Script's first problem. */
-const entryStatus = (entry: Entry) => {
-  if (entry.kind === "feature") return status(entry.trace);
-  const broken = entry.features.find((f) => status(f) !== "ok");
-  return broken ? status(broken) : "ok";
+const entryStatus = (entry: Entry, states: BuildStates | undefined) => {
+  if (entry.kind === "feature") return status(live(entry.trace, states, entry.trace?.name ?? entry.name));
+  const broken = entry.features.find((f) => status(live(f, states)) !== "ok");
+  return broken ? status(live(broken, states)) : "ok";
 };
+/**
+ * What an entry does in the running build, once its progress shows: done, running or waiting; a
+ * Custom Script runs while a feature on its lines does. Without progress, nothing.
+ */
+const buildState = (entry: Entry, states: BuildStates | undefined): "done" | "running" | "waiting" | undefined => {
+  if (!states) return undefined;
+  if (entry.kind === "feature") {
+    const name = entry.trace?.name ?? entry.name;
+    return states.running?.name === name ? "running" : states.done.has(name) ? "done" : "waiting";
+  }
+  const line = states.running?.line;
+  if (line !== undefined && line >= entry.lines[0] && line <= entry.lines[1]) return "running";
+  if (!entry.features.length) return undefined;
+  return entry.features.every((f) => states.done.has(f.name)) ? "done" : "waiting";
+};
+/** A feature's time in the last build, for its tooltip. */
+const took = (trace: FeatureTrace | undefined) => (trace ? `\n${duration(trace.ms)}` : "");
 
 const UNUSED = "\nUnused: no later feature uses its result, and the model doesn't return it.";
 
@@ -38,9 +63,10 @@ const UNUSED = "\nUnused: no later feature uses its result, and the model doesn'
 type ItemProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & Record<`data-${string}`, string | undefined>;
 
 /** A feature statement. Selecting it opens its dialog; a body() (research/11) has no form. */
-function FeatureItem(props: { entry: FeatureEntry; item: ItemProps; onSelect: () => void }) {
+function FeatureItem(props: { entry: FeatureEntry; states: BuildStates | undefined; item: ItemProps; onSelect: () => void }) {
   const label = () => schemas[props.entry.type].label;
   const names = () => props.entry.names.join(", ");
+  const trace = () => live(props.entry.trace, props.states, props.entry.trace?.name ?? props.entry.name);
   return (
     <button
       {...props.item}
@@ -48,8 +74,9 @@ function FeatureItem(props: { entry: FeatureEntry; item: ItemProps; onSelect: ()
       data-kind="feature"
       data-type={props.entry.type}
       data-name={props.entry.name}
-      data-status={entryStatus(props.entry)}
-      title={`${label()} ${names()}${props.entry.trace?.message ? `\n${props.entry.trace.message}` : ""}${props.entry.trace?.unused ? UNUSED : ""}`}
+      data-status={entryStatus(props.entry, props.states)}
+      data-build={buildState(props.entry, props.states)}
+      title={`${label()} ${names()}${trace()?.message ? `\n${trace()!.message}` : ""}${trace()?.unused ? UNUSED : ""}${took(props.entry.trace)}`}
       onClick={() => props.onSelect()}
     >
       <span class="cad-editor__glyph">{GLYPHS[props.entry.type]}</span>
@@ -62,14 +89,15 @@ function FeatureItem(props: { entry: FeatureEntry; item: ItemProps; onSelect: ()
  * Code the timeline doesn't recognize as features (research/02, "Custom Script"). It lists the
  * feature calls the last build ran inside it, which is how references into it can be followed.
  */
-function ScriptItem(props: { entry: ScriptEntry; onSelect: () => void; item: ItemProps }) {
+function ScriptItem(props: { entry: ScriptEntry; states: BuildStates | undefined; onSelect: () => void; item: ItemProps }) {
   return (
     <button
       {...props.item}
       class="cad-editor__entry cad-editor__entry--script"
       data-kind="script"
       data-lines={props.entry.lines.join("-")}
-      data-status={entryStatus(props.entry)}
+      data-status={entryStatus(props.entry, props.states)}
+      data-build={buildState(props.entry, props.states)}
       title={`Custom Script, lines ${props.entry.lines.join("–")}`}
       onClick={() => props.onSelect()}
     >
@@ -79,7 +107,13 @@ function ScriptItem(props: { entry: ScriptEntry; onSelect: () => void; item: Ite
       </span>
       <For each={props.entry.features}>
         {(f) => (
-          <span class="cad-editor__ran" data-name={f.name} data-status={status(f)} title={`${f.type} ${f.name}${f.message ? `\n${f.message}` : ""}${f.unused ? UNUSED : ""}`}>
+          <span
+            class="cad-editor__ran"
+            data-name={f.name}
+            data-status={status(live(f, props.states))}
+            data-build={props.states ? (props.states.running?.name === f.name ? "running" : props.states.done.has(f.name) ? "done" : "waiting") : undefined}
+            title={`${f.type} ${f.name}${live(f, props.states)?.message ? `\n${live(f, props.states)!.message}` : ""}${f.unused ? UNUSED : ""}${took(f)}`}
+          >
             {GLYPHS[f.type]} {f.name}
           </span>
         )}
@@ -244,7 +278,11 @@ export function Timeline(props: {
   const nodeData = (index: number, version: string): NodeData => ({
     get "data-status"() {
       const e = entryAt(index);
-      return e && entryStatus(e);
+      return e && entryStatus(e, editor.buildStates());
+    },
+    get "data-build"() {
+      const e = entryAt(index);
+      return e && buildState(e, editor.buildStates());
     },
     get "data-open"() {
       return editor.selectedIndex() === index ? "true" : undefined;
@@ -625,8 +663,8 @@ export function Timeline(props: {
               <Match when={renaming()?.index === index && renaming()} keyed>
                 {(r) => <RenameField editor={editor} index={index} from={r.from} onDone={() => endRename(index)} />}
               </Match>
-              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
-              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
+              <Match when={entry().kind === "feature" && (entry() as FeatureEntry)}>{(e) => <FeatureItem entry={e()} states={editor.buildStates()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
+              <Match when={entry().kind === "script" && (entry() as ScriptEntry)}>{(e) => <ScriptItem entry={e()} states={editor.buildStates()} item={item(index)} onSelect={() => selectEntry(index, true)} />}</Match>
             </Switch>
           )}
         </Index>

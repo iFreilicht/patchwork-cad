@@ -945,6 +945,7 @@ export function WysiwygEditor(props: { handle: DocHandle<CadModelDoc>; element: 
             documents={codeDocuments()}
             onOpenDocument={openDocument}
             markedLines={heldLines()}
+            runningLine={model.buildStates()?.running?.line}
           />
         </div>
       </Show>

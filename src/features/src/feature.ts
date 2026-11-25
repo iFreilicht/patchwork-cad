@@ -173,22 +173,28 @@ export interface TraceEntry {
   namingMs: number;
 }
 
-interface BuildContext {
+/** How a build runs; the tool passes them to `beginBuild`. */
+export interface BuildOptions {
   /** Lenient: a failing feature passes its input through and is reported, as in a CAD timeline. Strict: it throws. */
   lenient: boolean;
+  /** Called with a feature's trace entry when it starts and when it is done, e.g. for an editor's progress (research/23). */
+  onFeature?: (entry: TraceEntry, done: boolean) => void;
+}
+
+interface BuildContext extends BuildOptions {
   trace: TraceEntry[];
   /** Bodies not consumed by a later feature, in creation order. */
   live: Body[];
   counts: Map<string, number>;
 }
 
-const newContext = (lenient: boolean): BuildContext => ({ lenient, trace: [], live: [], counts: new Map() });
+const newContext = (options: BuildOptions): BuildContext => ({ ...options, trace: [], live: [], counts: new Map() });
 
-let context = newContext(false);
+let context = newContext({ lenient: false });
 
 /** Starts a build: resets names and the trace. The tool calls it before every evaluation. */
-export function beginBuild(options: { lenient: boolean }): void {
-  context = newContext(options.lenient);
+export function beginBuild(options: BuildOptions): void {
+  context = newContext(options);
   setFeaturePrinter((feature) => (context.trace.some((t) => t.variable && (t.name === feature || t.names?.includes(feature))) ? feature : refForm(feature)));
 }
 
@@ -310,6 +316,8 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
     if (meta.line !== undefined) entry.line = meta.line;
     if (meta.destructured) entry.names = Object.values(meta.destructured);
     context.trace.push(entry);
+    const { onFeature } = context;
+    onFeature?.(entry, false);
     const inputs = (def.inputs?.(params) ?? []).filter((b): b is Body => b instanceof Body);
     entry.inputs = inputs;
     const t0 = performance.now();
@@ -328,6 +336,7 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
       entry.message = error instanceof Error ? error.message : String(error);
       const passThrough = inputs[0] ?? def.fallback?.(params, name, entry.message, meta);
       entry.after = [...context.live];
+      onFeature?.(entry, true);
       if (!context.lenient || !passThrough) throw error;
       return passThrough as R;
     }
@@ -342,6 +351,7 @@ export function defineFeature<P extends Record<string, unknown>, R extends Body 
       context.live = [...context.live.filter((b) => !inputs.includes(b)), ...bodies];
     }
     entry.after = [...context.live];
+    onFeature?.(entry, true);
     return result;
   };
   return Object.assign(call, { definition: def });

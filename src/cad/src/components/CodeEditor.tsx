@@ -300,21 +300,29 @@ const documentTitles = StateField.define<{ titles: Map<string, CodeDocument>; op
   provide: (field) => EditorView.decorations.from(field, (value) => value.decorations),
 });
 
+/** Whole lines marked with a class, set by an effect. */
+function lineMarks(decoration: Decoration) {
+  const set = StateEffect.define<number[]>();
+  const field = StateField.define<DecorationSet>({
+    create: () => Decoration.none,
+    update(value, tr) {
+      value = value.map(tr.changes);
+      for (const effect of tr.effects) {
+        if (!effect.is(set)) continue;
+        const lines = [...new Set(effect.value)].filter((n) => n >= 1 && n <= tr.state.doc.lines).sort((a, b) => a - b);
+        value = Decoration.set(lines.map((n) => decoration.range(tr.state.doc.line(n).from)));
+      }
+      return value;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  return { set, field };
+}
+
 /** Lines marked like the error's, e.g. the imports of documents that are held back. */
-const setMarkedLines = StateEffect.define<number[]>();
-const markedLines = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value, tr) {
-    value = value.map(tr.changes);
-    for (const effect of tr.effects) {
-      if (!effect.is(setMarkedLines)) continue;
-      const lines = [...new Set(effect.value)].filter((n) => n >= 1 && n <= tr.state.doc.lines).sort((a, b) => a - b);
-      value = Decoration.set(lines.map((n) => Decoration.line({ class: "cad-model__error-line", attributes: { "data-marked": "true" } }).range(tr.state.doc.line(n).from)));
-    }
-    return value;
-  },
-  provide: (field) => EditorView.decorations.from(field),
-});
+const errorLines = lineMarks(Decoration.line({ class: "cad-model__error-line", attributes: { "data-marked": "true" } }));
+/** The line of the feature a slow build runs (research/23). */
+const runningLine = lineMarks(Decoration.line({ class: "cad-model__running-line", attributes: { "data-running": "true" } }));
 
 type CodemirrorExtensionDescription = PluginDescription & { supportedDatatypes?: "*" | string[] };
 
@@ -369,6 +377,8 @@ export function CodeEditor(props: {
   onOpenDocument?: (specifier: string) => void;
   /** Lines to mark as the error line is, e.g. the imports of documents that are held back. */
   markedLines?: number[];
+  /** The line of the feature the build runs, once its progress shows. */
+  runningLine?: number | undefined;
 }) {
   let hovered: number | undefined;
   const hover = (offset: number | undefined) => {
@@ -437,7 +447,8 @@ export function CodeEditor(props: {
       // Only applies when no theme provides a highlighter, e.g. outside Patchwork.
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       errorLine,
-      markedLines,
+      errorLines.field,
+      runningLine.field,
       documentTitles,
       focus,
       past,
@@ -501,7 +512,11 @@ export function CodeEditor(props: {
   const dispatchSoon = (spec: Parameters<typeof view.dispatch>[0]) => queueMicrotask(() => disposed || view.dispatch(spec));
   createEffect(() => {
     const lines = props.markedLines ?? [];
-    dispatchSoon({ effects: setMarkedLines.of(lines) });
+    dispatchSoon({ effects: errorLines.set.of(lines) });
+  });
+  createEffect(() => {
+    const line = props.runningLine;
+    dispatchSoon({ effects: runningLine.set.of(line === undefined ? [] : [line]) });
   });
   createEffect(() => {
     const titles = new Map((props.documents ?? []).map((d) => [d.specifier, d]));
