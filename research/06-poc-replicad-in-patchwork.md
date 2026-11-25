@@ -59,10 +59,10 @@ The static module wins. The harness's site server mounts the tool's `package.jso
 ### Reusing `replicad-evaluator`
 
 Use it as a dependency (1.1.0), but only its browser-safe entries:
-- **What's safe:** `replicad-evaluator/builder` (`createBuilder({ runtime, codeEvaluator })`: `main`/`defaultParams`, meshing, kernel error messages, `faceInfo`/`edgeInfo`) and `replicad-evaluator/evaluate/browser`, which imports the code from a blob URL and never fetches.
+- **What's safe:** `replicad-evaluator/builder` (`createBuilder({ runtime, codeEvaluator })`: `main`/`defaultParams`, meshing, kernel error messages, `faceInfo`/`edgeInfo`) and `replicad-evaluator/evaluate/browser`, which imports the code from a blob URL and never fetches. The tool uses only its `runInContext`, for scripts, and evaluates modules itself ([08](08-module-evaluation.md#evaluation-without-import)).
 - **What's excluded:** the main entry imports `node:fs`, `rollup` and the fetching `createUrlResolverPlugin`.
-- **Our layer, [`prepare.ts`](../src/cad/src/kernel/prepare.ts):** it parses the source with acorn, rejects every static import other than `replicad` and `replicad/shape-functions` (the browser would fetch any other from the blob module), and rewrites the replicad imports to globals over the same number of lines. The evaluator's own rewrite joins multi-line imports into one line (`rewriteNamedImports`: `.join(", ")`), which would shift the line numbers in error messages.
-- **The builder evaluates a module twice per successful build:** `buildShapesFromCode` runs `runCode(code, params)` and then `extractDefaultNameFromCode(code)`, which imports the module again. Our `codeEvaluator` reuses the first import within a build, so a model's top level runs once (`cad-evaluation.spec.ts`). Cost and the memory findings that came with it: [08](08-module-evaluation.md).
+- **Our layer, [`prepare.ts`](../src/cad/src/kernel/prepare.ts):** it parses the source with acorn, rejects every static import other than `replicad` and `replicad/shape-functions` (the browser would fetch any other), and rewrites the replicad imports to globals, keeping every line where it was. The evaluator's own rewrite joins multi-line imports into one line (`rewriteNamedImports`: `.join(", ")`), which would shift the line numbers in error messages.
+- **The builder evaluates a module twice per successful build:** `buildShapesFromCode` runs `runCode(code, params)` and then `extractDefaultNameFromCode(code)`, which evaluates the module again. Our `codeEvaluator` reuses the first evaluation within a build, so a model's top level runs once (`cad-evaluation.spec.ts`). Cost and the memory findings that came with it: [08](08-module-evaluation.md).
 
 ### Re-run cost
 
@@ -81,7 +81,7 @@ Every error is shown in the status bar with its kind and, where known, a highlig
 |---|---|---|
 | syntax | `sketchOnPlane(.extrude(30)` | acorn: `Unexpected token (3:38)` |
 | import | `import { x } from "https://…"` | `prepare.ts`, line of the import |
-| runtime | `throw new Error("boom")` | the error, line from the stack frame of the blob module |
+| runtime | `throw new Error("boom")` | the error, line from the stack frame of the model's code |
 | kernel | `fillet(20)` on a 10 × 10 × 5 box | `replicad-evaluator` via `oc.getExceptionMessage`: `StdFail_NotDone: BRep_API: command not done`, no line |
 | mesh | a shape that fails to mesh (not triggered by the specs) | `replicad-evaluator`'s per-shape `message` |
 

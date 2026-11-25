@@ -7,7 +7,8 @@ import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser"
 import * as features from "@patchwork-cad/features";
 import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { loadFonts, mayDrawText } from "./fonts.ts";
-import { dataModule, moduleKey, textModule, type ImportedModule, type Imports } from "./imports.ts";
+import { moduleKey, type Imports } from "./imports.ts";
+import { dataNamespace, evaluate, fileNamespace, lineFromStack, type Namespace } from "./modules.ts";
 import { DERIVED, prepare, prepareImported, PrepareError, PROVIDED, type Resolve } from "./prepare.ts";
 import type { BuildParams, BuildTimings, ParamValues, FeatureTrace, InitTimings, MeshedShape, ModelError, ShownSketch, SketchRegion, WorkerRequest, WorkerResponse } from "./protocol.ts";
 
@@ -57,6 +58,7 @@ async function loadKernel(): Promise<{ oc: unknown; timings: InitTimings }> {
 // The feature library is provided like replicad (prepare.ts rewrites its imports to this global).
 (globalThis as Record<string, unknown>)[PROVIDED["@patchwork-cad/features"]!] = features;
 
+/** For scripts without exports, which the builder runs with `runInContext`; modules run with `evaluate`. */
 const browserEvaluator = createBrowserCodeEvaluator();
 
 /** The running build's values of parameters, over the model's `defaultParams` (research/17-parameters.md). */
@@ -119,75 +121,79 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
 let buildModule: { code: string; module: Promise<Record<string, unknown>> } | undefined;
 
 /**
- * Blob URLs of imported documents' modules, by their code: a document that didn't change stays one
+ * Imported documents' modules, by their code or content: a document that didn't change stays one
  * module, evaluated once in the worker's life, and one that changed is a new module.
  */
-const importUrls = new Map<string, string>();
-const isImportUrl = new Set<string>();
+const documentModules = new Map<string, Promise<Namespace>>();
+const evaluated = new Map<string, Namespace>();
+const load = (key: string): Namespace => {
+  const module = evaluated.get(key);
+  if (!module) throw new Error("an imported document was used before it was evaluated");
+  return module;
+};
+
+/** Evaluates a prepared module once the documents it imports (`keys`) are. */
+async function run(code: string, name: "cad-model" | "cad-document", keys: readonly string[]): Promise<Namespace> {
+  await Promise.all(keys.map((key) => documentModules.get(key)));
+  return evaluate(code, name, load);
+}
 
 /**
- * The bytes of imported files by their id (a document at its heads), which their modules read: the
- * module's code names the id, not the bytes, so that a file that didn't change stays one module.
+ * Makes the documents of `imports` modules, each after the documents it imports itself: the
+ * `Resolve` it returns for a module collects the keys of the documents that module imports in `keys`.
  */
-const BYTES = "patchworkCadBytes";
-const bytes = new Map<string, Uint8Array>();
-(globalThis as Record<string, unknown>)[BYTES] = (id: string) => bytes.get(id);
-
-/** The code of an imported document's module; JS documents import their own documents through `resolve`. */
-function moduleCode(imported: Exclude<ImportedModule, { kind: "problem" }>, resolve: Resolve): string {
-  switch (imported.kind) {
-    case "data":
-      return dataModule(imported.value, imported.json);
-    case "text":
-      return textModule(imported.text);
-    case "bytes":
-      if (!bytes.has(imported.id)) bytes.set(imported.id, imported.bytes);
-      return `export default globalThis.${BYTES}(${JSON.stringify(imported.id)});`;
-    case "js":
-      return prepareImported(imported.code, resolve);
-  }
-}
-
-/** Makes the documents of `imports` modules, each after the documents it imports itself. */
-function resolver(imports: Imports): Resolve {
-  // Bytes no longer imported go: a module evaluated with them keeps its own, and one that comes back is given them again.
-  const ids = new Set(Object.values(imports).flatMap((m) => (m.kind === "bytes" ? [m.id] : [])));
-  for (const id of bytes.keys()) if (!ids.has(id)) bytes.delete(id);
+function resolver(imports: Imports): (keys: string[]) => Resolve {
   const resolving = new Set<string>();
-  const resolve: Resolve = (specifier, type) => {
-    const key = moduleKey(specifier, type);
-    const imported = imports[key];
+  const resolveInto = (keys: string[]): Resolve => (specifier, type) => {
+    const name = moduleKey(specifier, type);
+    const imported = imports[name];
     if (!imported) throw new Error("it wasn't loaded");
     if (imported.kind === "problem") throw new Error(imported.problem);
-    if (resolving.has(key)) throw new Error("it imports itself, through the documents it imports");
-    resolving.add(key);
-    let code;
-    try {
-      code = moduleCode(imported, resolve);
-    } catch (error) {
-      throw error instanceof PrepareError ? new Error(`${error.message} (its line ${error.line})`) : error;
-    } finally {
-      resolving.delete(key);
+    if (resolving.has(name)) throw new Error("it imports itself, through the documents it imports");
+    let key: string;
+    let make: () => Promise<Namespace>;
+    if (imported.kind === "js") {
+      resolving.add(name);
+      const own: string[] = [];
+      let code: string;
+      try {
+        code = prepareImported(imported.code, resolveInto(own));
+      } catch (error) {
+        throw error instanceof PrepareError ? new Error(`${error.message} (its line ${error.line})`) : error;
+      } finally {
+        resolving.delete(name);
+      }
+      key = `js\n${code}`;
+      make = () => run(code, "cad-document", own);
+    } else if (imported.kind === "data") {
+      key = `data\n${imported.json ? "json" : ""}\n${JSON.stringify(imported.value)}`;
+      make = async () => dataNamespace(imported.value, imported.json);
+    } else if (imported.kind === "text") {
+      key = `text\n${imported.text}`;
+      make = async () => fileNamespace(imported.text);
+    } else {
+      key = `bytes\n${imported.id}`;
+      make = async () => fileNamespace(imported.bytes);
     }
-    let url = importUrls.get(code);
-    if (!url) {
-      url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-      importUrls.set(code, url);
-      isImportUrl.add(url);
-    }
-    return url;
+    if (!documentModules.has(key)) documentModules.set(key, make().then((module) => (evaluated.set(key, module), module)));
+    keys.push(key);
+    return key;
   };
-  return resolve;
+  return resolveInto;
 }
 /** The running build's or check's documents. */
-let resolve: Resolve = resolver({});
+let resolveInto = resolver({});
 const kernel = loadKernel();
 const builder = createBuilder({
   runtime: async () => ({ replicad, oc: (await kernel).oc }),
   codeEvaluator: {
     runInContext: browserEvaluator.runInContext,
-    evaluateModule<TModule>(code: string, options?: Parameters<typeof browserEvaluator.evaluateModule>[1]): Promise<TModule> {
-      if (buildModule?.code !== code) buildModule = { code, module: browserEvaluator.evaluateModule<Record<string, unknown>>(prepare(code, resolve), options).then(recordMain) };
+    evaluateModule<TModule>(code: string, options?: { globals?: Record<string, unknown> }): Promise<TModule> {
+      if (buildModule?.code !== code) {
+        Object.assign(globalThis, options?.globals);
+        const keys: string[] = [];
+        buildModule = { code, module: run(prepare(code, resolveInto(keys)), "cad-model", keys).then(recordMain) };
+      }
       return buildModule.module as Promise<TModule>;
     },
   },
@@ -198,12 +204,6 @@ kernel.then(
   (error: unknown) => post({ type: "init-failed", message: String((error as Error)?.message ?? error) }),
 );
 
-/** The first `blob:` frame of a stack that isn't in an imported document is the model module; its line is the source line (see prepare). */
-function lineFromStack(stack: unknown): number | undefined {
-  if (typeof stack !== "string") return undefined;
-  for (const match of stack.matchAll(/(blob:[^\s)]*?):(\d+):\d+/g)) if (!isImportUrl.has(match[1]!)) return Number(match[2]);
-  return undefined;
-}
 
 interface BuiltShape {
   name: string;
@@ -317,7 +317,7 @@ function indices(body: features.Body, faces: MeshedShape["faces"], edges: Meshed
 
 async function build(id: number, source: string, buildParams: BuildParams | undefined, imports: Imports): Promise<void> {
   params = buildParams;
-  resolve = resolver(imports);
+  resolveInto = resolver(imports);
   paramValues = { params: {}, derived: {} };
   const t0 = performance.now();
   const fail = (error: ModelError) => {
@@ -325,7 +325,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
     post({ type: "failed", id, error, trace: serialize(currentTrace()), timings: { build: t, total: t }, heapBytes: heapBytes() });
   };
   try {
-    prepare(source, resolve);
+    prepare(source, resolveInto([]));
   } catch (error) {
     if (error instanceof PrepareError) return fail({ message: error.message, line: error.line, kind: error.kind });
     throw error;
@@ -372,16 +372,18 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
  */
 async function check(id: number, source: string, buildParams: BuildParams | undefined, imports: Imports): Promise<void> {
   params = buildParams;
-  resolve = resolver(imports);
+  resolveInto = resolver(imports);
   const problems = () => currentTrace().filter((t) => t.status !== "ok").length;
   const failures = () => currentTrace().flatMap((t) => (t.status === "ok" ? [] : [{ name: t.name, status: t.status, message: t.message }]));
   try {
-    const code = prepare(source, resolve);
+    const keys: string[] = [];
+    const code = prepare(source, resolveInto(keys));
     await kernel;
     if (mayDrawText(source, imports)) await loadFonts();
     beginBuild({ lenient: true });
     // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
-    const module = await browserEvaluator.evaluateModule<Record<string, unknown>>(code, { filename: "__entry__.ts", globals: { replicad, replicadShapeFns: undefined, oc: (await kernel).oc } });
+    Object.assign(globalThis, { replicad, replicadShapeFns: undefined, oc: (await kernel).oc });
+    const module = await run(code, "cad-model", keys);
     const main = module["default"];
     if (typeof main === "function") (main as (p: unknown) => unknown)(withParams(module["defaultParams"] ?? {}));
     post({ type: "checked", id, error: undefined, problems: problems(), failures: failures() });
@@ -445,8 +447,8 @@ function answer(request: Exclude<WorkerRequest, { type: "build" | "check" | "exp
 /** What the JS module of document `specifier` exports, as far as it is JSON: its functions, bodies and the like are left out. */
 async function exportsOf(id: number, specifier: string, imports: Imports): Promise<void> {
   try {
-    const url = resolver(imports)(specifier, undefined);
-    const module = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
+    const key = resolver(imports)([])(specifier, undefined);
+    const module = await documentModules.get(key)!;
     post({ type: "exported", id, value: json({ ...module }) });
   } catch (error) {
     post({ type: "requestFailed", id, message: String((error as Error)?.message ?? error) });

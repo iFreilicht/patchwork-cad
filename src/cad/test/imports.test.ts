@@ -4,21 +4,14 @@
 import { ImmutableString, initSubduction, Repo, stringifyAutomergeUrl } from "@automerge/automerge-repo";
 import { beforeAll, expect, test, vi } from "vitest";
 import { createImports, fileBytes, fileKind, fileText, importKinds, isFile, moduleOf } from "../src/components/imports.ts";
-import { dataModule, documentImports, moduleKey, textModule } from "../src/kernel/imports.ts";
+import { documentImports, moduleKey } from "../src/kernel/imports.ts";
+import { evaluate, type Namespace } from "../src/kernel/modules.ts";
 import { prepare, prepareImported, PrepareError } from "../src/kernel/prepare.ts";
 
 beforeAll(() => initSubduction());
 
-const load = (code: string) => import(`data:text/javascript,${encodeURIComponent(code)}`) as Promise<Record<string, unknown>>;
-
-test("a data document is a module of its keys, with the whole document as its default", async () => {
-  const module = await load(dataModule({ hole_diameter: 8, "hole-depth": 3, default: 1, nested: { a: [1] } }));
-  expect(module["hole_diameter"]).toBe(8);
-  expect(module["hole-depth"]).toBe(3);
-  expect(module["nested"]).toEqual({ a: [1] });
-  expect(module["default"]).toEqual({ hole_diameter: 8, "hole-depth": 3, default: 1, nested: { a: [1] } });
-  expect((await load(dataModule(42)))["default"]).toBe(42);
-});
+/** Evaluates prepared code with the modules it imports, by key. */
+const run = (code: string, modules: Record<string, Namespace> = {}) => evaluate(code, "cad-document", (key) => modules[key]!);
 
 test("a document is JS, data or a problem by its content and type", () => {
   expect(moduleOf({ content: "export const a = 1;", mimeType: "application/javascript" })).toEqual({ kind: "js", code: "export const a = 1;" });
@@ -30,16 +23,19 @@ test("a document is JS, data or a problem by its content and type", () => {
   expect(moduleOf(undefined)).toMatchObject({ kind: "problem" });
 });
 
-test("a document's specifier becomes its module's URL, and every line stays where it was", () => {
+test("a document's imports and re-exports read the module its specifier resolves to, and every line stays where it was", async () => {
   const source = `import { sketch } from "@patchwork-cad/features";\nimport { hole_diameter } from "automerge:abc";\nexport { a } from "automerge:def";\nexport default function main() {}\n`;
   expect(documentImports(source)).toEqual([
     { specifier: "automerge:abc", type: undefined },
     { specifier: "automerge:def", type: undefined },
   ]);
-  const out = prepare(source, (specifier) => `blob:${specifier.slice("automerge:".length)}`);
+  const out = prepare(source, (specifier) => specifier.slice("automerge:".length));
   expect(out.split("\n")).toHaveLength(source.split("\n").length);
-  expect(out).toContain(`import { hole_diameter } from "blob:abc";`);
-  expect(out).toContain(`export { a } from "blob:def";`);
+  expect(out).toContain(`const hole_diameter = __cadImport("abc", "hole_diameter");`);
+  (globalThis as Record<string, unknown>)["patchworkCadFeatures"] = { sketch: () => undefined };
+  const module = await run(out, { abc: { hole_diameter: 8 }, def: { a: 1 } });
+  expect(Object.keys(module)).toEqual(["a", "default"]);
+  expect(module["a"]).toBe(1);
 });
 
 test("an import that can't be resolved is an import error on its line", () => {
@@ -61,9 +57,9 @@ test("an import that can't be resolved is an import error on its line", () => {
 
 test("an imported JS document gets provided modules, but its feature calls aren't named", () => {
   const code = `import { extrude } from "@patchwork-cad/features";\nimport { d } from "automerge:abc";\nexport const plate = (s) => extrude({ sketch: s, distance: d });\n`;
-  const out = prepareImported(code, () => "blob:abc");
+  const out = prepareImported(code, () => "abc");
   expect(out).toContain(`const extrude = globalThis.patchworkCadFeatures["extrude"];`);
-  expect(out).toContain(`import { d } from "blob:abc";`);
+  expect(out).toContain(`const d = __cadImport("abc", "d");`);
   expect(out).toContain("extrude({ sketch: s, distance: d });");
 });
 
@@ -167,7 +163,7 @@ test("a file is code, data, text or bytes as its attribute asks, where its kind 
   expect(importKinds({ width: 3 })).toEqual(["data"]);
 });
 
-test("attributes: the specifier and the attribute become the module's URL, and every line stays where it was", () => {
+test("attributes: the specifier and the attribute name the module, and every line stays where it was", async () => {
   const source = `import logo from "automerge:abc" with { type: "text" };\nimport label from "automerge:abc" with {\n  type: "bytes"\n};\nimport data from "automerge:def" with { type: "json" };\nexport * from "automerge:ghi" with { type: "text" };\nexport default function main() {}\n`;
   expect(documentImports(source)).toEqual([
     { specifier: "automerge:abc", type: "text" },
@@ -175,12 +171,15 @@ test("attributes: the specifier and the attribute become the module's URL, and e
     { specifier: "automerge:def", type: "json" },
     { specifier: "automerge:ghi", type: "text" },
   ]);
-  const out = prepare(source, (specifier, type) => `blob:${moduleKey(specifier, type).replace(/\W/g, "")}`);
+  const out = prepare(source, (specifier, type) => moduleKey(specifier, type));
   expect(out.split("\n")).toHaveLength(source.split("\n").length);
-  expect(out.split("\n").slice(0, 6)).toEqual([`import logo from "blob:automergeabcwithtext";`, `import label from "blob:automergeabcwithbytes"`, "", ";", `import data from "blob:automergedefwithjson";`, `export * from "blob:automergeghiwithtext";`]);
+  expect(out.split("\n").slice(1, 6)).toEqual(["", "", "", "", ""]);
+  for (const key of ["automerge:abc with text", "automerge:abc with bytes", "automerge:def with json"]) expect(out.split("\n")[0]).toContain(`__cadImport(${JSON.stringify(key)}, "default")`);
+  const module = await run(out, { "automerge:abc with text": { default: "<svg/>" }, "automerge:abc with bytes": { default: new Uint8Array() }, "automerge:def with json": { default: {} }, "automerge:ghi with text": { default: "t" } });
+  expect(Object.keys(module)).toEqual(["default"]);
   const error = (code: string) => {
     try {
-      prepare(code, () => "blob:x");
+      prepare(code, () => "x");
     } catch (e) {
       return e;
     }
@@ -189,12 +188,6 @@ test("attributes: the specifier and the attribute become the module's URL, and e
   expect(error(`export const a = 1;\nimport x from "automerge:abc" with { type: "css" };\n`)).toMatchObject({ kind: "import", line: 2, message: /automerge:abc can't be imported: the type "css" isn't supported, only \{ type: "text" \}, \{ type: "bytes" \}, \{ type: "json" \}/ });
   expect(error(`import x from "automerge:abc" with { mode: "text" };\n`)).toMatchObject({ kind: "import", line: 1, message: /the attribute mode isn't supported/ });
   expect(error(`import x from "replicad" with { type: "json" };\n`)).toMatchObject({ kind: "import", line: 1 });
-});
-
-test("text and JSON modules: the text, and only the default export", async () => {
-  expect((await load(textModule('a "quoted"\nline')))["default"]).toBe('a "quoted"\nline');
-  const json = await load(dataModule({ a: 1 }, true));
-  expect(Object.keys(json)).toEqual(["default"]);
 });
 
 test("a document imported as several kinds is a module of each; locks read followed documents at their versions", async () => {

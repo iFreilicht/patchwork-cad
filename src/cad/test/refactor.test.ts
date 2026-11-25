@@ -9,6 +9,7 @@ import { beforeAll, expect, test } from "vitest";
 import * as features from "@patchwork-cad/features";
 import { beginBuild, currentTrace } from "@patchwork-cad/features/runtime";
 import { loadOC } from "../../features/test/oc.ts";
+import { start } from "../src/kernel/modules.ts";
 import { prepare } from "../src/kernel/prepare.ts";
 import { analyze } from "../src/model/analyze.ts";
 import { deleteScript, rename, renameOutput, unwrapBody, wrapInBody, type Refactoring } from "../src/model/refactor.ts";
@@ -45,13 +46,11 @@ function applied(source: string, r: Refactoring): string {
 
 /** Runs a model as the editor's lenient build would, with the names prepare injects; returns main's result and the trace. */
 function run(source: string) {
-  const code = prepare(source)
-    .replace(/^export const defaultParams/m, "const defaultParams")
-    .replace("export default function main", "function main");
   (globalThis as Record<string, unknown>)["patchworkCadFeatures"] = features;
   (globalThis as Record<string, unknown>)["replicad"] = replicad;
   beginBuild({ lenient: true });
-  const result = new Function(`${code}\nreturn main(defaultParams);`)() as unknown;
+  const { namespace } = start(prepare(source), "cad-model", () => ({}));
+  const result = (namespace["default"] as (p: unknown) => unknown)(namespace["defaultParams"]);
   return { result, trace: currentTrace() };
 }
 
