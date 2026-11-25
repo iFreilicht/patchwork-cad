@@ -51,14 +51,20 @@ Over 1000 builds of the full M1 the heap grew to 811 MB with no sign of a platea
 
 Terminating the worker releases its OCCT heap and its retained modules. With the tool's engine forced to start a new worker before every build, 82 restarts over 40 builds of M1 left the resident memory of all browser processes flat: 207–226 MB in Chromium, 967–1090 MB in Firefox, 1309–1459 MB in WebKit (`cad-restart.spec.ts`, `CAD_MEASURE=1`). Without the release, each restart would have added at least the 100 MB of a fresh OCCT heap.
 
+### Imports wait for the page in Firefox
+
+In Firefox, a worker's `import()` doesn't finish while the page's main thread is busy, whatever the module's URL. With the main thread blocked for 1 s right after the import started, `blob:` and `data:` modules, with or without static imports of their own, in a worker loaded over HTTP or from a `blob:` URL, all took 1000 ms; in Chromium they took 0–1 ms. Every build imports the model as a new module, so a busy page delays Firefox's builds. In the editor, a model that imports five documents spent 60–300 ms of a 1.4–2.4 s build importing in Firefox, 3–13 ms in Chromium; a page blocked for 1 s after each build was sent added 1 s to Firefox's builds and nothing to Chromium's. A tool-storage doc that took 15 s to load once held a build for 15 s ([10](10-view-state.md#storage)).
+
 ## Conclusions
 
 - **The double evaluation is an implementation detail of `replicad-evaluator`, not a design limitation:** the first import already has `defaultName`. The tool's `codeEvaluator` reuses the first import within a build ([`worker.ts`](../src/cad/src/kernel/worker.ts), `cad-evaluation.spec.ts`).
 - **Module retention is inherent to evaluating models as ES modules** through `import()`. Its own memory cost is small for M1, but it keeps any top-level state of every past build alive.
+- **Only a model evaluated without `import()` would build in Firefox while the page is busy,** e.g. as a function after turning its imports into lookups; that gives up module semantics, such as live bindings, which plain models may rely on.
 - **The OCCT leak is the real memory problem,** and it is independent of the evaluator. Which objects leak, in replicad's fillet, chamfer and fuse or in OCCT itself, is not known yet.
 - **The tool bounds both by restarting its worker** ([`engine.ts`](../src/cad/src/kernel/engine.ts)): when the heap a build reports exceeds 1 GiB (about 1300 builds of M1), the next build starts in a new worker, at the cost of a warm OCCT load (100–200 ms, 0.9 s in Firefox, [06](06-poc-replicad-in-patchwork.md#re-run-cost)). Restarting before a build rather than after one keeps the worker holding the shown shapes, which picking and export will query, until a new build replaces them. Edits made during a restart queue as usual (`cad-restart.spec.ts`). A loaded worker that has work but hasn't answered for 10 s, e.g. stuck in an endless loop of model code, in an OCCT call that never returns ([04](04-kernel-robustness.md)) or crashed, is replaced too: its build fails with a kernel error, the last good shapes stay, and the newest source builds in the new worker (`cad-restart.spec.ts`). The timeout is fixed and doesn't tell a stuck script from a slow kernel operation, as [05](05-sandboxing.md)'s watchdog must.
 
 ## Open
 
 - Which objects fillet, chamfer and fuse leave behind.
+- Whether evaluating models without `import()` is worth it, for builds in Firefox while the page is busy.
 - The memory retained modules hold in Firefox and WebKit.
