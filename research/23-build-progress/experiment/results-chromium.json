@@ -1,0 +1,621 @@
+{
+  "browser": "chromium",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36",
+  "restartMs": {
+    "median": 111.4,
+    "all": [
+      164.9,
+      133.8,
+      111.4,
+      102.8,
+      108
+    ]
+  },
+  "heapRestarts": 7,
+  "overhead": [
+    {
+      "case": "M1",
+      "mode": "none",
+      "features": 8,
+      "pageMs": 29.4,
+      "buildMs": 27,
+      "reportMs": 0,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.3,
+      "messages": 0,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 29.4,
+      "firstGeometryMs": 29.4,
+      "longestGapMs": 29.4,
+      "framesPerSecond": 63.1
+    },
+    {
+      "case": "M1",
+      "mode": "events",
+      "features": 8,
+      "pageMs": 30.1,
+      "buildMs": 27.5,
+      "reportMs": 0.1,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.4,
+      "messages": 8,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1.2,
+      "firstGeometryMs": 30.1,
+      "longestGapMs": 7.7,
+      "framesPerSecond": 66.4
+    },
+    {
+      "case": "M1",
+      "mode": "mesh",
+      "features": 8,
+      "pageMs": 35.6,
+      "buildMs": 33.4,
+      "reportMs": 7.2,
+      "reportMeshMs": 6.8,
+      "finalMeshMs": 2.1,
+      "messages": 8,
+      "meshMessages": 5,
+      "triangles": 936,
+      "firstNewsMs": 1.2,
+      "firstGeometryMs": 2.1,
+      "longestGapMs": 7.5,
+      "framesPerSecond": 57.3
+    },
+    {
+      "case": "M1",
+      "mode": "throttled",
+      "features": 8,
+      "pageMs": 28.2,
+      "buildMs": 25.8,
+      "reportMs": 0.2,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.3,
+      "messages": 8,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1.1,
+      "firstGeometryMs": 28.2,
+      "longestGapMs": 7.3,
+      "framesPerSecond": 72.5
+    },
+    {
+      "case": "M1",
+      "mode": "budget",
+      "features": 8,
+      "pageMs": 28.6,
+      "buildMs": 26.3,
+      "reportMs": 0.1,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.2,
+      "messages": 8,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1.2,
+      "firstGeometryMs": 28.6,
+      "longestGapMs": 7.5,
+      "framesPerSecond": 69.9
+    },
+    {
+      "case": "M3, 3 ribs",
+      "mode": "none",
+      "features": 14,
+      "pageMs": 33.3,
+      "buildMs": 30.7,
+      "reportMs": 0,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.3,
+      "messages": 0,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 33.3,
+      "firstGeometryMs": 33.3,
+      "longestGapMs": 33.3,
+      "framesPerSecond": 60.4
+    },
+    {
+      "case": "M3, 3 ribs",
+      "mode": "events",
+      "features": 14,
+      "pageMs": 33.6,
+      "buildMs": 31.1,
+      "reportMs": 0.1,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.4,
+      "messages": 14,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 0.9,
+      "firstGeometryMs": 33.6,
+      "longestGapMs": 5.6,
+      "framesPerSecond": 60.2
+    },
+    {
+      "case": "M3, 3 ribs",
+      "mode": "mesh",
+      "features": 14,
+      "pageMs": 42.4,
+      "buildMs": 40.2,
+      "reportMs": 9.2,
+      "reportMeshMs": 9.1,
+      "finalMeshMs": 2,
+      "messages": 14,
+      "meshMessages": 8,
+      "triangles": 612,
+      "firstNewsMs": 1,
+      "firstGeometryMs": 1.7,
+      "longestGapMs": 7.4,
+      "framesPerSecond": 66.4
+    },
+    {
+      "case": "M3, 3 ribs",
+      "mode": "throttled",
+      "features": 14,
+      "pageMs": 33.3,
+      "buildMs": 30.9,
+      "reportMs": 0.2,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.3,
+      "messages": 14,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1,
+      "firstGeometryMs": 33.3,
+      "longestGapMs": 5.5,
+      "framesPerSecond": 58
+    },
+    {
+      "case": "M3, 3 ribs",
+      "mode": "budget",
+      "features": 14,
+      "pageMs": 34.1,
+      "buildMs": 31.7,
+      "reportMs": 0.1,
+      "reportMeshMs": 0,
+      "finalMeshMs": 2.3,
+      "messages": 14,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1,
+      "firstGeometryMs": 34.1,
+      "longestGapMs": 5.6,
+      "framesPerSecond": 60.4
+    },
+    {
+      "case": "plate 12×10, cuts",
+      "mode": "none",
+      "features": 244,
+      "pageMs": 2689.7,
+      "buildMs": 2554.3,
+      "reportMs": 0,
+      "reportMeshMs": 0,
+      "finalMeshMs": 136.9,
+      "messages": 0,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 2689.7,
+      "firstGeometryMs": 2689.7,
+      "longestGapMs": 2689.7,
+      "framesPerSecond": 60.2
+    },
+    {
+      "case": "plate 12×10, cuts",
+      "mode": "events",
+      "features": 244,
+      "pageMs": 2962.1,
+      "buildMs": 2814.6,
+      "reportMs": 4.3,
+      "reportMeshMs": 0,
+      "finalMeshMs": 146.8,
+      "messages": 244,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1.6,
+      "firstGeometryMs": 2962.1,
+      "longestGapMs": 203.9,
+      "framesPerSecond": 60
+    },
+    {
+      "case": "plate 12×10, cuts",
+      "mode": "mesh",
+      "features": 244,
+      "pageMs": 7750.6,
+      "buildMs": 7623.7,
+      "reportMs": 4848.9,
+      "reportMeshMs": 4841.7,
+      "finalMeshMs": 127.4,
+      "messages": 244,
+      "meshMessages": 123,
+      "triangles": 607964,
+      "firstNewsMs": 1.4,
+      "firstGeometryMs": 2.4,
+      "longestGapMs": 328.8,
+      "framesPerSecond": 60.1
+    },
+    {
+      "case": "plate 12×10, cuts",
+      "mode": "throttled",
+      "features": 244,
+      "pageMs": 3156.5,
+      "buildMs": 3019.1,
+      "reportMs": 509.9,
+      "reportMeshMs": 505.9,
+      "finalMeshMs": 137,
+      "messages": 244,
+      "meshMessages": 9,
+      "triangles": 53764,
+      "firstNewsMs": 1.3,
+      "firstGeometryMs": 267.4,
+      "longestGapMs": 302.3,
+      "framesPerSecond": 60.1
+    },
+    {
+      "case": "plate 12×10, cuts",
+      "mode": "budget",
+      "features": 244,
+      "pageMs": 2933.6,
+      "buildMs": 2800.7,
+      "reportMs": 267.5,
+      "reportMeshMs": 263.1,
+      "finalMeshMs": 134.6,
+      "messages": 244,
+      "meshMessages": 6,
+      "triangles": 30852,
+      "firstNewsMs": 1.3,
+      "firstGeometryMs": 266,
+      "longestGapMs": 178.3,
+      "framesPerSecond": 60.1
+    },
+    {
+      "case": "plate 16×12, one combine",
+      "mode": "none",
+      "features": 389,
+      "pageMs": 5810.5,
+      "buildMs": 5551.8,
+      "reportMs": 0,
+      "reportMeshMs": 0,
+      "finalMeshMs": 252.7,
+      "messages": 0,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 5810.5,
+      "firstGeometryMs": 5810.5,
+      "longestGapMs": 5810.5,
+      "framesPerSecond": 60.2
+    },
+    {
+      "case": "plate 16×12, one combine",
+      "mode": "events",
+      "features": 389,
+      "pageMs": 6229.8,
+      "buildMs": 5994.5,
+      "reportMs": 3.5,
+      "reportMeshMs": 0,
+      "finalMeshMs": 251.9,
+      "messages": 389,
+      "meshMessages": 0,
+      "triangles": 0,
+      "firstNewsMs": 1.5,
+      "firstGeometryMs": 6229.8,
+      "longestGapMs": 4521.1,
+      "framesPerSecond": 60
+    },
+    {
+      "case": "plate 16×12, one combine",
+      "mode": "mesh",
+      "features": 389,
+      "pageMs": 7085.1,
+      "buildMs": 6792.8,
+      "reportMs": 746.2,
+      "reportMeshMs": 740.2,
+      "finalMeshMs": 230.7,
+      "messages": 389,
+      "meshMessages": 196,
+      "triangles": 115256,
+      "firstNewsMs": 1.7,
+      "firstGeometryMs": 2.8,
+      "longestGapMs": 4648.4,
+      "framesPerSecond": 60.1
+    },
+    {
+      "case": "plate 16×12, one combine",
+      "mode": "throttled",
+      "features": 389,
+      "pageMs": 7087.6,
+      "buildMs": 6831.2,
+      "reportMs": 594.1,
+      "reportMeshMs": 587.4,
+      "finalMeshMs": 255.3,
+      "messages": 389,
+      "meshMessages": 6,
+      "triangles": 85028,
+      "firstNewsMs": 2,
+      "firstGeometryMs": 270.3,
+      "longestGapMs": 4722.3,
+      "framesPerSecond": 60
+    },
+    {
+      "case": "plate 16×12, one combine",
+      "mode": "budget",
+      "features": 389,
+      "pageMs": 6900.1,
+      "buildMs": 6590.1,
+      "reportMs": 275,
+      "reportMeshMs": 268.1,
+      "finalMeshMs": 309.2,
+      "messages": 389,
+      "meshMessages": 4,
+      "triangles": 32116,
+      "firstNewsMs": 1.5,
+      "firstGeometryMs": 267,
+      "longestGapMs": 4842.9,
+      "framesPerSecond": 60.1
+    }
+  ],
+  "latency": [
+    {
+      "blockMs": 0,
+      "buildMs": 3254.8,
+      "pageMs": 3393.2,
+      "messages": 732,
+      "median": 0,
+      "p95": 0.1,
+      "max": 0.6,
+      "resultLatency": 0.2
+    },
+    {
+      "blockMs": 1000,
+      "buildMs": 2562.1,
+      "pageMs": 2696.6,
+      "messages": 732,
+      "median": 90.2,
+      "p95": 943.6,
+      "max": 1002,
+      "resultLatency": 0.1
+    }
+  ],
+  "prediction": [
+    {
+      "edit": "same",
+      "features": 244,
+      "ms": 2666,
+      "countMeanErr": 15.1,
+      "countMaxErr": 20.9,
+      "timeMeanErr": 0.1,
+      "timeMaxErr": 0.5,
+      "halfwayRemaining": {
+        "estimated": 1332,
+        "actual": 1320
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 44,
+          "time": 25
+        },
+        {
+          "actual": 51,
+          "count": 70,
+          "time": 50
+        },
+        {
+          "actual": 76,
+          "count": 91,
+          "time": 76
+        }
+      ]
+    },
+    {
+      "edit": "same",
+      "features": 244,
+      "ms": 2680,
+      "countMeanErr": 15.2,
+      "countMaxErr": 20.7,
+      "timeMeanErr": 0.1,
+      "timeMaxErr": 0.3,
+      "halfwayRemaining": {
+        "estimated": 1317,
+        "actual": 1329
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 44,
+          "time": 25
+        },
+        {
+          "actual": 50,
+          "count": 70,
+          "time": 51
+        },
+        {
+          "actual": 75,
+          "count": 91,
+          "time": 75
+        }
+      ]
+    },
+    {
+      "edit": "r 3 → 3.5",
+      "features": 244,
+      "ms": 2971,
+      "countMeanErr": 12.5,
+      "countMaxErr": 18,
+      "timeMeanErr": 1.1,
+      "timeMaxErr": 2.2,
+      "halfwayRemaining": {
+        "estimated": 1396,
+        "actual": 1475
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 39,
+          "time": 26
+        },
+        {
+          "actual": 50,
+          "count": 68,
+          "time": 52
+        },
+        {
+          "actual": 76,
+          "count": 91,
+          "time": 78
+        }
+      ]
+    },
+    {
+      "edit": "fil 0.8 → 1.2",
+      "features": 244,
+      "ms": 2706,
+      "countMeanErr": 15.6,
+      "countMaxErr": 21,
+      "timeMeanErr": 0.6,
+      "timeMaxErr": 1.5,
+      "halfwayRemaining": {
+        "estimated": 1400,
+        "actual": 1350
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 45,
+          "time": 25
+        },
+        {
+          "actual": 50,
+          "count": 70,
+          "time": 49
+        },
+        {
+          "actual": 75,
+          "count": 91,
+          "time": 74
+        }
+      ]
+    },
+    {
+      "edit": "n 12 → 14",
+      "features": 284,
+      "ms": 3480,
+      "countMeanErr": 23,
+      "countMaxErr": 32.7,
+      "timeMeanErr": 7.9,
+      "timeMaxErr": 19.1,
+      "halfwayRemaining": {
+        "estimated": 966,
+        "actual": 1728
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 53,
+          "time": 32
+        },
+        {
+          "actual": 50,
+          "count": 83,
+          "time": 64
+        },
+        {
+          "actual": 75,
+          "count": 100,
+          "time": 88
+        }
+      ]
+    },
+    {
+      "edit": "n 14 → 10",
+      "features": 204,
+      "ms": 1994,
+      "countMeanErr": 5.5,
+      "countMaxErr": 22.2,
+      "timeMeanErr": 14.8,
+      "timeMaxErr": 37.8,
+      "halfwayRemaining": {
+        "estimated": 2437,
+        "actual": 985
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 32,
+          "time": 15
+        },
+        {
+          "actual": 51,
+          "count": 51,
+          "time": 29
+        },
+        {
+          "actual": 75,
+          "count": 65,
+          "time": 43
+        }
+      ]
+    },
+    {
+      "edit": "cuts → one combine",
+      "features": 205,
+      "ms": 1956,
+      "countMeanErr": 36.1,
+      "countMaxErr": 72.9,
+      "timeMeanErr": 7,
+      "timeMaxErr": 39.5,
+      "halfwayRemaining": {
+        "estimated": 268,
+        "actual": 272
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 95,
+          "time": 55
+        },
+        {
+          "actual": 86,
+          "count": 100,
+          "time": 86
+        },
+        {
+          "actual": 86,
+          "count": 100,
+          "time": 86
+        }
+      ]
+    },
+    {
+      "edit": "same",
+      "features": 205,
+      "ms": 1959,
+      "countMeanErr": 36,
+      "countMaxErr": 72.7,
+      "timeMeanErr": 0.1,
+      "timeMaxErr": 0.3,
+      "halfwayRemaining": {
+        "estimated": 272,
+        "actual": 266
+      },
+      "at": [
+        {
+          "actual": 25,
+          "count": 95,
+          "time": 25
+        },
+        {
+          "actual": 86,
+          "count": 99,
+          "time": 86
+        },
+        {
+          "actual": 86,
+          "count": 99,
+          "time": 86
+        }
+      ]
+    }
+  ]
+}
