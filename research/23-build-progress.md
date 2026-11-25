@@ -4,7 +4,7 @@ What the editor can show while a slow model builds, and what it costs: research 
 
 ## The problem
 
-Today the worker reports nothing until a build is done ([`worker.ts`](../src/cad/src/kernel/worker.ts)). Meanwhile the status bar appends "building…", the view keeps the last shapes, and the timeline the last trace. A loaded worker that hasn't answered for 10 s is replaced and its build fails ([08](08-module-evaluation.md#conclusions)), so a model that takes longer can't be built at all; the experiment's plate with 20 × 14 holes takes 12 s in Chromium. The models of the PoCs build in 20–150 ms ([07](07-poc-modelling-ui.md#rebuild-performance)), where none of this matters.
+Without progress reports, the worker says nothing until a build is done ([`worker.ts`](../src/cad/src/kernel/worker.ts)): the status bar can only say "building…", the view keeps the last shapes, and the timeline the last trace. A watchdog that replaces a worker that hasn't answered for 10 s ([08](08-module-evaluation.md#conclusions)) then fails every model that takes longer; the experiment's plate with 20 × 14 holes takes 12 s in Chromium. The models of the PoCs build in 20–150 ms ([07](07-poc-modelling-ui.md#rebuild-performance)), where none of this matters.
 
 ## Prior art
 
@@ -147,7 +147,8 @@ With per-feature caching ([00](00-status.md#not-started)), only the features aft
 
 ### Aborting and superseded builds
 
-- **Abort terminates the worker** and starts a new one, which takes 110–150 ms, 360 ms in Firefox ([Restart](#restart), as in [06](06-poc-replicad-in-patchwork.md#re-run-cost)). The edit stays; the view keeps the last result, the timeline marks the features that didn't run, and nothing builds until the next edit or a Rebuild button. Under a toggle, this is Onshape's paused regeneration: edits don't build until asked.
+- **Abort terminates the worker** and starts a new one, which takes 110–150 ms, 360 ms in Firefox ([Restart](#restart), as in [06](06-poc-replicad-in-patchwork.md#re-run-cost)). The edit stays; the view keeps the last result, the timeline marks the features that didn't run, and nothing builds until the next edit. In place of the error, the status bar offers "Build again", for an abort by mistake or a wait that turns out worth it; the new worker has no result to pick in until then.
+- **No Rebuild button otherwise.** Every change of the code, the parameters or an imported document builds, so the result always matches them; building the same inputs again would only change a model that isn't a function of them, e.g. one that uses `Math.random()`, which should take a parameter instead. Kernel trouble needs none either: the engine replaces its worker by itself, and the next edit builds in the new one ([08](08-module-evaluation.md#conclusions)). If paused rebuilding (Onshape's "Pause regeneration") is ever added, its control builds too.
 - **Superseded builds can be aborted automatically.** The engine finishes a running build even when a newer source waits ([`engine.ts`](../src/cad/src/kernel/engine.ts)), which costs nothing for parts but whole seconds for a slow model edited while it builds. With an estimate, the engine terminates a superseded build whose remaining time exceeds a restart. The price is the worker's state of the shown build: picking and rollback wait for the new build; with per-feature caching, the cache too, which then calls for a cooperative stop between features (a `SharedArrayBuffer` flag, if Patchwork becomes cross-origin isolated).
 - **Building only up to the marker.** The hook can also stop a build after a given feature, decided before it starts. For a slow model with the marker before its slow features, they would then not run at all. The editor shows results past the marker (`result` in [`protocol.ts`](../src/cad/src/kernel/protocol.ts)), so this only pays for models where it matters, e.g. as an option of the marker.
 
@@ -157,7 +158,7 @@ With per-feature caching ([00](00-status.md#not-started)), only the features aft
 2. The status bar: "Building…" at once; after a delay the running feature, elapsed time, Abort; the estimate from the previous build, stored per user.
 3. Build states in the timeline and the code pane, with statuses as features finish.
 4. The stale view and early sketch outlines.
-5. Aborting superseded builds; Rebuild and paused rebuilding.
+5. Aborting superseded builds; "Build again" after an abort.
 6. Settings to try with users: intermediate bodies within a budget, building up to the marker.
 
 ## Implementation
