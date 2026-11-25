@@ -4,7 +4,8 @@
  * replicad doesn't expose OCCT's history. And `body`, which adopts shapes made with replicad (research/11).
  */
 import { Shape as ReplicadShape, type AnyShape } from "replicad";
-import { describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
+import type { BRepAlgoAPI_BuilderAlgo } from "replicad-opencascadejs";
+import { describe, describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
 import { key, piece, type Name } from "./names.ts";
 import { listToArray, oc, progress, ShapeIndex, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
@@ -114,6 +115,41 @@ function moveFace(face: Shape, v: Vec): Shape {
 
 type Operation = "new" | "join" | "cut";
 
+/** Shapes as the list type of OCCT's history. */
+const listOf = (shapes: Shape[]) => ({ Size: () => shapes.length, First: () => shapes[0]!, RemoveFirst: () => void shapes.shift() });
+
+/** Faces or edges ordered by centroid, then by area or length; differences under 1e-6 count as none. */
+function byPosition(shapes: Shape[]): Shape[] {
+  if (shapes.length < 2) return shapes;
+  const kind = shapes[0]!.ShapeType() === oc().TopAbs_ShapeEnum.TopAbs_FACE ? "face" : "edge";
+  const keys = shapes.map((s) => {
+    const info = describe(s, kind);
+    return [...info.centroid, info.kind === "face" ? info.area : info.length];
+  });
+  const compare = (a: number, b: number) => keys[a]!.map((x, j) => x - keys[b]![j]!).find((d) => Math.abs(d) > 1e-6) ?? 0;
+  return shapes.map((_, i) => i).sort(compare).map((i) => shapes[i]!);
+}
+
+/**
+ * Unifies same-domain faces and edges after a boolean, as replicad does after every one
+ * (fuseShapes/cutShape), and gives the boolean's history in an order that is the same in every
+ * build. OCCT merges the unifier's history into the boolean's by appending the pieces the unifier
+ * rebuilt in the order of a map hashed by address, so piece indices changed from build to build
+ * (research/03, kernel findings). Pieces it kept stay in the boolean's order; rebuilt ones follow, by position.
+ */
+function simplify(bop: BRepAlgoAPI_BuilderAlgo): History {
+  const before = new ShapeIndex([...subShapes(bop.Shape(), "face"), ...subShapes(bop.Shape(), "edge")]);
+  bop.SimplifyResult(true, true, 1e-3);
+  return {
+    Generated: (s) => bop.Generated(s),
+    IsDeleted: (s) => bop.IsDeleted(s),
+    Modified(s) {
+      const mods = listToArray(bop.Modified(s));
+      return listOf([...mods.filter((m) => before.indexOf(m) >= 0), ...byPosition(mods.filter((m) => before.indexOf(m) < 0))]);
+    },
+  };
+}
+
 /** OCCT's Precision::Confusion(): shorter lengths are zero. */
 const ZERO_LENGTH = 1e-7;
 
@@ -190,9 +226,7 @@ export const extrude = defineFeature<
     const t = target!.topo;
     const bop = operation === "join" ? new o.BRepAlgoAPI_Fuse(t.shape, tool, progress()) : new o.BRepAlgoAPI_Cut(t.shape, tool, progress());
     if (!bop.IsDone()) throw new FeatureError(`the ${operation} failed`);
-    // replicad unifies same-domain faces after every boolean (fuseShapes/cutShape); so does this.
-    bop.SimplifyResult(true, true, 1e-3);
-    return new Body(ctx.name, propagate(bop as unknown as History, [t, toolTopo], [], bop.Shape(), ctx.name));
+    return new Body(ctx.name, propagate(simplify(bop), [t, toolTopo], [], bop.Shape(), ctx.name));
   },
 });
 
@@ -249,8 +283,7 @@ export const combine = defineFeature<{ target: Body; tools: Body[]; operation?: 
       const Op = operation === "join" ? o.BRepAlgoAPI_Fuse : operation === "cut" ? o.BRepAlgoAPI_Cut : o.BRepAlgoAPI_Common;
       const bop = new Op(topo.shape, tool.topo.shape, progress());
       if (!bop.IsDone()) throw new FeatureError(`the ${operation} with ${tool.name} failed`);
-      bop.SimplifyResult(true, true, 1e-3);
-      topo = propagate(bop as unknown as History, [topo, tool.topo], [], bop.Shape(), ctx.name);
+      topo = propagate(simplify(bop), [topo, tool.topo], [], bop.Shape(), ctx.name);
     }
     if (topo.faces.length === 0) throw new FeatureError(`the ${operation} leaves nothing`);
     return new Body(ctx.name, topo);
