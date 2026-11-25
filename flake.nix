@@ -3,14 +3,22 @@
 
   inputs = {
     patchwork-system.url = "github:inkandswitch/patchwork-system";
-    # Same nixpkgs as Patchwork, so playwright-driver matches @playwright/test.
+    # Same nixpkgs as Patchwork, so tool versions match Patchwork's.
     nixpkgs.follows = "patchwork-system/nixpkgs";
+    # Playwright's browsers only, which must match @playwright/test: 1.59.1's Firefox runs wasm without
+    # its optimizing compiler, because Juggler debugs every page and worker without `allowUnobservedWasm`.
+    nixpkgs-playwright.url = "github:nixos/nixpkgs/nixos-unstable";
     # Rust build; only its binary is used, so it keeps its own nixpkgs.
     subduction.url = "github:inkandswitch/subduction";
   };
 
   outputs =
-    { nixpkgs, subduction, ... }:
+    {
+      nixpkgs,
+      nixpkgs-playwright,
+      subduction,
+      ...
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -39,7 +47,7 @@
             CAD_FONTS = "${pkgs.liberation_ttf}/share/fonts/truetype";
 
             # Playwright uses the Nix-provided browsers (no download).
-            PLAYWRIGHT_BROWSERS_PATH = pkgs.playwright-driver.browsers;
+            PLAYWRIGHT_BROWSERS_PATH = nixpkgs-playwright.legacyPackages.${system}.playwright-driver.browsers;
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
           };
         }

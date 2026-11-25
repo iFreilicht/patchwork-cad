@@ -188,7 +188,7 @@ A configuration's value can be a link instead of a literal: `{ link: AutomergeUr
 
 ### Costs
 
-Every open proxy builds the model in its own kernel worker, and each worker holds an OCCT instance (warm load 100–200 ms, 0.9 s in Firefox, [08](08-module-evaluation.md#conclusions)). A canvas of ten configurations is ten workers. Sharing one worker between views of the same page, or caching meshes per model heads and parameter values, would bound it. Opening a proxy runs the model's code, as opening the model does ([05](05-sandboxing.md)).
+Every open proxy builds the model in its own kernel worker, and each worker holds an OCCT instance (warm load 100–200 ms, 0.4–0.5 s in Firefox, [08](08-module-evaluation.md#conclusions)). A canvas of ten configurations is ten workers. Sharing one worker between views of the same page, or caching meshes per model heads and parameter values, would bound it. Opening a proxy runs the model's code, as opening the model does ([05](05-sandboxing.md)).
 
 ## Open
 
