@@ -578,10 +578,25 @@ export function createInserts(props: {
     begin(first.url, undefined, "view", first.name);
   };
 
+  /**
+   * Where a paste goes, innermost first: Firefox 157 targets the body when the focus isn't on
+   * something editable, e.g. on the view, so the focused element's ancestors stand in for its path.
+   */
+  const pastePath = (event: ClipboardEvent): EventTarget[] => {
+    const path = event.composedPath();
+    if (path.includes(element)) return path;
+    const focused = document.activeElement;
+    if (!focused || !element.contains(focused)) return [];
+    const ancestors: Element[] = [];
+    for (let node: Element | null = focused; node; node = node.parentElement) ancestors.push(node);
+    return ancestors;
+  };
   // Pasting a URL into the view, the browser or the timeline is a drop there; in a field, the code
   // pane, a dialog or another tool's view, a paste is text.
   const onPaste = (event: ClipboardEvent) => {
-    for (const node of event.composedPath()) {
+    const path = pastePath(event);
+    if (!path.length) return;
+    for (const node of path) {
       if (node === element) break;
       if (node instanceof Element && (node.localName === "patchwork-view" || node.matches("input, textarea, select, [contenteditable], .cad-editor__dialog, .cad-editor__code"))) return;
     }
@@ -599,7 +614,7 @@ export function createInserts(props: {
   element.addEventListener("dragover", onDragOver, true);
   element.addEventListener("dragleave", onDragLeave, true);
   element.addEventListener("drop", onDrop, true);
-  element.addEventListener("paste", onPaste);
+  document.addEventListener("paste", onPaste);
   onCleanup(() => {
     end();
     document.removeEventListener("dragstart", onDragStart);
@@ -608,7 +623,7 @@ export function createInserts(props: {
     element.removeEventListener("dragover", onDragOver, true);
     element.removeEventListener("dragleave", onDragLeave, true);
     element.removeEventListener("drop", onDrop, true);
-    element.removeEventListener("paste", onPaste);
+    document.removeEventListener("paste", onPaste);
   });
 
   return {
