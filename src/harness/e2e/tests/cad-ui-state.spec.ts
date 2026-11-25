@@ -77,6 +77,46 @@ test("each tool remembers its camera per model", async ({ users }) => {
   await expectDirection(page, [0, -1, 0]);
 });
 
+/** How many changes the account's tool-storage doc of the CAD tools has, once the tab has it. */
+async function toolStorageChanges(page: Page): Promise<number> {
+  return page.evaluate(async () => {
+    const specifier = "@automerge/automerge";
+    const { getAllChanges } = (await import(specifier)) as { getAllChanges(d: unknown): unknown[] };
+    type Handle = { isReady(): boolean; doc(): { "@patchwork"?: { type?: string } } | undefined };
+    const handles = Object.values((window as unknown as { repo: { handles: Record<string, Handle> } }).repo.handles);
+    const storage = handles.find((h) => h.isReady() && h.doc()?.["@patchwork"]?.type === "patchwork:tool-storage");
+    if (!storage) throw new Error("no tool-storage doc in the tab's repo");
+    return getAllChanges(storage.doc()).length;
+  });
+}
+
+// The camera is written after every move, each wheel event included, so it stays out of the account's
+// Automerge doc, whose history would keep every camera (research/10, "Camera").
+test("moving the camera writes nothing to the account's tool storage", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  const editor = editorView(page);
+  await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await openCode(page);
+  await expect.poll(() => toolStorageChanges(page)).toBeGreaterThan(0);
+  const before = await toolStorageChanges(page);
+
+  const box = await editor.locator(".cad-model__viewer canvas").boundingBox();
+  if (!box) throw new Error("no canvas");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -40);
+  await clickViewCube(page, [1, -1, 1]);
+  await page.waitForTimeout(1000);
+  expect(await toolStorageChanges(page)).toBe(before);
+
+  await reloadStored(page);
+  await expect(editor).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  await expectDirection(page, [1, -1, 1]);
+});
+
 test("two viewers of one model don't move each other", async ({ users }) => {
   const [a] = await users(1);
   if (!a) throw new Error("users(1) returned no user");
