@@ -152,7 +152,7 @@ edge(lid.plate.end, lid.plate.side.front)
 | M3, library | 22.5 (5.9) | 79 (10) | 34 (9) |
 | M3, library, 3 ribs | 41.2 (14.5) | 145 (26) | 57 (22) |
 
-Naming grows fastest with the part's size, from 22 % (M1) to 40 % (M3 with 3 ribs) of the features' time in Chromium, because it matches entities pairwise with `IsSame`. That is the first thing to make faster, by matching through hash maps; per-feature caching isn't needed yet.
+Naming grows fastest with the part's size, from 22 % (M1) to 40 % (M3 with 3 ribs) of the features' time in Chromium, because it matches entities pairwise with `IsSame`. That is the first thing to make faster, by matching through hash maps; these parts don't need per-feature caching, which slower models do ([24](24-feature-caching.md)).
 
 ## Open
 

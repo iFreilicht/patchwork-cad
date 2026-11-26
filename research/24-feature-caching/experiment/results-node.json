@@ -1,0 +1,715 @@
+{
+  "node": "v24.16.0",
+  "repeat": 3,
+  "results": {
+    "M1": [
+      {
+        "label": "first build",
+        "features": 8,
+        "ran": 8,
+        "fresh": {
+          "build": 183.457542,
+          "mesh": 8.331624999999974,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 187.31054100000003,
+          "mesh": 8.186540999999977,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: chamfer distance 1 → 1.5",
+        "features": 8,
+        "ran": 3,
+        "fresh": {
+          "build": 49.79691700000001,
+          "mesh": 4.664625000000001,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 30.114832999999976,
+          "mesh": 5.044332999999995,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: boss radius 2 → 2.5",
+        "features": 8,
+        "ran": 2,
+        "fresh": {
+          "build": 41.278625000000034,
+          "mesh": 4.010083000000009,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 15.185375000000022,
+          "mesh": 4.0407919999999535,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "middle: fillet radius 1.5 → 2",
+        "features": 8,
+        "ran": 4,
+        "fresh": {
+          "build": 39.54558300000008,
+          "mesh": 4.0027919999999995,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 25.841541999999947,
+          "mesh": 3.920833000000016,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "comment above main",
+        "features": 8,
+        "ran": 0,
+        "fresh": {
+          "build": 37.930165999999986,
+          "mesh": 3.5608330000000024,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 0.4727500000000191,
+          "mesh": 0.08058300000004692,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: h 20 → 25",
+        "features": 8,
+        "ran": 6,
+        "fresh": {
+          "build": 36.737167,
+          "mesh": 3.641499999999951,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 31.361790999999926,
+          "mesh": 3.908584000000019,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: w 70",
+        "features": 8,
+        "ran": 7,
+        "fresh": {
+          "build": 39.59329200000002,
+          "mesh": 3.74841600000002,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 32.44495900000004,
+          "mesh": 3.6635420000000067,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: defaults",
+        "features": 8,
+        "ran": 6,
+        "fresh": {
+          "build": 35.36295899999993,
+          "mesh": 3.801917000000003,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 29.767832999999996,
+          "mesh": 3.7810419999999567,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: w 70",
+        "features": 8,
+        "ran": 0,
+        "fresh": {
+          "build": 35.617208000000005,
+          "mesh": 3.552583000000027,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 0.41095900000004804,
+          "mesh": 0.06741699999997763,
+          "heap": 104857600
+        },
+        "differences": 0
+      }
+    ],
+    "M3": [
+      {
+        "label": "first build",
+        "features": 10,
+        "ran": 10,
+        "fresh": {
+          "build": 175.64058300000002,
+          "mesh": 5.793207999999993,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 187.264458,
+          "mesh": 5.962458999999967,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: hole radius 4 → 5",
+        "features": 10,
+        "ran": 2,
+        "fresh": {
+          "build": 48.54891599999996,
+          "mesh": 3.7214160000000334,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 16.649208999999985,
+          "mesh": 3.7204590000000053,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: chamfer distance 1 → 1.5",
+        "features": 10,
+        "ran": 3,
+        "fresh": {
+          "build": 44.210000000000036,
+          "mesh": 3.383291999999983,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 21.61129200000005,
+          "mesh": 3.520040999999992,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "middle: rib thickness 6 → 8",
+        "features": 10,
+        "ran": 6,
+        "fresh": {
+          "build": 43.363249999999994,
+          "mesh": 3.1770420000000286,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 35.79187499999989,
+          "mesh": 3.577209000000039,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: ribs [15, 45]",
+        "features": 12,
+        "ran": 8,
+        "fresh": {
+          "build": 58.741416999999956,
+          "mesh": 3.8310829999999214,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 53.603166999999985,
+          "mesh": 4.115458999999987,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: defaults",
+        "features": 10,
+        "ran": 6,
+        "fresh": {
+          "build": 39.79808300000002,
+          "mesh": 3.112875000000031,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 33.59016699999995,
+          "mesh": 3.2643330000000788,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: ribs [15, 45]",
+        "features": 12,
+        "ran": 0,
+        "fresh": {
+          "build": 55.63354100000004,
+          "mesh": 4.158042000000023,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 0.490291999999954,
+          "mesh": 0.06220800000005511,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: t 8 → 10",
+        "features": 10,
+        "ran": 9,
+        "fresh": {
+          "build": 41.35270800000001,
+          "mesh": 3.1091659999999592,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 41.06625000000008,
+          "mesh": 3.4377909999999474,
+          "heap": 104857600
+        },
+        "differences": 0
+      }
+    ],
+    "M4": [
+      {
+        "label": "first build",
+        "features": 10,
+        "ran": 10,
+        "fresh": {
+          "build": 149.022125,
+          "mesh": 8.119208000000015,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 148.488083,
+          "mesh": 8.292249999999967,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: lid z 30 → 40",
+        "features": 10,
+        "ran": 1,
+        "fresh": {
+          "build": 32.518332999999984,
+          "mesh": 5.7772919999999885,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 1.0478329999999687,
+          "mesh": 1.2380410000000097,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "branch: rounded radius 3 → 4",
+        "features": 10,
+        "ran": 1,
+        "fresh": {
+          "build": 38.66816699999998,
+          "mesh": 5.875833,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 4.3917920000000095,
+          "mesh": 0.12274999999999636,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "middle: boss fillet radius 2 → 3",
+        "features": 10,
+        "ran": 3,
+        "fresh": {
+          "build": 30.79304099999996,
+          "mesh": 7.2784580000000005,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 15.188083999999947,
+          "mesh": 5.734541999999976,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: h 8 → 10",
+        "features": 10,
+        "ran": 9,
+        "fresh": {
+          "build": 28.913542000000007,
+          "mesh": 7.070290999999997,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 29.35424999999998,
+          "mesh": 9.473292000000015,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: w 80",
+        "features": 10,
+        "ran": 10,
+        "fresh": {
+          "build": 28.455625000000055,
+          "mesh": 6.01233400000001,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 30.21079100000003,
+          "mesh": 6.5695839999999635,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: defaults",
+        "features": 10,
+        "ran": 9,
+        "fresh": {
+          "build": 26.452707999999916,
+          "mesh": 5.8819160000000466,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 29.145541999999978,
+          "mesh": 6.265582999999992,
+          "heap": 104857600
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: w 80",
+        "features": 10,
+        "ran": 0,
+        "fresh": {
+          "build": 25.97979200000009,
+          "mesh": 5.7560000000000855,
+          "heap": 104857600
+        },
+        "cached": {
+          "build": 0.4105409999999665,
+          "mesh": 0.10774999999989632,
+          "heap": 104857600
+        },
+        "differences": 0
+      }
+    ],
+    "plate, cuts (12 × 10)": [
+      {
+        "label": "first build",
+        "features": 244,
+        "ran": 244,
+        "fresh": {
+          "build": 3582.428125,
+          "mesh": 192.74770899999976,
+          "heap": 170983424
+        },
+        "cached": {
+          "build": 3594.589708,
+          "mesh": 191.29079199999978,
+          "heap": 170983424
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: chamfer 0.5 → 0.6",
+        "features": 244,
+        "ran": 1,
+        "fresh": {
+          "build": 3382.166542,
+          "mesh": 194.51483300000018,
+          "heap": 300613632
+        },
+        "cached": {
+          "build": 42.71037500000011,
+          "mesh": 187.4238330000003,
+          "heap": 208732160
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: fillet 0.8 → 1",
+        "features": 244,
+        "ran": 2,
+        "fresh": {
+          "build": 3337.625000000001,
+          "mesh": 188.51600000000144,
+          "heap": 432930816
+        },
+        "cached": {
+          "build": 266.58479199999965,
+          "mesh": 181.12366700000075,
+          "heap": 208732160
+        },
+        "differences": 0
+      },
+      {
+        "label": "comment above main",
+        "features": 244,
+        "ran": 0,
+        "fresh": {
+          "build": 3321.771291000001,
+          "mesh": 189.52437500000087,
+          "heap": 519569408
+        },
+        "cached": {
+          "build": 3.0138749999996435,
+          "mesh": 4.598790999999437,
+          "heap": 208732160
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: hole radius 3 → 3.5",
+        "features": 244,
+        "ran": 242,
+        "fresh": {
+          "build": 3338.314792000001,
+          "mesh": 205.06650000000081,
+          "heap": 623509504
+        },
+        "cached": {
+          "build": 3308.088084,
+          "mesh": 204.73325000000023,
+          "heap": 300613632
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: r 3",
+        "features": 244,
+        "ran": 0,
+        "fresh": {
+          "build": 3350.1167079999977,
+          "mesh": 191.9985830000005,
+          "heap": 748224512
+        },
+        "cached": {
+          "build": 3.537041000001409,
+          "mesh": 4.117792000000918,
+          "heap": 300613632
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: r 3.5",
+        "features": 244,
+        "ran": 0,
+        "fresh": {
+          "build": 3305.0247500000005,
+          "mesh": 198.28920899999866,
+          "heap": 850460672
+        },
+        "cached": {
+          "build": 3.09441599999991,
+          "mesh": 5.449583999999959,
+          "heap": 300613632
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: thickness 6 → 7",
+        "features": 244,
+        "ran": 123,
+        "fresh": {
+          "build": 3269.2272080000002,
+          "mesh": 205.86695800000234,
+          "heap": 993067008
+        },
+        "cached": {
+          "build": 2497.552958,
+          "mesh": 203.79579199999898,
+          "heap": 432930816
+        },
+        "differences": 0
+      }
+    ],
+    "plate, one combine (16 × 12)": [
+      {
+        "label": "first build",
+        "features": 389,
+        "ran": 389,
+        "fresh": {
+          "build": 7774.480709,
+          "mesh": 332.65479199999936,
+          "heap": 432930816
+        },
+        "cached": {
+          "build": 8020.283375,
+          "mesh": 352.0755829999998,
+          "heap": 432930816
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: chamfer 0.5 → 0.6",
+        "features": 389,
+        "ran": 1,
+        "fresh": {
+          "build": 7597.078833,
+          "mesh": 317.18383299999914,
+          "heap": 623509504
+        },
+        "cached": {
+          "build": 67.14554099999987,
+          "mesh": 331.3295829999988,
+          "heap": 432930816
+        },
+        "differences": 0
+      },
+      {
+        "label": "late: fillet 0.8 → 1",
+        "features": 389,
+        "ran": 2,
+        "fresh": {
+          "build": 7528.837750000001,
+          "mesh": 338.9367080000011,
+          "heap": 850460672
+        },
+        "cached": {
+          "build": 621.6844590000001,
+          "mesh": 320.7880409999998,
+          "heap": 432930816
+        },
+        "differences": 0
+      },
+      {
+        "label": "comment above main",
+        "features": 389,
+        "ran": 3,
+        "fresh": {
+          "build": 7998.816332999999,
+          "mesh": 350.61924999999974,
+          "heap": 1131479040
+        },
+        "cached": {
+          "build": 6245.928458,
+          "mesh": 326.3570830000008,
+          "heap": 623509504
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: hole radius 3 → 3.5",
+        "features": 389,
+        "ran": 387,
+        "fresh": {
+          "build": 7513.398542000003,
+          "mesh": 361.0011249999952,
+          "heap": 1269891072
+        },
+        "cached": {
+          "build": 7504.3166249999995,
+          "mesh": 362.48308299999917,
+          "heap": 850460672
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: r 3",
+        "features": 389,
+        "ran": 0,
+        "fresh": {
+          "build": 7371.925833000001,
+          "mesh": 332.2855419999978,
+          "heap": 1546715136
+        },
+        "cached": {
+          "build": 5.3758750000015425,
+          "mesh": 8.704458000000159,
+          "heap": 850460672
+        },
+        "differences": 0
+      },
+      {
+        "label": "configuration: r 3.5",
+        "features": 389,
+        "ran": 0,
+        "fresh": {
+          "build": 7437.658875000001,
+          "mesh": 372.77533300000505,
+          "heap": 1685127168
+        },
+        "cached": {
+          "build": 4.396292000001267,
+          "mesh": 7.184750000000349,
+          "heap": 850460672
+        },
+        "differences": 0
+      },
+      {
+        "label": "early: thickness 6 → 7",
+        "features": 389,
+        "ran": 196,
+        "fresh": {
+          "build": 7897.830166,
+          "mesh": 386.90316700000403,
+          "heap": 1961951232
+        },
+        "cached": {
+          "build": 6108.694625,
+          "mesh": 352.5204589999994,
+          "heap": 1131479040
+        },
+        "differences": 0
+      }
+    ]
+  },
+  "persisted": {
+    "plate, cuts (12 × 10)": {
+      "build": 3620.680792,
+      "bodies": 123,
+      "writeAll": 327.42033399999946,
+      "readAll": 207.89479100000062,
+      "bytesAll": 6293494,
+      "bytesLast": 205884,
+      "readLast": 5.837999999999738
+    }
+  },
+  "meshing": {
+    "M1": {
+      "inPlace": 3.3699159999999893,
+      "copy": 0.4154160000000502,
+      "copiedAndMeshed": 3.458165999999892,
+      "meshedAgain": 0.05945899999994708
+    },
+    "M3": {
+      "inPlace": 2.6285830000000487,
+      "copy": 0.4367500000000746,
+      "copiedAndMeshed": 2.7794589999999744,
+      "meshedAgain": 0.037583000000040556
+    },
+    "M4": {
+      "inPlace": 4.870749999999987,
+      "copy": 0.6259580000000255,
+      "copiedAndMeshed": 5.101333000000011,
+      "meshedAgain": 0.10470799999995961
+    },
+    "plate, cuts (12 × 10)": {
+      "inPlace": 185.4722499999989,
+      "copy": 6.637666999999055,
+      "copiedAndMeshed": 189.5267079999976,
+      "meshedAgain": 4.529292000000169
+    },
+    "plate, one combine (16 × 12)": {
+      "inPlace": 303.3360419999999,
+      "copy": 10.106583000000683,
+      "copiedAndMeshed": 325.82600000000093,
+      "meshedAgain": 7.322082999999111
+    }
+  }
+}
