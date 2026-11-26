@@ -1,7 +1,7 @@
 /** What the editor needs beyond the model API: build control, the trace, picking and the feature schemas. */
 export { beginBuild, currentTrace, liveBodies, pick, entityIndex, outline, pickRegion, pathsOf, FeatureError } from "./feature.ts";
 export { extentOf, samplePath } from "./profile.ts";
-export type { TraceEntry, RefDiagnostic, FeatureContext } from "./feature.ts";
+export type { TraceEntry, RefDiagnostic, FeatureContext, BuildOptions } from "./feature.ts";
 export { resolve, capture } from "./refs.ts";
 export type { Resolution } from "./refs.ts";
 export type { Topo } from "./topo.ts";

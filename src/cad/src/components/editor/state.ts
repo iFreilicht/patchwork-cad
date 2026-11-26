@@ -101,6 +101,8 @@ export interface Editor {
   /** The last source that parsed, with its timeline; forms are read-only while the code doesn't parse. */
   analysis: Accessor<Analysis | undefined>;
   timeline: Accessor<Timeline>;
+  /** What each feature of the running build is doing, once its progress shows (research/23). */
+  buildStates: Model["buildStates"];
   syntaxError: Accessor<string | undefined>;
   /** The one selected item, whose dialog is open (research/19-selection.md); changes only when something else is selected. */
   selection: Accessor<Selection | undefined>;
@@ -927,6 +929,7 @@ export function createEditor(handle: DocHandle<CadModelDoc>, model: Model, ui: P
     source,
     analysis,
     timeline: tl,
+    buildStates: model.buildStates,
     syntaxError,
     selection,
     select,

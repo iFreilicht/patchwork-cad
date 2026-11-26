@@ -1,5 +1,25 @@
-import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
+import { isValidAutomergeUrl, parseAutomergeUrl, stringifyAutomergeUrl, type AutomergeUrl, type DocHandle } from "@automerge/automerge-repo";
+import { getRegistry } from "@inkandswitch/patchwork-plugins";
 import type { CadModelDoc, CadModelEmbedDoc, Configuration } from "../types.ts";
+
+/** A document's `@patchwork` metadata, as patchwork-plugins' `createDocOfDatatype2` writes it. */
+export interface PatchworkMetadata {
+  type: string;
+  suggestedImportUrl?: string;
+  frozenImportUrl?: string;
+}
+
+/**
+ * The metadata of a new document of datatype `type`, as `createDocOfDatatype2` gives it: the package
+ * that registered the datatype, which Patchwork offers to load to someone who doesn't have it, without
+ * heads, and with them as `frozenImportUrl` if it is pinned.
+ */
+export function patchworkMetadata(type: string, importUrl = getRegistry("patchwork:datatype").get(type)?.importUrl): PatchworkMetadata {
+  if (!importUrl) return { type };
+  if (!isValidAutomergeUrl(importUrl)) return { type, suggestedImportUrl: importUrl };
+  const { documentId, heads } = parseAutomergeUrl(importUrl);
+  return heads ? { type, suggestedImportUrl: stringifyAutomergeUrl({ documentId }), frozenImportUrl: importUrl } : { type, suggestedImportUrl: importUrl };
+}
 
 /**
  * Creates an embed of `model` seen from a named view, or with a configuration (research/18-named-views.md,
@@ -8,7 +28,7 @@ import type { CadModelDoc, CadModelEmbedDoc, Configuration } from "../types.ts";
 export function createEmbed(model: DocHandle<CadModelDoc>, of: { view: { id: string; name: string } } | { configuration: Configuration | undefined }): { url: AutomergeUrl; title: string } | undefined {
   const name = "view" in of ? of.view.name : (of.configuration?.name ?? "Defaults");
   const title = `${model.doc()?.title || "CAD Model"} – ${name}`;
-  const doc: CadModelEmbedDoc & { "@patchwork": { type: string } } = { "@patchwork": { type: "cad-model-embed" }, title, model: model.url, ...("view" in of ? { view: of.view.id } : of.configuration ? { configuration: of.configuration.id } : {}) };
+  const doc: CadModelEmbedDoc & { "@patchwork": PatchworkMetadata } = { "@patchwork": patchworkMetadata("cad-model-embed"), title, model: model.url, ...("view" in of ? { view: of.view.id } : of.configuration ? { configuration: of.configuration.id } : {}) };
   const url = globalThis.repo?.create(doc).url;
   return url && { url, title };
 }

@@ -19,7 +19,9 @@ CAD_MEASURE=1 pnpm test:e2e --workers=1 cad-measure-features      # rebuild timi
 
 The scene tool ([patchwork-experiments/scene](https://github.com/inkandswitch/patchwork-experiments/tree/scene-stage/scene), [research/23](../../research/23-scene-editing.md)) is a git submodule of a fork, pinned to the commit the tests run against. It has its own pnpm workspace and lockfile: `pnpm build:scene` (`scene.ts`) installs from that lockfile and builds it, and fails if the submodule isn't checked out.
 
-`nix develop` provides `subduction_cli` and Playwright's browsers (`PLAYWRIGHT_BROWSERS_PATH`). They come from Patchwork's own nixpkgs, which matches the pinned `@playwright/test` 1.59.1.
+`pnpm run publish <sync server> <package url>` (from the repo root, `publish.ts`) builds the CAD tool and publishes `src/cad` (files git tracks or doesn't ignore, plus `dist/`) into an existing pushwork package, keeping its URL, e.g. `pnpm run publish wss://subduction.sync.inkandswitch.com automerge:3PkuqYnPLga4DGQqaYsVet2bRcaJ` for the public instance. It clones the package into a temporary directory, replaces its files and fails unless pushwork reports `SYNCED`.
+
+`nix develop` provides `subduction_cli` and Playwright's browsers (`PLAYWRIGHT_BROWSERS_PATH`). The browsers come from nixos-unstable (the flake's `nixpkgs-playwright`), whose `playwright-driver` matches the pinned `@playwright/test` 1.64.1; the rest of the shell follows Patchwork's nixpkgs.
 
 ## Layout
 

@@ -145,6 +145,10 @@ export type WorkerResponse =
   | { type: "ready"; timings: InitTimings }
   | { type: "init-failed"; message: string }
   /** `dropped`: how many of the values main returned can't be shown, e.g. a string. */
+  /** Feature `name` of build `id` started (research/23); `variable`: whether its name is a variable. */
+  | { type: "featureStarted"; id: number; name: string; featureType: string; line: number | undefined; variable: boolean }
+  /** A feature of build `id` is done: its trace without what only the whole build tells, i.e. sketch geometry and `unused`. */
+  | { type: "featureDone"; id: number; feature: FeatureTrace }
   | { type: "built"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[]; dropped: number; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number; paramValues: ParamValues }
   | { type: "failed"; id: number; error: ModelError; trace: FeatureTrace[]; timings: BuildTimings; heapBytes: number }
   | { type: "rolledBack"; id: number; shapes: MeshedShape[]; sketches: ShownSketch[] }

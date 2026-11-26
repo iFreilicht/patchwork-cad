@@ -49,8 +49,6 @@ export type StoredCamera = CameraState | LegacyCamera;
 /** One user's UI state for one model document. */
 export interface DocUiState {
   codeOpen?: boolean;
-  /** The last camera of each tool, by tool id. */
-  views?: Record<string, StoredCamera>;
   /** The timeline marker, if it isn't at the end (research/07, "The timeline marker"). */
   marker?: TimelineMarker;
   /** Whether the browser pane is open; it is by default. */

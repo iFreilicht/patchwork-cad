@@ -43,7 +43,7 @@ Dragging a view out creates an embed document, the proxy of [17](17-parameters.m
 { title: string; model: AutomergeUrl; view?: string }
 ```
 
-`view` is a view's id, or `home`; `configuration` a configuration's ([17](17-parameters.md#embedding-proxy-documents)). The title is "‹model› – ‹view›" when it is made, and is the document's own afterwards.
+`view` is a view's id, or `home`; `configuration` a configuration's ([17](17-parameters.md#embedding-proxy-documents)). The title is "‹model› – ‹view›" when it is made, and is the document's own afterwards. Its `@patchwork` metadata names the CAD tool's package as `suggestedImportUrl`, as Patchwork's create menu does for models, so that someone without the tool is offered to load it.
 
 The viewer tool shows it: the model, from the view's camera, following the model's latest version and the view as it is updated. Orbiting is local: "Reset" returns to the view, and "Save view" keeps the camera as the view's, in the model, for everyone and every embed of it. A picker lists the model's views, Home first, and choosing one changes the embed's `view`; when the view is deleted, the picker says "Deleted view" and offers the remaining ones. "Open model" opens the model. Views are created, renamed and deleted in the editor.
 

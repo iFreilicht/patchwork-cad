@@ -52,6 +52,14 @@
   background: var(--cad-model-error-line);
 }
 
+/* The line of the feature a slow build runs, ribbed as the status bar's bar (research/23). */
+.cad-model .cad-model__running-line {
+  --rib: color-mix(in oklch, var(--cad-model-accent), transparent 80%);
+  background-image: linear-gradient(-45deg, var(--rib) 25%, transparent 25% 50%, var(--rib) 50% 75%, transparent 75%);
+  background-size: 8px 8px;
+  animation: cad-model-ribs 0.8s cubic-bezier(0, 0, 0.3, 1) infinite;
+}
+
 .cad-model .cad-model__viewer {
   position: relative;
   min-height: 0;
@@ -173,6 +181,96 @@
 .cad-model .cad-model__timings {
   margin-left: auto;
   color: var(--cad-model-muted);
+}
+
+/* A build's progress (research/23-build-progress.md): the running feature, a bar, the time and Abort, in one line before the timings. */
+.cad-model .cad-model__progress {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--studio-space-xs, 0.25rem);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.cad-model .cad-model__progress + .cad-model__timings {
+  margin-left: 0;
+}
+
+.cad-model .cad-model__progress-feature {
+  min-width: 0;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--cad-model-family-code);
+}
+
+/*
+ * Ribbing that moves backwards, against the progress, and slows down in each cycle: it made waits feel
+ * 11 % shorter (Harrison et al. 2010). Without an estimate the bar is full and only the ribbing moves.
+ */
+.cad-model .cad-model__bar {
+  flex: none;
+  width: 8em;
+  height: 0.6em;
+  border: 1px solid var(--cad-model-border);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--cad-model-panel);
+}
+
+.cad-model .cad-model__bar-fill {
+  display: block;
+  height: 100%;
+  background-color: var(--cad-model-accent);
+  --rib: color-mix(in oklch, var(--cad-model-bg), transparent 55%);
+  background-image: linear-gradient(-45deg, var(--rib) 25%, transparent 25% 50%, var(--rib) 50% 75%, transparent 75%);
+  background-size: 8px 8px;
+  animation: cad-model-ribs 0.8s cubic-bezier(0, 0, 0.3, 1) infinite;
+  transition: width 0.1s linear;
+}
+
+.cad-model .cad-model__bar[data-indeterminate="true"] .cad-model__bar-fill {
+  background-color: color-mix(in oklch, var(--cad-model-accent), transparent 50%);
+}
+
+.cad-model .cad-model__progress[data-finished="true"] .cad-model__bar-fill {
+  animation: none;
+}
+
+@keyframes cad-model-ribs {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    background-position-x: -8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cad-model .cad-model__bar-fill {
+    animation: none;
+  }
+}
+
+.cad-model .cad-model__elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+.cad-model .cad-model__abort {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--cad-model-accent-text);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cad-model .cad-model__abort:disabled {
+  color: var(--cad-model-muted);
+  cursor: default;
 }
 
 /* One line that shrinks instead of wrapping: a taller status bar would shrink the view under the pointer that hovers. */
@@ -1052,6 +1150,29 @@
 
 .cad-editor__entry[data-status="failed"] {
   border-color: var(--cad-model-danger);
+}
+
+/* A slow build (research/23): what it hasn't reached is dimmed, the running entry is ribbed as the status bar's bar. */
+.cad-editor__entry[data-build="waiting"],
+.cad-editor__ran[data-build="waiting"],
+.cad-editor__node[data-build="waiting"] {
+  opacity: 0.45;
+}
+
+.cad-editor__entry[data-build="running"],
+.cad-editor__ran[data-build="running"] {
+  --rib: color-mix(in oklch, var(--cad-model-accent), transparent 75%);
+  background-image: linear-gradient(-45deg, var(--rib) 25%, transparent 25% 50%, var(--rib) 50% 75%, transparent 75%);
+  background-size: 8px 8px;
+  animation: cad-model-ribs 0.8s cubic-bezier(0, 0, 0.3, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cad-model .cad-model__running-line,
+  .cad-editor__entry[data-build="running"],
+  .cad-editor__ran[data-build="running"] {
+    animation: none;
+  }
 }
 
 .cad-editor__entry[data-status="not-run"],

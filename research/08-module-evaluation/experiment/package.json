@@ -13,7 +13,7 @@
     "replicad-opencascadejs": "1.1.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.59.1",
+    "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
     "vite": "8.3.4"

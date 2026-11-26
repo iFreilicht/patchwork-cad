@@ -74,22 +74,3 @@ export function documentImports(code: string): DocumentImport[] {
   }
   return [...found.values()];
 }
-
-/**
- * A data document as a module: the whole value as its default export, and each key of an object as
- * a named export, so that `import { hole_diameter } from "automerge:…"` reads one. Names that
- * aren't identifiers are exported as strings (`import { "hole-diameter" as d } from …`). Imported
- * `with { type: "json" }` (`json`), it has only the default export, as a browser's JSON module.
- */
-export function dataModule(value: unknown, json = false): string {
-  const lines = [`const data = ${JSON.stringify(value) ?? "undefined"};`, "export default data;"];
-  if (!json && value && typeof value === "object" && !Array.isArray(value)) {
-    Object.keys(value)
-      .filter((key) => key !== "default")
-      .forEach((key, i) => lines.push(`const v${i} = data[${JSON.stringify(key)}];`, `export { v${i} as ${JSON.stringify(key)} };`));
-  }
-  return lines.join("\n");
-}
-
-/** A file's text as a module: the string as its default export, as `with { type: "text" }` gives it. */
-export const textModule = (text: string): string => `export default ${JSON.stringify(text)};`;

@@ -45,7 +45,7 @@ Our tool may itself run inside that boundary while holding access to the model a
 
 ## Test harness
 
-[src/harness/](../src/harness/) runs Chromium, Firefox and WebKit (Playwright 1.59.1, browsers from Patchwork's nixpkgs) against a local copy of the Patchwork site and a local `subduction_cli`, with fresh storage per worker. Its self-tests pass in all three browsers, 150 of 150 runs over ten repetitions: full UI boot, a markdown doc synced between two profiles, concurrent edits converging, and a module published with pushwork that installs, renders and syncs. During every run, nothing tried to leave the machine.
+[src/harness/](../src/harness/) runs Chromium, Firefox and WebKit (Playwright 1.64.1, browsers from nixpkgs) against a local copy of the Patchwork site and a local `subduction_cli`, with fresh storage per worker. Its self-tests pass in all three browsers, 150 of 150 runs over ten repetitions: full UI boot, a markdown doc synced between two profiles, concurrent edits converging, and a module published with pushwork that installs, renders and syncs. During every run, nothing tried to leave the machine.
 
 ### Local-only Patchwork
 

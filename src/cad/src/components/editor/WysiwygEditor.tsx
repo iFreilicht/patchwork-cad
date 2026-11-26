@@ -975,6 +975,7 @@ export function WysiwygEditor(props: WysiwygEditorProps) {
             documents={codeDocuments()}
             onOpenDocument={openDocument}
             markedLines={heldLines()}
+            runningLine={model.buildStates()?.running?.line}
           />
         </div>
       </Show>

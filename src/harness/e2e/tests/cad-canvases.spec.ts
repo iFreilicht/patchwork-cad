@@ -4,6 +4,7 @@
  * plane, turning, scaling and fading it and drawing it through the model; Calibrate; the eye in the
  * browser's Canvases; Remove and undo. And an image dropped on a face, which lies on that face,
  * centred where it was dropped, follows it as the model changes, and is marked once the face is gone.
+ * A document on a face goes with its body as it is hidden.
  */
 import type { Page } from "@playwright/test";
 import { CAD_MODULES, clickEntity, createModel, dialog, docUrl, editorView, entities, setModelSource, timelineEntry, type Entity } from "../cad.ts";
@@ -340,4 +341,40 @@ test("an image dropped on a face lies on it, centred where it was dropped, and f
   await expect(timelineEntry(page, "plate1")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
   await expect.poll(() => drawn(page).then((d) => d.length)).toBe(0);
   await expect(canvasRows(page).locator('[data-placement="problem"]')).toHaveAttribute("title", "Its face isn't in the model");
+});
+
+test("a document on a face goes with its body as it is hidden, and leaves nothing drawn over the view", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await open(page);
+  const docs = await sidebarDocuments(page, { "photo.png": { file: "photo.png", mimeType: "image/png", bytes: await pngBytes(page, 160, 120) }, sizes: { data: { title: "sizes", wall: 2.4 } } });
+  // A canvas on the top face, as an image dropped there makes it, then showing a document instead.
+  const { at } = await faceNamed(page, "extrude1.end");
+  await drag(page, "photo.png", at, false);
+  await page.mouse.up();
+  await dialog(page).getByRole("radiogroup", { name: "Use as" }).getByText("Canvas", { exact: true }).click();
+  await expect(canvasRows(page)).toContainText(/on extrude1\.end/);
+  await page.evaluate(
+    async ([url, doc]) => {
+      const handle = await (window as unknown as { repo: Repo }).repo.find(url!);
+      handle.change((d) => {
+        const canvas = (d as { cad: { canvases: Record<string, unknown>[] } }).cad.canvases[0]!;
+        canvas["image"] = doc;
+        canvas["tool"] = "raw";
+      });
+    },
+    [docUrl(page), docs["sizes"]] as const,
+  );
+  // A document is drawn between the view's canvas and one above it, which draws what shows over the document.
+  const above = viewer(page).locator(".cad-model__front");
+  await expect.poll(() => drawn(page).then((l) => l.length), { timeout: 30_000 }).toBe(1);
+  await expect(above).toBeVisible();
+
+  const plate = page.getByRole("complementary", { name: "Browser" }).locator('.cad-editor__browser-row:not(.cad-editor__named-row)[data-name="plate"]');
+  await plate.getByRole("button", { name: /^Hide / }).click();
+  await expect(plate).toHaveAttribute("data-visible", "false");
+  await expect.poll(() => drawn(page)).toEqual([]);
+  // Shown, it would keep its last frame over the view: the selected face, and the ViewCube as it was.
+  await expect(above).toBeHidden();
 });

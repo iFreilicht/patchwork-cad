@@ -259,7 +259,9 @@ export interface ViewerTestHook {
    * Where points are on the screen, the model's mesh vertices by default: whether all are in the
    * view, and how much of the view's width or height they span, whichever is more.
    */
-  onScreen(points?: [number, number, number][]): { inView: boolean; fill: number; center: [number, number] };
+  onScreen(points?: [number, number, number][]): { inView: boolean; fill: number; center: [number, number]; clipped: boolean };
+  /** The camera's projection, field of view in degrees, zoom, distance from the target and clipping planes. */
+  lens(): { projection: Projection; fov: number; zoom: number; distance: number; near: number; far: number };
   /** The camera the view is meant to show (research/20). */
   intent(): CameraState | undefined;
   /** Where the eye is, which decides the perspective. */
@@ -428,7 +430,11 @@ export function Viewer(props: ViewerProps) {
     const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10_000);
     orthographic.up.set(0, 0, 1);
     let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = perspective;
-    /** The height the orthographic camera shows at zoom 1. */
+    /**
+     * The height the orthographic camera shows: always as much as the perspective camera shows at the
+     * target from the same distance, so that the distance means the same in both and switching keeps
+     * the view. Its zoom is folded into the distance.
+     */
     let orthoHeight = 1;
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -578,29 +584,61 @@ export function Viewer(props: ViewerProps) {
     /** The orthographic height that shows as much at the target as the perspective camera from `d`. */
     const heightAt = (d: number) => 2 * d * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2));
 
-    /** Where the camera is: it looks from `direction` at `target`, `distance` away, and the orthographic camera zooms by `zoom`. */
+    /** Where the camera is: it looks from `direction` at `target`, `distance` away. */
     interface Pose {
       direction: THREE.Vector3;
       target: THREE.Vector3;
       distance: number;
-      zoom: number;
       /** The perspective camera's vertical field of view, in degrees. */
       fov: number;
     }
-    const pose = (): Pose => ({ direction: direction(), target: controls.target.clone(), distance: distance(), zoom: orthographic.zoom, fov: perspective.fov });
+    const pose = (): Pose => ({ direction: direction(), target: controls.target.clone(), distance: distance(), fov: perspective.fov });
     const place = (p: Pose) => {
       perspective.fov = p.fov;
       controls.target.copy(p.target);
       camera.position.copy(p.target).addScaledVector(p.direction, p.distance);
-      for (const c of [perspective, orthographic]) {
-        c.near = p.distance / 300;
-        c.far = p.distance * 33;
-      }
       orthoHeight = heightAt(p.distance);
-      orthographic.zoom = p.zoom;
+      orthographic.zoom = 1;
       updateProjection();
       controls.update();
       camera.updateMatrixWorld();
+      clip();
+    };
+    /** OrbitControls zoom the orthographic camera: folded into its distance, which then shows as much (`orthoHeight`). */
+    const foldZoom = () => {
+      if (camera !== orthographic || orthographic.zoom === 1) return;
+      const d = distance() / orthographic.zoom;
+      const along = direction();
+      orthographic.position.copy(controls.target).addScaledVector(along, d);
+      orthographic.zoom = 1;
+      orthoHeight = heightAt(d);
+      updateProjection();
+      orthographic.updateMatrixWorld();
+    };
+    // Before "end", which measures the camera.
+    controls.addEventListener("change", foldZoom);
+    const drawn = new THREE.Box3();
+    const drawnSphere = new THREE.Sphere();
+    /**
+     * Puts the clipping planes around everything drawn, as the camera is now: a range fixed when the
+     * camera was placed cuts off the model's front once it dollies close, and all of it once it dollies
+     * far away. The orthographic camera's near plane may be behind the eye, which it shows past.
+     */
+    const clip = () => {
+      const d = distance();
+      let near = d / 300;
+      let far = d * 33;
+      if (!drawn.setFromObject(scene).isEmpty()) {
+        drawn.getBoundingSphere(drawnSphere);
+        const depth = camera.position.clone().sub(drawnSphere.center).dot(direction());
+        const reach = drawnSphere.radius * 1.01 + d * 1e-3;
+        far = Math.max(far, depth + reach);
+        if (camera === orthographic) near = Math.min(near, depth - reach);
+      }
+      if (camera.near === near && camera.far === far) return;
+      camera.near = near;
+      camera.far = far;
+      camera.updateProjectionMatrix();
     };
 
     // Rounded: Automerge 3.4.1 stores 0.9999999999999999 in a list as 0 (research/10-view-state.md).
@@ -635,7 +673,6 @@ export function Viewer(props: ViewerProps) {
         direction: from.direction.clone().applyQuaternion(new THREE.Quaternion().slerp(turn.rotation, eased)),
         target: from.target.clone().lerp(to.target, eased),
         distance: THREE.MathUtils.lerp(from.distance, to.distance, eased),
-        zoom: THREE.MathUtils.lerp(from.zoom, to.zoom, eased),
         fov: THREE.MathUtils.lerp(from.fov, to.fov, eased),
       });
       if (t === 1) {
@@ -656,7 +693,7 @@ export function Viewer(props: ViewerProps) {
     const modelPoints = () => [...bodyCorners, ...(props.sketches ?? []).flatMap((s) => sketchVertices(s).map((p) => new THREE.Vector3(...p)))];
     const lens = (): Lens => ({ perspective: camera === perspective, aspect: width / height, tan: Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2)) });
     /** What the camera shows now: its height at the target. */
-    const shot = (): Shot => ({ direction: direction(), target: controls.target.clone(), height: camera === perspective ? heightAt(distance()) : orthoHeight / orthographic.zoom });
+    const shot = (): Shot => ({ direction: direction(), target: controls.target.clone(), height: heightAt(distance()) });
 
     /**
      * What the camera is meant to show: a camera given to the view, e.g. a named view, which a build
@@ -695,7 +732,7 @@ export function Viewer(props: ViewerProps) {
       let tan = meet(rect.width, rect.height, width / height) / (2 * distance);
       // The model's nearest and farthest parts look larger or smaller than the plane through its middle, which the margins are measured in.
       if (i.camera.fit && camera === perspective) tan = Math.max(tan, tanToShow(modelPoints(), rect.center, along, distance, width / height));
-      return { direction: along, target: rect.center, distance, zoom: 1, fov: Math.min(170, THREE.MathUtils.radToDeg(2 * Math.atan(tan))) };
+      return { direction: along, target: rect.center, distance, fov: Math.min(170, THREE.MathUtils.radToDeg(2 * Math.atan(tan))) };
     };
     /** Shows the intent as the model or the viewport now are: by moving there, or by carrying a running move there. */
     const follow = () => {
@@ -786,7 +823,7 @@ export function Viewer(props: ViewerProps) {
       const N = 12;
       for (let i = 0; i < N; i++)
         for (let j = 0; j < N; j++) {
-          raycaster.setFromCamera(new THREE.Vector2(((i + 0.5) / N) * 2 - 1, ((j + 0.5) / N) * 2 - 1), camera);
+          aim(new THREE.Vector2(((i + 0.5) / N) * 2 - 1, ((j + 0.5) / N) * 2 - 1));
           const hit = raycaster.intersectObjects(meshes, false)[0];
           const r = hit && rendered.find((x) => x.mesh === hit.object);
           if (!r?.shape.body || hit?.faceIndex == null) continue;
@@ -937,20 +974,17 @@ export function Viewer(props: ViewerProps) {
     home = () => apply(props.home ?? defaultHome(), report);
     toggleProjection = (byUser = true) => {
       setTurn(undefined);
-      const d = distance();
-      if (camera === perspective) {
-        orthographic.position.copy(perspective.position);
-        orthographic.quaternion.copy(perspective.quaternion);
-        orthoHeight = heightAt(d);
-        orthographic.zoom = 1;
-        camera = orthographic;
-      } else {
-        perspective.position.copy(controls.target).addScaledVector(direction(), d / orthographic.zoom);
-        camera = perspective;
-      }
+      // Both show as much from the same distance (`orthoHeight`).
+      const next = camera === perspective ? orthographic : perspective;
+      next.position.copy(camera.position);
+      next.quaternion.copy(camera.quaternion);
+      orthoHeight = heightAt(distance());
+      orthographic.zoom = 1;
+      camera = next;
       controls.object = camera;
       updateProjection();
       controls.update();
+      clip();
       setProjection(camera === perspective ? "perspective" : "orthographic");
       if (byUser) moved();
     };
@@ -979,6 +1013,7 @@ export function Viewer(props: ViewerProps) {
     const tick = (now: number) => {
       step(now);
       controls.update();
+      clip();
       placeLight();
       placeMarkers();
       placeFloating();
@@ -998,9 +1033,12 @@ export function Viewer(props: ViewerProps) {
         u.renderer.render(scene, camera);
         scene.environment = environment;
         for (const m of punches) m.visible = false;
-        u.renderer.domElement.hidden = false;
+        u.renderer.domElement.style.display = "block";
         top = u.renderer;
-      } else if (upper) upper.renderer.domElement.hidden = true;
+      } else if (upper) {
+        // Not `hidden`, which three's inline `display: block` overrides: the canvas would keep its last frame over the view.
+        upper.renderer.domElement.style.display = "none";
+      }
       cullDocuments();
       for (const layer of cssLayers) if (layer.scene.children.length) layer.css.render(layer.scene, camera);
       connectDocuments();
@@ -1202,7 +1240,7 @@ export function Viewer(props: ViewerProps) {
       if (!drawnRegions.length) return undefined;
       const rect = canvas.getBoundingClientRect();
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
+      aim(pointer);
       const hit = raycaster.intersectObjects(drawnRegions.map((d) => d.mesh), false)[0];
       return hit && drawnRegions.find((d) => d.mesh === hit.object)?.region.key;
     };
@@ -1448,7 +1486,7 @@ export function Viewer(props: ViewerProps) {
       if (!drawn) return undefined;
       const rect = canvas.getBoundingClientRect();
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
+      aim(pointer);
       const uv = raycaster.intersectObject(drawn.mesh, false)[0]?.uv;
       return uv ? [Math.round(uv.x * 1e6) / 1e6, Math.round(uv.y * 1e6) / 1e6] : undefined;
     };
@@ -1494,7 +1532,7 @@ export function Viewer(props: ViewerProps) {
         const visible = v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
         m.label.hidden = !visible;
         m.label.style.transform = `translate(${((v.x + 1) / 2) * rect.width}px, ${((1 - v.y) / 2) * rect.height}px)`;
-        const unitsPerPixel = camera === perspective ? (2 * m.point.distanceTo(camera.position) * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) / rect.height : orthoHeight / orthographic.zoom / rect.height;
+        const unitsPerPixel = camera === perspective ? (2 * m.point.distanceTo(camera.position) * Math.tan(THREE.MathUtils.degToRad(perspective.fov / 2))) / rect.height : orthoHeight / rect.height;
         m.dot.scale.setScalar(4 * unitsPerPixel);
       }
     };
@@ -1577,13 +1615,18 @@ export function Viewer(props: ViewerProps) {
     // ---------- picking ----------
 
     const raycaster = new THREE.Raycaster();
+    /** Aims the raycaster through `ndc`; from the orthographic camera's near plane, which may be behind the eye, so that it hits all that is drawn. */
+    const aim = (ndc: THREE.Vector2) => {
+      raycaster.setFromCamera(ndc, camera);
+      if (camera === orthographic && camera.near < 0) raycaster.ray.origin.addScaledVector(raycaster.ray.direction, camera.near);
+    };
     const pointer = new THREE.Vector2();
 
     /** The entity of kind `kind` under a canvas position, unless a face hides it. */
     const entityAt = (clientX: number, clientY: number, kind: EntityKind): Entity | undefined => {
       const rect = canvas.getBoundingClientRect();
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
+      aim(pointer);
       raycaster.params.Line = { threshold: radius * 0.015 };
       // While picking, bodies that can't be picked are see-through: they neither hover nor hide others.
       const candidates = rendered.filter(pickableShape);
@@ -1613,7 +1656,7 @@ export function Viewer(props: ViewerProps) {
     const pointAt = (clientX: number, clientY: number): [number, number, number] | undefined => {
       const rect = canvas.getBoundingClientRect();
       pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
-      raycaster.setFromCamera(pointer, camera);
+      aim(pointer);
       const hit = raycaster.intersectObjects(rendered.map((r) => r.mesh), false)[0];
       return hit ? (hit.point.toArray().map((x) => Math.round(x * 1000) / 1000) as [number, number, number]) : undefined;
     };
@@ -1802,8 +1845,9 @@ export function Viewer(props: ViewerProps) {
         const box = new THREE.Box2().setFromPoints(ndc.map((v) => new THREE.Vector2(v.x, v.y)));
         const size = box.getSize(new THREE.Vector2());
         const center = box.getCenter(new THREE.Vector2());
-        return { inView: ndc.every((v) => Math.abs(v.x) <= 1 + 1e-9 && Math.abs(v.y) <= 1 + 1e-9), fill: Math.max(size.x, size.y) / 2, center: [center.x, center.y] };
+        return { inView: ndc.every((v) => Math.abs(v.x) <= 1 + 1e-9 && Math.abs(v.y) <= 1 + 1e-9), fill: Math.max(size.x, size.y) / 2, center: [center.x, center.y], clipped: ndc.some((v) => Math.abs(v.z) > 1) };
       },
+      lens: () => ({ projection: projection(), fov: perspective.fov, zoom: orthographic.zoom, distance: distance(), near: camera.near, far: camera.far }),
       intent: () => intent?.camera,
       eye: () => camera.position.toArray() as [number, number, number],
       canvases: () =>
