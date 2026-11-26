@@ -365,11 +365,11 @@ export function modelAttributes(model: Model) {
     get "data-build"() {
       return last() ? JSON.stringify(last()!.timings) : undefined;
     },
-    /** Summed feature times of the last build: all features, and the part spent naming. */
+    /** Summed feature times of the last build: all features, and the part spent naming; and the features that ran, not cached (research/24). */
     get "data-features"() {
       const trace = last()?.trace ?? [];
       const sum = (f: (t: (typeof trace)[number]) => number) => trace.reduce((a, t) => a + f(t), 0);
-      return last() ? JSON.stringify({ count: trace.length, ms: sum((t) => t.ms), namingMs: sum((t) => t.namingMs) }) : undefined;
+      return last() ? JSON.stringify({ count: trace.length, ms: sum((t) => t.ms), namingMs: sum((t) => t.namingMs), ran: trace.filter((t) => !t.cached).map((t) => t.name) }) : undefined;
     },
   };
 }

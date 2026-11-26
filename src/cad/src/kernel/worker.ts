@@ -5,7 +5,7 @@ import * as replicad from "replicad";
 import { createBuilder } from "replicad-evaluator/builder";
 import { createBrowserCodeEvaluator } from "replicad-evaluator/evaluate/browser";
 import * as features from "@patchwork-cad/features";
-import { beginBuild, changedVolume, currentTrace, liveBodies, locate, meshIds, outline, owners, shapers, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
+import { beginBuild, changedVolume, currentTrace, FeatureCache, liveBodies, locate, meshable, outline, owners, shapers, shapeOf, pickCode, pickData, pickRegion, extentOf, pathsOf, samplePath, type RefData as LibraryRefData, type TraceEntry } from "@patchwork-cad/features/runtime";
 import { loadFonts, mayDrawText } from "./fonts.ts";
 import { moduleKey, type Imports } from "./imports.ts";
 import { dataNamespace, evaluate, fileNamespace, lineFromStack, type Namespace } from "./modules.ts";
@@ -81,6 +81,10 @@ const json = (value: unknown): unknown => {
 let returned: unknown;
 /** The last successful build's trace, with its bodies, for rollback and picking. */
 let lastTrace: readonly TraceEntry[] = [];
+/** The results of the last builds' features, which a build reuses where its calls are the same (research/24). */
+const cache = new FeatureCache();
+/** A body as the evaluator meshes it: a copy of its shape, which leaves the body as it was (`meshable`). */
+const asShown = (name: string, body: features.Body) => ({ name, shape: meshable(body).meshes });
 
 /** A body without faces, which a failed feature leaves behind; there is nothing to mesh. */
 const isEmptyBody = (v: unknown) => v instanceof features.Body && v.topo.faces.length === 0;
@@ -106,10 +110,11 @@ function recordMain(module: Record<string, unknown>): Record<string, unknown> {
       if (isOutputs(value)) {
         const entries = Object.entries(value).filter(([, v]) => !isEmptyBody(v));
         returned = entries.map(([, v]) => v);
-        return entries.flatMap(([name, v]) => (v instanceof features.Sketch ? [] : v instanceof features.Body ? [{ name, shape: v.shape }] : v instanceof replicad.Shape ? [{ name, shape: v }] : [v]));
+        return entries.flatMap(([name, v]) => (v instanceof features.Sketch ? [] : v instanceof features.Body ? [asShown(name, v)] : v instanceof replicad.Shape ? [{ name, shape: v }] : [v]));
       }
       returned = Array.isArray(value) ? value.filter((v) => !isEmptyBody(v)) : isEmptyBody(value) ? [] : value;
-      return Array.isArray(returned) ? returned.filter((v) => !(v instanceof features.Sketch)) : returned instanceof features.Sketch ? [] : returned;
+      const shown = (v: unknown) => (v instanceof features.Body ? asShown(v.name, v) : v);
+      return Array.isArray(returned) ? returned.filter((v) => !(v instanceof features.Sketch)).map(shown) : returned instanceof features.Sketch ? [] : shown(returned);
     },
   };
 }
@@ -221,10 +226,10 @@ interface BuiltShape {
  * model silently drops, e.g. after a feature was retargeted to an earlier body.
  */
 function unusedResults(trace: readonly TraceEntry[], values: unknown[]): Set<features.Body | features.Sketch> {
-  const shown = new Set(values.flatMap((v) => (v instanceof features.Body ? [v.shape] : v && typeof v === "object" && "shape" in v ? [(v as { shape: unknown }).shape] : [])));
+  const shown = new Set(values.flatMap((v) => (v instanceof features.Body ? [v] : v && typeof v === "object" && "shape" in v ? [(v as { shape: unknown }).shape] : [])));
   const used = new Set(trace.flatMap((t) => t.sketches));
   const sketches = trace.flatMap((t) => (t.sketch && !used.has(t.sketch) && !values.includes(t.sketch) ? [t.sketch] : []));
-  return new Set([...liveBodies().filter((b) => !shown.has(b.shape)), ...sketches]);
+  return new Set([...liveBodies().filter((b) => !shown.has(b) && !shown.has(shapeOf(b))), ...sketches]);
 }
 
 const shownSketch = (sketch: features.Sketch): ShownSketch[] => (sketch.broken ? [] : [{ name: sketch.name, outline: outline(sketch) }]);
@@ -255,6 +260,9 @@ const brief = (t: TraceEntry): FeatureTrace => ({
   unused: false,
   ms: t.ms,
   namingMs: t.namingMs,
+  cached: t.cached,
+  cost: t.cost,
+  uses: t.uses,
 });
 
 const serialize = (trace: readonly TraceEntry[], unused: Set<features.Body | features.Sketch> = new Set()): FeatureTrace[] =>
@@ -302,17 +310,16 @@ function bodiesOf(trace: readonly TraceEntry[]): Map<string, features.Body> {
 
 const MESH = { tolerance: 0.1, angularTolerance: 30 };
 
-/** Meshes a body directly, as replicad-evaluator would, with its pickable entity indices. */
+/** Meshes a body, as replicad-evaluator would, with its pickable entity indices; a copy, which leaves the body as it was (`meshable`). */
 function meshBody(body: features.Body): MeshedShape {
-  const shape = body.shape as unknown as { mesh(o: typeof MESH): MeshedShape["faces"]; meshEdges(o: typeof MESH): NonNullable<MeshedShape["edges"]> };
+  const shape = meshable(body).meshes as unknown as { mesh(o: typeof MESH): MeshedShape["faces"]; meshEdges(o: typeof MESH): NonNullable<MeshedShape["edges"]> };
   const faces = shape.mesh(MESH);
   const edges = shape.meshEdges(MESH);
   return { name: body.name, color: undefined, opacity: undefined, faces, edges, ...indices(body, faces, edges) };
 }
 
 function indices(body: features.Body, faces: MeshedShape["faces"], edges: MeshedShape["edges"]) {
-  const faceIds = meshIds(body, "face");
-  const edgeIds = meshIds(body, "edge");
+  const { faceIds, edgeIds } = meshable(body);
   return {
     body: body.name,
     faceIndex: faces.faceGroups?.map((g) => faceIds.indexOf(g.faceId)),
@@ -345,6 +352,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
   // A message per feature, which also tells the engine's watchdog that the build is alive (research/23).
   beginBuild({
     lenient: true,
+    cache,
     onFeature: (t, done) => post(done ? { type: "featureDone", id, feature: brief(t) } : { type: "featureStarted", id, name: t.name, featureType: t.type, line: t.line, variable: t.variable }),
   });
   const result = (await builder.buildShapesFromCode(source).finally(() => (buildModule = undefined))) as
@@ -362,7 +370,7 @@ async function build(id: number, source: string, buildParams: BuildParams | unde
   // what it kept, in the order of the meshes (its `$` debug shapes follow them), so a mesh's body is
   // the returned one with the entry's shape.
   const kept = builder.getShapeEntries() as { shape: unknown }[];
-  const bodies = new Map(values.flatMap((v) => (v instanceof features.Body ? [[v.shape as unknown, v] as const] : [])));
+  const bodies = new Map(values.flatMap((v) => (v instanceof features.Body ? [[meshable(v).meshes as unknown, v] as const] : [])));
   const shapes: MeshedShape[] = result.flatMap((shape, i) => {
     if (shape.format === "svg" || !shape.mesh) return [];
     const body = bodies.get(kept[i]?.shape);
@@ -391,7 +399,8 @@ async function check(id: number, source: string, buildParams: BuildParams | unde
     const code = prepare(source, resolveInto(keys));
     await kernel;
     if (mayDrawText(source, imports)) await loadFonts();
-    beginBuild({ lenient: true });
+    // It reuses the last builds' results but keeps none of its own, which would push out theirs.
+    beginBuild({ lenient: true, cache, cacheReadOnly: true });
     // The globals that replicad-evaluator's builder gives a model (`evaluateModule` in its builder).
     Object.assign(globalThis, { replicad, replicadShapeFns: undefined, oc: (await kernel).oc });
     const module = await run(code, "cad-model", keys);

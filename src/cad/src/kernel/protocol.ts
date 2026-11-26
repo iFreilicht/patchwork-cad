@@ -84,6 +84,12 @@ export interface FeatureTrace {
   /** Milliseconds the feature took, and the part spent naming faces and edges. */
   ms: number;
   namingMs: number;
+  /** Whether its result is an earlier build's, so that it didn't run (research/24); the features that did are where an edit lands. */
+  cached: boolean;
+  /** Milliseconds it took when it last ran, also for a cached one. */
+  cost: number;
+  /** The names of the bodies and sketches among its arguments. */
+  uses: string[];
 }
 
 /** A sketch the view shows: one that main returned, or at a rollback one that no feature used yet. */

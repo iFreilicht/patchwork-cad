@@ -17,17 +17,23 @@ const PESSIMISM = 1.15;
 /** The bar stays below this until the result arrives. */
 const CAP = 0.95;
 
-/** A build's milliseconds per feature, by name, and those outside features: evaluating the code, meshing and sending. */
+/** Milliseconds per feature, by name, when it last ran, and those of a build outside features: evaluating the code, meshing and sending. */
 export interface FeatureTimes {
   features: Record<string, number>;
   rest: number;
 }
 
+/**
+ * A build's feature times by what each took when it last ran (`cost`), also when it was cached
+ * (research/24): a feature that is cached in one build may run in the next, and the estimate
+ * expects every feature not yet done to run, so that a build that reuses some ends early rather
+ * than late.
+ */
 export function timesOf(trace: readonly FeatureTrace[], total: number): FeatureTimes {
   const features: Record<string, number> = {};
-  for (const t of trace) features[t.name] = (features[t.name] ?? 0) + t.ms;
-  const sum = Object.values(features).reduce((a, ms) => a + ms, 0);
-  return { features, rest: Math.max(0, total - sum) };
+  for (const t of trace) features[t.name] = (features[t.name] ?? 0) + t.cost;
+  const ran = trace.reduce((a, t) => a + t.ms, 0);
+  return { features, rest: Math.max(0, total - ran) };
 }
 
 /** A feature as progress names it. */

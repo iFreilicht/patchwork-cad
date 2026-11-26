@@ -1,5 +1,5 @@
 import { getOC } from "replicad";
-import type { OpenCascadeInstance, TopoDS_Shape } from "replicad-opencascadejs";
+import type { BRepAlgoAPI_BooleanOperation, OpenCascadeInstance, TopoDS_Shape } from "replicad-opencascadejs";
 
 export type OC = OpenCascadeInstance;
 export type Shape = TopoDS_Shape;
@@ -74,3 +74,26 @@ export function listToArray(list: { Size(): number; First(): Shape; RemoveFirst(
 }
 
 export const progress = () => new (oc().Message_ProgressRange)();
+
+/** A list of shapes as OCCT's algorithms take them. */
+export function shapeList(shapes: readonly Shape[]) {
+  const list = new (oc().NCollection_List_TopoDS_Shape)();
+  for (const s of shapes) list.Append(s);
+  return list;
+}
+
+/**
+ * A boolean of `target` with `tool` that leaves both as they were. By default OCCT's booleans
+ * change their arguments, e.g. "tolerance increase, addition of the P-Curves on edges"
+ * (research/24, "Bodies don't change"), so a body would differ after every later feature
+ * that used it, and a reused body would carry the previous build's changes into the next.
+ */
+export function boolean(op: "fuse" | "cut" | "common", target: Shape, tool: Shape): BRepAlgoAPI_BooleanOperation {
+  const o = oc();
+  const bop = op === "fuse" ? new o.BRepAlgoAPI_Fuse() : op === "cut" ? new o.BRepAlgoAPI_Cut() : new o.BRepAlgoAPI_Common();
+  bop.SetArguments(shapeList([target]));
+  bop.SetTools(shapeList([tool]));
+  bop.SetNonDestructive(true);
+  bop.Build(progress());
+  return bop;
+}

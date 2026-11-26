@@ -3,12 +3,16 @@ import { expect, test } from "vitest";
 import { duration, estimate, featureLabel, remainingText, timesOf } from "../src/components/progress.ts";
 import type { FeatureTrace } from "../src/kernel/protocol.ts";
 
-const trace = (name: string, ms: number) => ({ name, ms }) as FeatureTrace;
+const trace = (name: string, ms: number, cost = ms) => ({ name, ms, cost, cached: cost !== ms }) as FeatureTrace;
 
 test("feature times: by name, and the rest of the build outside features", () => {
   expect(timesOf([trace("a", 100), trace("b", 300)], 500)).toEqual({ features: { a: 100, b: 300 }, rest: 100 });
   // A total below the features' sum, e.g. rounded, leaves no rest.
   expect(timesOf([trace("a", 100)], 90).rest).toBe(0);
+});
+
+test("a cached feature counts with what it took when it last ran, which the next build may take again (research/24)", () => {
+  expect(timesOf([trace("a", 1, 2000), trace("b", 300)], 400)).toEqual({ features: { a: 2000, b: 300 }, rest: 99 });
 });
 
 test("the estimate counts time, not features, and overestimates what remains", () => {

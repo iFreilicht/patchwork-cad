@@ -7,10 +7,10 @@ import { Shape as ReplicadShape, type AnyShape } from "replicad";
 import type { BRepAlgoAPI_BuilderAlgo } from "replicad-opencascadejs";
 import { describe, describeFace, dot, scale, sub, unit, type Vec } from "./geom.ts";
 import { key, piece, type Name } from "./names.ts";
-import { listToArray, oc, progress, ShapeIndex, subShapes, type Shape } from "./oc.ts";
+import { boolean, listToArray, oc, progress, ShapeIndex, subShapes, type Shape } from "./oc.ts";
 import type { Ref } from "./refs.ts";
 import { copyOf, propagate, withTopology, type Hist, type History } from "./topo.ts";
-import { Body, defineFeature, FeatureError, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
+import { Body, defineFeature, FeatureError, markReusable, Sketch, type FeatureContext, type FeatureMeta, type Frame, type Profile } from "./feature.ts";
 import { joinRegions, type RegionRef } from "./profile.ts";
 import { schemas } from "./schema.ts";
 
@@ -86,7 +86,7 @@ export function emptyBody(name: string): Body {
   return new Body(name, withTopology(compound, [], []));
 }
 
-export const sketch = defineFeature<{ plane: Frame | Ref; profile: Profile; body?: Body }, Sketch>({
+export const sketch = markReusable(defineFeature<{ plane: Frame | Ref; profile: Profile; body?: Body }, Sketch>({
   type: "sketch",
   ...schemas.sketch,
   fallback: (p, name, message) => new Sketch(name, PLANES["XY"]!, p.profile, message),
@@ -104,8 +104,9 @@ export const sketch = defineFeature<{ plane: Frame | Ref; profile: Profile; body
     const [face] = ctx.resolve(body, "plane", plane, false);
     return placed(frameOnFace(face!));
   },
-});
+}));
 
+/** A copy of a face, moved by `v`: its edges and geometry are new, so the face is left as it was. */
 function moveFace(face: Shape, v: Vec): Shape {
   const o = oc();
   const t = new o.gp_Trsf();
@@ -158,7 +159,7 @@ const ZERO_LENGTH = 1e-7;
  * side face is named by the segment it was swept from; a segment, or a cap, that gives several
  * faces names each a piece, `extrude1.side["leaf.3"].piece(extrude1, 2)`.
  */
-export const extrude = defineFeature<
+export const extrude = markReusable(defineFeature<
   { sketch: Sketch; regions?: RegionRef | RegionRef[]; distance?: number; operation?: Operation; target?: Body; extent?: "distance" | "through" },
   Body
 >({
@@ -183,7 +184,9 @@ export const extrude = defineFeature<
     // The distance runs along the sketch's normal, whatever the operation, as Fusion's does: into a body
     // a sketch lies on is negative. "Through" is symmetric and long, its caps named as they always were.
     const dir = operation === "cut" ? scale(sk.frame.normal, -1) : sk.frame.normal;
-    const base = through ? moveFace(face, scale(dir, -500)) : face;
+    // A copy, also where it doesn't move: a prism changes the edges of the face it sweeps, which belong
+    // to the sketch, so that the next prism of the same face came out differently (research/24).
+    const base = moveFace(face, through ? scale(dir, -500) : [0, 0, 0]);
     const vec = through ? scale(dir, 1000) : scale(sk.frame.normal, distance);
     const mk = new o.BRepPrimAPI_MakePrism(base, new o.gp_Vec(vec[0], vec[1], vec[2]), false, true);
     mk.Build(progress());
@@ -224,11 +227,11 @@ export const extrude = defineFeature<
     if (operation === "new") return new Body(ctx.name, toolTopo);
 
     const t = target!.topo;
-    const bop = operation === "join" ? new o.BRepAlgoAPI_Fuse(t.shape, tool, progress()) : new o.BRepAlgoAPI_Cut(t.shape, tool, progress());
+    const bop = boolean(operation === "join" ? "fuse" : "cut", t.shape, tool);
     if (!bop.IsDone()) throw new FeatureError(`the ${operation} failed`);
     return new Body(ctx.name, propagate(simplify(bop), [t, toolTopo], [], bop.Shape(), ctx.name));
   },
-});
+}));
 
 function blend(type: "fillet" | "chamfer", body: Body, refs: Ref[], size: number, ctx: FeatureContext): Body {
   expectBody(body, "body");
@@ -248,26 +251,26 @@ function blend(type: "fillet" | "chamfer", body: Body, refs: Ref[], size: number
   return new Body(ctx.name, propagate(mk as unknown as History, [t], gens, mk.Shape(), ctx.name));
 }
 
-export const fillet = defineFeature<{ body: Body; edges: Ref[]; radius: number }, Body>({
+export const fillet = markReusable(defineFeature<{ body: Body; edges: Ref[]; radius: number }, Body>({
   type: "fillet",
   ...schemas.fillet,
   inputs: ({ body }) => [body],
   build: ({ body, edges, radius }, ctx) => blend("fillet", body, edges, radius, ctx),
-});
+}));
 
-export const chamfer = defineFeature<{ body: Body; edges: Ref[]; distance: number }, Body>({
+export const chamfer = markReusable(defineFeature<{ body: Body; edges: Ref[]; distance: number }, Body>({
   type: "chamfer",
   ...schemas.chamfer,
   inputs: ({ body }) => [body],
   build: ({ body, edges, distance }, ctx) => blend("chamfer", body, edges, distance, ctx),
-});
+}));
 
 /**
  * Joins its tool bodies to its target, cuts them from it or intersects them with it, one after
  * another. It consumes the tools as well as the target, as Fusion's Combine does without "Keep
  * Tools" (research/15): a later feature can still use a tool, which forks it.
  */
-export const combine = defineFeature<{ target: Body; tools: Body[]; operation?: "join" | "cut" | "intersect" }, Body>({
+export const combine = markReusable(defineFeature<{ target: Body; tools: Body[]; operation?: "join" | "cut" | "intersect" }, Body>({
   type: "combine",
   ...schemas.combine,
   inputs: ({ target, tools }) => [target, ...(Array.isArray(tools) ? tools : [])],
@@ -277,25 +280,23 @@ export const combine = defineFeature<{ target: Body; tools: Body[]; operation?: 
     tools.forEach((tool, i) => expectBody(tool, `tools[${i}]`));
     if (tools.includes(target)) throw new FeatureError(`tools: ${target.name} is the target`);
     if (!["join", "cut", "intersect"].includes(operation)) throw new FeatureError(`operation: expected join, cut or intersect, got ${String(operation)}`);
-    const o = oc();
     let topo = target.topo;
     for (const tool of tools) {
-      const Op = operation === "join" ? o.BRepAlgoAPI_Fuse : operation === "cut" ? o.BRepAlgoAPI_Cut : o.BRepAlgoAPI_Common;
-      const bop = new Op(topo.shape, tool.topo.shape, progress());
+      const bop = boolean(operation === "join" ? "fuse" : operation === "cut" ? "cut" : "common", topo.shape, tool.topo.shape);
       if (!bop.IsDone()) throw new FeatureError(`the ${operation} with ${tool.name} failed`);
       topo = propagate(simplify(bop), [topo, tool.topo], [], bop.Shape(), ctx.name);
     }
     if (topo.faces.length === 0) throw new FeatureError(`the ${operation} leaves nothing`);
     return new Body(ctx.name, topo);
   },
-});
+}));
 
 /**
  * A copy of a body, translated by `x`, `y` and `z`. The input stays a body of its own, so it is not an
  * input that the copy consumes. Its faces and edges are named by the copy and their names in the
  * original, `lid.plate.end`, so that references tell the copy from the original and from other copies.
  */
-export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: number }, Body>({
+export const move = markReusable(defineFeature<{ body: Body; x?: number; y?: number; z?: number }, Body>({
   type: "move",
   ...schemas.move,
   fallback: (_, name) => emptyBody(name),
@@ -309,7 +310,7 @@ export const move = defineFeature<{ body: Body; x?: number; y?: number; z?: numb
     if (!mk.IsDone()) throw new FeatureError("the move failed");
     return new Body(ctx.name, copyOf(propagate(mk as unknown as History, [body.topo], [], mk.Shape(), ctx.name), ctx.name));
   },
-});
+}));
 
 // ---------- adopting shapes ----------
 
@@ -337,7 +338,7 @@ function adoptOne(value: unknown, name: string): Body {
   return new Body(name, withTopology(shape, faces, hist));
 }
 
-const adopt = defineFeature<{ source: BodySource }, Body | Record<string, Body>>({
+const adopt = markReusable(defineFeature<{ source: BodySource }, Body | Record<string, Body>>({
   type: "body",
   ...schemas.body,
   // A failing function makes empty bodies, as many as are declared, so that only it and its users fail.
@@ -358,7 +359,7 @@ const adopt = defineFeature<{ source: BodySource }, Body | Record<string, Body>>
     }
     return Object.fromEntries(keys.map((k) => [k, adoptOne(value[k], meta.destructured?.[k] ?? `${ctx.name}.${k}`)]));
   },
-});
+}));
 
 /**
  * Adopts shapes made with replicad as bodies that features can use, e.g.

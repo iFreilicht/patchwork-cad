@@ -44,6 +44,17 @@ export function setFeaturePrinter(printer: (feature: string) => string): void {
   printFeature = printer;
 }
 
+/** Runs `f` with feature names printed by `printer`, and then as before. */
+export function withFeaturePrinter<T>(printer: (feature: string) => string, f: () => T): T {
+  const saved = printFeature;
+  printFeature = printer;
+  try {
+    return f();
+  } finally {
+    printFeature = saved;
+  }
+}
+
 /** A feature's name as the current printer prints it: its variable, or through `ref`. */
 export const printFeatureName = (feature: string) => printFeature(feature);
 
@@ -107,13 +118,7 @@ export function print(n: Name, hint?: Vec): string {
 
 /** Key of a name: its print without hint, with every feature through `ref`, so it doesn't depend on the printer. */
 export function key(n: Name): string {
-  const saved = printFeature;
-  printFeature = refForm;
-  try {
-    return print(n);
-  } finally {
-    printFeature = saved;
-  }
+  return withFeaturePrinter(refForm, () => print(n));
 }
 
 /** Prints several names as one expression, factoring out a common last split: `any(a, b).piece(op, 1)`. */

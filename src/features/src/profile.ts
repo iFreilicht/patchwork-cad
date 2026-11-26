@@ -411,6 +411,8 @@ export function joinRegions(chosen: readonly Region[], pieces: readonly Piece[])
     const args = new o.NCollection_List_TopoDS_Shape();
     for (const r of members) args.Append(r.face);
     join.SetArguments(args);
+    // The regions belong to the sketch, which every extrusion of it uses (see `boolean` in oc.ts).
+    join.SetNonDestructive(true);
     join.Build(progress());
     if (!join.IsDone()) throw new Error("the profiles could not be joined");
     join.SimplifyResult(true, true, 1e-3);
