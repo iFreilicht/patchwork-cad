@@ -3,7 +3,8 @@
  * dragged from Patchwork's sidebar onto the code pane, the timeline, the documents list and the 3D
  * view, onto number fields of a feature, the parameters and a configuration, several at once; the
  * Insert button with a pasted URL, and a paste into the view; a field's dialog where nothing fits;
- * rows of the documents list dragged onto the model and out of it; and drops that aren't the editor's.
+ * rows of the documents list dragged onto the model and out of it; another model, and the model
+ * itself, which it can't import; and drops that aren't the editor's.
  */
 import type { Locator, Page } from "@playwright/test";
 import { CAD_MODULES, createModel, dialog, docUrl, editorView, modelSource, openCode, setModelSource, timelineEntry } from "../cad.ts";
@@ -99,11 +100,18 @@ test("a drop on the code pane, the timeline or the documents list imports at onc
   await expect(editorView(page)).toHaveAttribute("data-selection", `document:${docs["Dimensions"]}`);
   expect(await modelSource(page)).toBe(PLATE.replace(FEATURES_IMPORT, FEATURES_IMPORT + dims));
 
-  // A CAD model can't be imported: the status bar says so, and nothing is written.
+  // A model can't import itself: the status bar says so, and nothing is written.
   const model = await page.evaluate((url) => document.querySelector(`.threepane-sidebar [data-doc-url="${url}"]`)?.textContent ?? "", docUrl(page));
   await drag(page, model.trim(), documentsSection(page));
-  await expect(status(page)).toContainText("is a CAD model, and models can't be imported yet");
+  await expect(status(page)).toContainText("A model can't import itself");
   expect(await modelSource(page)).toBe(PLATE.replace(FEATURES_IMPORT, FEATURES_IMPORT + dims));
+
+  // Another model is a JS file: a namespace, pinned.
+  const parts = await sidebarDocuments(page, { Bracket: { data: { "@patchwork": { type: "cad-model" }, title: "Bracket", content: PLATE, mimeType: "application/javascript", cad: {} } } });
+  await drag(page, "Bracket", documentsSection(page));
+  const bracket = `import * as bracket from "${parts["Bracket"]}#${await headsOf(page, parts["Bracket"]!)}";\n`;
+  await expect.poll(() => modelSource(page)).toBe(PLATE.replace(FEATURES_IMPORT, FEATURES_IMPORT + dims + bracket));
+  await expect(editorView(page)).toHaveAttribute("data-selection", `document:${parts["Bracket"]}`);
 });
 
 test("a drop in the view waits for Import, and several documents dropped at once", async ({ users }) => {

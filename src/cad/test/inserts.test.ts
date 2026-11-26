@@ -89,7 +89,8 @@ test("Import imports a document in the first way it can as a value, code pinned 
   expect(of(5, `${A}/w`)).toEqual({ specifier: `${A}/w`, type: undefined, binding: { kind: "default", local: "x" } });
   // A pinned URL stays as it is.
   expect(of(file("js", "text/javascript"), `${A}#h3`)).toMatchObject({ specifier: `${A}#h3` });
-  expect(of({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" })).toBeUndefined();
+  // A CAD model is a JS file: a namespace, pinned.
+  expect(of({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" })).toEqual({ specifier: `${A}#h1|h2`, type: undefined, binding: { kind: "namespace", local: "x" } });
   // A module the model imports already, pinned or not, is the same module: it isn't imported again.
   const pinned = of(file("js", "application/javascript"))!;
   const statements = documentStatements(`import * as lib from "${A}";`, analyze(`import * as lib from "${A}";`).program);
@@ -176,8 +177,8 @@ test("why nothing can be picked for a field, each case in its own words", () => 
   expect(pickProblem("Sizes", ready({ a: 1 }), override, { paths: [["a"]], complete: true })).toBeUndefined();
   expect(pickProblem("Sizes", { status: "loading", value: undefined }, argument, undefined)).toBe("Sizes is still loading.");
   expect(pickProblem("Sizes", { status: "unavailable", value: undefined, problem: "it can't be found" }, argument, undefined)).toBe("Sizes can't be loaded: it can't be found.");
-  expect(pickProblem("Plate", ready({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" }), argument, undefined)).toBe("Plate is a CAD model, which has no number to use for Distance of extrude1.");
-  // A JS file's numbers are its exports, searched as data once it ran; a configuration can't link into it.
+  // A JS file's numbers are its exports, searched as data once it ran, also a CAD model's; a configuration can't link into it.
+  expect(pickProblem("Plate", ready({ "@patchwork": { type: "cad-model" }, content: "", mimeType: "application/javascript" }), argument, undefined)).toBeUndefined();
   expect(pickProblem("lib.js", ready(file("js", "application/javascript")), argument, undefined)).toBeUndefined();
   expect(pickProblem("lib.js", ready(file("js", "application/javascript")), argument, none)).toBe("lib.js has no number to use for Distance of extrude1.");
   expect(pickProblem("lib.js", ready(file("js", "application/javascript")), override, undefined)).toBe("lib.js is a file, and w in Wide can only link to a number in a data document.");

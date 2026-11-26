@@ -19,7 +19,8 @@ test("a document is JS, data or a problem by its content and type", () => {
   expect(moduleOf({ width: 3, "@patchwork": { type: "sheet" } })).toEqual({ kind: "data", value: { width: 3, "@patchwork": { type: "sheet" } } });
   expect(moduleOf(5)).toEqual({ kind: "data", value: 5 });
   expect(moduleOf({ content: "x", mimeType: "text/markdown" })).toMatchObject({ kind: "problem", problem: /text\/markdown/ });
-  expect(moduleOf({ content: "", mimeType: "application/javascript", "@patchwork": { type: "cad-model" } })).toMatchObject({ kind: "problem", problem: /models can't be imported/ });
+  // A CAD model is a JS file.
+  expect(moduleOf({ content: "export default function main() {}", mimeType: "application/javascript", "@patchwork": { type: "cad-model" } })).toEqual({ kind: "js", code: "export default function main() {}" });
   expect(moduleOf(undefined)).toMatchObject({ kind: "problem" });
 });
 
