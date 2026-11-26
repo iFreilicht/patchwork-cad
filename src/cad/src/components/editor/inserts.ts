@@ -90,7 +90,7 @@ export const PICK_LIMITS = { keys: 50, nodes: 5000, paths: 20 } as const;
 /**
  * Why no value of a document can be picked for a field (research/21, "Dropping, pasting,
  * inserting"), as the pending insert's dialog says it: the document is loading or can't be read, is
- * a CAD model or a file that isn't JSON or JS, is a file a configuration can't link into, or has no number
+ * a file that isn't JSON or JS, is a file a configuration can't link into, or has no number
  * where a search that covered all of it (`complete`) looked. Undefined if a pick may be possible.
  */
 export function pickProblem(title: string, info: Pick<DocumentInfo, "status" | "value" | "problem">, target: ValueTarget, search: { paths: readonly unknown[]; complete: boolean } | undefined): string | undefined {
@@ -98,7 +98,6 @@ export function pickProblem(title: string, info: Pick<DocumentInfo, "status" | "
   if (info.status === "loading") return `${title} is still loading.`;
   if (info.status === "unavailable") return `${title} can't be loaded: ${info.problem ?? "it isn't available"}.`;
   const value = info.value;
-  if ((value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type === "cad-model") return `${title} is a CAD model, which has no number to use for ${field}.`;
   if (isFile(value)) {
     const kind = fileKind(value);
     if (target.kind === "override") return `${title} is a file, and ${field} can only link to a number in a data document.`;
@@ -264,11 +263,14 @@ export function createInserts(props: {
         problems.push(`${title} can't be imported: ${d.problem}`);
         continue;
       }
+      if (docOf(d.url) === docOf(handle.url)) {
+        problems.push("A model can't import itself");
+        continue;
+      }
       const local = importName(baseName(d.url, d.value, d.name), taken);
       const i = defaultImport(d.url, d.value, d.heads, local);
       if (!i) {
-        const model = (d.value as { "@patchwork"?: { type?: unknown } } | undefined)?.["@patchwork"]?.type === "cad-model";
-        problems.push(model ? `${title} is a CAD model, and models can't be imported yet` : `${title} can't be imported`);
+        problems.push(`${title} can't be imported`);
         continue;
       }
       const id = documentId(i.specifier, i.type);

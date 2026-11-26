@@ -140,8 +140,8 @@ export interface FileLike {
 
 /**
  * Whether a document is a file (research/21, "Files as modules"): of Patchwork's `file` datatype, a
- * CAD model, a document without a datatype that has a file's `content` (text or bytes) and
- * `mimeType`, as JS libraries made by scripts are, or a document of another datatype that has a
+ * CAD model, which is a JS file, a document without a datatype that has a file's `content` (text or
+ * bytes) and `mimeType`, as JS libraries made by scripts are, or a document of another datatype that has a
  * file's `content`, `mimeType` and `extension` too, as a draw.io diagram (src/drawio) is. Any other
  * document is data, also one with a `content` key.
  */
@@ -199,7 +199,6 @@ export function fileBytes(file: FileLike): Uint8Array | undefined {
 /** How a document can be imported: the attribute types (`undefined`: none, as data or code) it allows (research/21, "The document dialog"). */
 export function importKinds(value: unknown): ("data" | "code" | "text" | "bytes")[] {
   if (!isFile(value)) return ["data"];
-  if ((value as { "@patchwork"?: { type?: unknown } })["@patchwork"]?.type === "cad-model") return [];
   const kind = fileKind(value);
   const text = fileText(value) !== undefined;
   if (kind === "js") return ["code", ...(text ? (["text"] as const) : []), "bytes"];
@@ -213,8 +212,8 @@ export function importKinds(value: unknown): ("data" | "code" | "text" | "bytes"
  * `importKinds` allows, which is the one that makes sense as a value (code for JS, data for JSON and
  * any other document, text for SVG and other text, bytes for images and other binary files), a value
  * that a URL's path names as data; code pinned to the document's current version `heads`, everything
- * else following (research/21, "Following and pinning"); a JS file as a namespace, which may have no
- * default export. Undefined if it can't be imported, e.g. a CAD model.
+ * else following (research/21, "Following and pinning"); a JS file, a CAD model too, as a namespace,
+ * which may have no default export. Undefined if it can't be imported.
  */
 export function defaultImport(url: AutomergeUrl, value: unknown, heads: readonly string[], local: string): NewImport | undefined {
   const as = withoutHeads(url) !== docOf(url) ? "data" : importKinds(value)[0];
@@ -237,7 +236,6 @@ const offer = (kinds: ReturnType<typeof importKinds>) => kinds.map((k) => (k ===
 export function moduleOf(value: unknown, type?: ImportType, id = ""): ImportedModule {
   if (value === undefined) return { kind: "problem", problem: "it isn't there" };
   if (isFile(value)) {
-    if ((value as { "@patchwork"?: { type?: unknown } })["@patchwork"]?.type === "cad-model") return { kind: "problem", problem: "it is a CAD model, and models can't be imported yet" };
     const kind = fileKind(value);
     const kinds = importKinds(value);
     const mimeType = typeof value.mimeType === "string" && value.mimeType ? value.mimeType : `.${String(value.extension ?? "")}`;
