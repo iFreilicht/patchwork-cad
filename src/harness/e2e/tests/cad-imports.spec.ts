@@ -4,7 +4,7 @@
  * and not the other, and errors point at the model's lines.
  */
 import type { Page } from "@playwright/test";
-import { CAD_MODULES, createModel, editorView, setModelSource } from "../cad.ts";
+import { CAD_MODULES, createModel, editorView, setModelSource, timelineEntry } from "../cad.ts";
 import { expect, test } from "../fixtures.ts";
 import { bootToFrame } from "../ui.ts";
 
@@ -67,6 +67,28 @@ test("a model imports a JS file and a data document, followed or pinned", async 
   );
   await setModelSource(page, model, "replace");
   await expect(page.locator(".cad-model__status").first()).toContainText(/import error on line 2: .*imports itself/);
+});
+
+const PART = `import { sketch, plane, rect, extrude } from "@patchwork-cad/features";\nexport const defaultParams = { width: 60 };\nexport default function main({ width }) {\n  const sketch1 = sketch({ plane: plane("XY"), profile: rect({ from: [0, 0], to: [width, 10] }) });\n  return { plate: extrude({ sketch: sketch1, distance: 5 }) };\n}\n`;
+
+test("a model imports another model as a JS file: calls its main, or adopts its bodies with body()", async ({ users }) => {
+  const [a] = await users(1);
+  if (!a) throw new Error("users(1) returned no user");
+  const { page } = a;
+  await bootToFrame(page);
+  await createModel(page);
+  await expect(editorView(page)).toHaveAttribute("data-state", "ready", { timeout: 120_000 });
+  const part = (await page.evaluate(`(${(repoOf: () => Repo, content: string) => repoOf().create({ "@patchwork": { type: "cad-model" }, title: "Part", content, mimeType: "application/javascript", cad: {} }).url})(${repoOf}, ${JSON.stringify(PART)})`)) as string;
+
+  // Its features run in this model's build; body() adopts what its main returns as bodies of this model.
+  const model = `import { body, move } from "@patchwork-cad/features";\nimport * as part from "${part}";\nexport default function main() {\n  const { plate } = part.default({ width: 30 });\n  const { plate: copy } = body(() => part.default(part.defaultParams));\n  const moved = move({ body: copy, x: 100 });\n  return { plate, moved };\n}\n`;
+  await setModelSource(page, model, "replace");
+  await expect(timelineEntry(page, "moved")).toHaveAttribute("data-status", "ok", { timeout: 60_000 });
+  await expect.poll(() => extentX(page)).toBeCloseTo(160);
+
+  // It follows the model it imports.
+  await page.evaluate(async (url) => (await (window as unknown as { repo: Repo }).repo.find(url)).change((d) => (d["content"] = String(d["content"]).replace("width: 60", "width: 70"))), part);
+  await expect.poll(() => extentX(page)).toBeCloseTo(170);
 });
 
 test("a model uses a file's text and bytes, and JS and JSON files uploaded as bytes", async ({ users }) => {
